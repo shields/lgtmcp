@@ -64,3 +64,23 @@ logging:
   # Log level: debug, info, warn, error
   # Default: info
   level: "info"
+
+# Prompts configuration (optional)
+# Customize the prompts used for code review
+prompts:
+  # Path to custom review prompt file (optional)
+  # The file should be a Markdown template with Go template syntax
+  # Available template variables:
+  #   - {{.AnalysisSection}} - Previous analysis from context gathering
+  #   - {{.FilesList}} - List of changed files
+  #   - {{.Diff}} - Git diff content
+  # If not specified, uses the embedded default prompt
+  # review_prompt_path: "/path/to/custom/review_prompt.md"
+
+  # Path to custom context gathering prompt file (optional)
+  # The file should be a Markdown template with Go template syntax
+  # Available template variables:
+  #   - {{.FilesList}} - List of changed files
+  #   - {{.Diff}} - Git diff content
+  # If not specified, uses the embedded default prompt
+  # context_gathering_prompt_path: "/path/to/custom/context_prompt.md"

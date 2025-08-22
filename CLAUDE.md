@@ -43,6 +43,12 @@ LGTMCP is a Model Context Protocol server that reviews code changes using Google
    - Sandboxed to repository directory
    - Not exposed via MCP interface
 
+6. **Prompts Manager** (`internal/prompts/`)
+   - Manages review and context gathering prompts
+   - Embeds default prompts in binary using Go's embed directive
+   - Supports custom prompts via configuration
+   - Uses Go's text/template for dynamic prompt generation
+
 ## Implementation Plan
 
 ### Phase 1: Setup and Infrastructure
@@ -119,6 +125,11 @@ lgtmcp/
 │   ├── git/                 # Git operations
 │   │   ├── git.go
 │   │   └── git_test.go
+│   ├── prompts/             # Prompt management
+│   │   ├── prompts.go
+│   │   ├── prompts_test.go
+│   │   ├── review.md        # Default review prompt
+│   │   └── context_gathering.md # Default context prompt
 │   ├── review/              # Gemini integration
 │   │   ├── review.go
 │   │   ├── review_test.go
@@ -206,6 +217,16 @@ gitleaks:
 logging:
   # Log level: debug, info, warn, error (default: info)
   level: "info"
+
+# Prompts configuration (optional)
+prompts:
+  # Custom review prompt file path (optional)
+  # If not specified, uses embedded default prompt
+  review_prompt_path: ""
+
+  # Custom context gathering prompt file path (optional)
+  # If not specified, uses embedded default prompt
+  context_gathering_prompt_path: ""
 ```
 
 #### Example Configuration
@@ -365,7 +386,6 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 
 ### TODO 📝
 
-- [ ] **Move prompt to separate file** - Extract review prompt to a Markdown file, embed as default in binary, allow config YAML to specify custom prompt path
 - [ ] **Add extensive logging** - Implement configurable logging to directory (or disabled), optionally send logs to MCP client using MCP logging protocol
 - [ ] **Enable Gemini grounding** - Allow Gemini to use grounding/search capabilities for enhanced code review
 - [ ] **Add file size limits** - Implement protection against uploading large files to Gemini API to prevent excessive token usage
@@ -390,6 +410,7 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 - [x] **Release preparation** - Version tagging ready, all quality checks passing
 - [x] **Configuration migration to YAML** - Moved from environment variables to YAML configuration files with XDG support
 - [x] **Google Application Credentials support** - Added support for service account authentication as an alternative to API key authentication
+- [x] **Customizable prompts** - Extracted review prompts to separate Markdown files, embedded as defaults in binary, with config YAML support for custom prompt paths
 
 ### Test Coverage Summary 📊
 
@@ -473,6 +494,14 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
   - Automatically uses attached service accounts when running on GCP
   - API key takes precedence when both are configured for backward compatibility
   - Comprehensive test coverage for all authentication scenarios
+
+- **Customizable Prompts** (2025-08-22): Implemented customizable review prompts with template support:
+  - Extracted hardcoded prompts to separate Markdown files with Go template syntax
+  - Embedded default prompts in binary using Go's `//go:embed` directive
+  - Added configuration support for custom prompt file paths
+  - Template variables support for dynamic content (diff, file lists, analysis)
+  - Full test coverage for prompt loading and template execution
+  - Backward compatible - uses embedded defaults when no custom paths specified
 
 - **Enhanced Retry Logic** (2025-08-22): Improved retry mechanism to properly handle HTTP status codes and JSON responses:
   - Now properly checks numeric HTTP status codes using `genai.APIError` type

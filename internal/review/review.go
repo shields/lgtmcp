@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/shields/lgtmcp/internal/config"
+	"github.com/shields/lgtmcp/internal/prompts"
 	"google.golang.org/genai"
 )
 
@@ -82,13 +83,15 @@ func (c *RealGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*gen
 	return c.chat.SendMessage(ctx, part)
 }
 
+// Reviewer handles code review using Gemini.
 //
-
+//nolint:govet // Field alignment optimization not necessary for this struct
 type Reviewer struct {
-	client      GeminiClient
-	retryConfig *config.RetryConfig
-	modelName   string
-	temperature float32
+	client        GeminiClient
+	retryConfig   *config.RetryConfig
+	modelName     string
+	temperature   float32
+	promptManager *prompts.Manager
 }
 
 // New creates a new Reviewer instance.
@@ -130,18 +133,23 @@ func New(cfg *config.Config) (*Reviewer, error) {
 		modelName:   cfg.Gemini.Model,
 		temperature: cfg.Gemini.Temperature,
 		retryConfig: cfg.Gemini.Retry,
+		promptManager: prompts.New(
+			cfg.Prompts.ReviewPromptPath,
+			cfg.Prompts.ContextGatheringPromptPath,
+		),
 	}, nil
 }
 
 // NewWithClient creates a new Reviewer with a custom client (for testing).
 //
 //nolint:lll // Long function signature
-func NewWithClient(client GeminiClient, modelName string, temperature float32, retryConfig *config.RetryConfig) *Reviewer {
+func NewWithClient(client GeminiClient, modelName string, temperature float32, retryConfig *config.RetryConfig, promptManager *prompts.Manager) *Reviewer {
 	return &Reviewer{
-		client:      client,
-		modelName:   modelName,
-		temperature: temperature,
-		retryConfig: retryConfig,
+		client:        client,
+		modelName:     modelName,
+		temperature:   temperature,
+		retryConfig:   retryConfig,
+		promptManager: promptManager,
 	}
 }
 
@@ -364,7 +372,10 @@ func (r *Reviewer) ReviewDiff(
 	}
 
 	// Phase 1: Let Gemini analyze the code with tool support for file retrieval.
-	contextPrompt := r.buildContextGatheringPrompt(diff, changedFiles)
+	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(diff, changedFiles)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build context gathering prompt: %w", err)
+	}
 
 	// Configure the model with tools for context gathering.
 	toolConfig := &genai.GenerateContentConfig{
@@ -458,7 +469,10 @@ func (r *Reviewer) ReviewDiff(
 	}
 
 	// Phase 2: Get structured review result without tools.
-	reviewPrompt := r.buildReviewPrompt(diff, changedFiles, analysisText)
+	reviewPrompt, err := r.promptManager.BuildReviewPrompt(diff, changedFiles, analysisText)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build review prompt: %w", err)
+	}
 
 	// Configure for structured JSON output without tools.
 	jsonConfig := &genai.GenerateContentConfig{
@@ -522,81 +536,6 @@ func (r *Reviewer) ReviewDiff(
 	}
 
 	return nil, ErrEmptyResponse
-}
-
-// buildReviewPrompt creates the review prompt for Gemini.
-//
-//nolint:lll // Long prompt strings
-//nolint:lll // Long prompt strings
-func (*Reviewer) buildReviewPrompt(diff string, changedFiles []string, analysisText string) string {
-	filesList := strings.Join(changedFiles, "\n  - ")
-
-	// Include the analysis from the first phase if available.
-	analysisSection := ""
-	if analysisText != "" {
-		analysisSection = fmt.Sprintf(`
-Based on your previous analysis:
-%s
-
-`, analysisText)
-	}
-
-	return fmt.Sprintf(
-		`You are a strict code reviewer for production systems. Your job is to identify issues that must be fixed before merging.
-%s
-CRITICAL: The "lgtm" field controls whether this code gets automatically pushed to production!
-- Set "lgtm": true ONLY if the code is production-ready with NO issues
-- Set "lgtm": false if there are ANY concerns that need addressing
-- If lgtm is true, the code will be immediately deployed with no further review
-
-Review criteria:
-1. Critical bugs or logic errors
-2. Security vulnerabilities
-3. Data loss risks
-4. Performance problems that would impact production
-5. Breaking changes to APIs or interfaces
-
-IMPORTANT: Do NOT flag version numbers, dependency versions, or language versions as issues unless they contain actual syntax errors. Your knowledge may be outdated - assume version numbers are correct if they parse correctly.
-
-Changed files:
-  - %s
-
-Git diff to review:
-%s
-
-RESPONSE RULES:
-1. Focus ONLY on problems that need fixing
-2. Do NOT summarize what the code does
-3. Do NOT praise good code
-4. If no issues found, respond with: {"lgtm": true, "comments": "No issues found. Ready for production."}
-5. If issues found, respond with: {"lgtm": false, "comments": "ISSUE: <specific problem and fix needed>"}
-
-You MUST respond with ONLY valid JSON, nothing else.`, analysisSection, filesList, diff)
-}
-
-// buildContextGatheringPrompt creates the initial prompt for context gathering.
-//
-//nolint:lll // Long prompt strings
-func (*Reviewer) buildContextGatheringPrompt(diff string, changedFiles []string) string {
-	filesList := strings.Join(changedFiles, "\n  - ")
-
-	return fmt.Sprintf(
-		`You are analyzing code changes for a thorough review. Please examine this git diff and use the get_file_content tool to retrieve any additional context you need to understand the changes completely.
-
-Changed files:
-  - %s
-
-Git diff to analyze:
-%s
-
-Use the get_file_content tool to examine any files you need more context about. Once you have gathered sufficient context, provide a brief analysis of what you've found that's relevant for the code review.
-
-Focus on understanding:
-1. How the changes fit into the overall codebase
-2. Dependencies and imports that might be affected
-3. Any security-sensitive operations
-4. Performance implications
-5. API or interface changes`, filesList, diff)
 }
 
 // handleFileRetrieval handles file retrieval tool calls from Gemini.

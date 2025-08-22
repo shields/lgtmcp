@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/shields/lgtmcp/internal/prompts"
 	"google.golang.org/genai"
 )
 
@@ -15,9 +16,10 @@ func IsTestMode() bool {
 // NewForTesting creates a Reviewer with a stub client for testing.
 func NewForTesting() *Reviewer {
 	return &Reviewer{
-		client:      newDefaultStubClient(),
-		modelName:   "gemini-2.5-pro",
-		temperature: 0.2,
+		client:        newDefaultStubClient(),
+		modelName:     "gemini-2.5-pro",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
 	}
 }
 
@@ -116,8 +118,9 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 				}, nil
 			},
 		},
-		modelName:   "gemini-2.5-pro",
-		temperature: 0.2,
-		retryConfig: nil, // No retry for testing by default.
+		modelName:     "gemini-2.5-pro",
+		temperature:   0.2,
+		retryConfig:   nil, // No retry for testing by default.
+		promptManager: prompts.New("", ""),
 	}
 }

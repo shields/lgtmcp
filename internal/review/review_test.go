@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shields/lgtmcp/internal/config"
+	"github.com/shields/lgtmcp/internal/prompts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
@@ -201,36 +202,6 @@ func TestNew(t *testing.T) {
 	})
 }
 
-func TestBuildReviewPrompt(t *testing.T) {
-	t.Parallel()
-	r := &Reviewer{}
-
-	diff := `diff --git a/main.go b/main.go
-index 0000000..1111111 100644
---- a/main.go
-+++ b/main.go
-@@ -1,3 +1,3 @@
- func main() {
--    fmt.Println("Hello")
-+    fmt.Println("Hello, World!")
- }`
-
-	changedFiles := []string{"main.go", "test.go"}
-
-	prompt := r.buildReviewPrompt(diff, changedFiles, "")
-
-	assert.Contains(t, prompt, "strict code reviewer for production systems")
-	assert.Contains(t, prompt, "main.go")
-	assert.Contains(t, prompt, "test.go")
-	assert.Contains(t, prompt, diff)
-	assert.Contains(t, prompt, "Critical bugs or logic errors")
-	assert.Contains(t, prompt, "Security vulnerabilities")
-	assert.Contains(t, prompt, "lgtm")
-	assert.Contains(t, prompt, "comments")
-	assert.Contains(t, prompt,
-		"CRITICAL: The \"lgtm\" field controls whether this code gets automatically pushed to production!")
-}
-
 func TestHandleFileRetrieval(t *testing.T) {
 	t.Parallel()
 	r := &Reviewer{}
@@ -417,8 +388,9 @@ func TestReviewDiff_ErrorCases(t *testing.T) {
 					}
 				},
 			},
-			modelName:   "gemini-2.5-pro",
-			temperature: 0.2,
+			modelName:     "gemini-2.5-pro",
+			temperature:   0.2,
+			promptManager: prompts.New("", ""),
 		}
 
 		ctx, cancel := context.WithCancel(t.Context())

@@ -10,7 +10,9 @@ import (
 )
 
 // ErrNoCredentials indicates that no authentication method is configured.
-var ErrNoCredentials = errors.New("no authentication method configured: either google.api_key must be set or google.use_adc must be true")
+var ErrNoCredentials = errors.New(
+	"no authentication method configured: either google.api_key must be set or google.use_adc must be true",
+)
 
 // GoogleConfig holds Google/GCP configuration.
 type GoogleConfig struct {
@@ -28,6 +30,12 @@ type GitleaksConfig struct {
 // LoggingConfig represents logging configuration.
 type LoggingConfig struct {
 	Level string `json:"level"`
+}
+
+// PromptsConfig holds prompt file configuration.
+type PromptsConfig struct {
+	ReviewPromptPath           string `json:"review_prompt_path,omitempty"`
+	ContextGatheringPromptPath string `json:"context_gathering_prompt_path,omitempty"`
 }
 
 // RetryConfig represents retry configuration for API calls.
@@ -53,6 +61,7 @@ type Config struct {
 	Google   GoogleConfig   `json:"google"`
 	Gitleaks GitleaksConfig `json:"gitleaks,omitempty"`
 	Logging  LoggingConfig  `json:"logging"`
+	Prompts  PromptsConfig  `json:"prompts,omitempty"`
 }
 
 // Load loads the configuration from the YAML file.
