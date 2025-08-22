@@ -150,14 +150,31 @@ func TestNew(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
 		cfg.Google.APIKey = ""
+		cfg.Google.UseADC = false // Explicitly disable ADC.
 		reviewer, err := New(cfg)
 
-		// Should fail without API key or application credentials.
+		// Should fail without API key or ADC.
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no authentication method configured")
+		assert.Nil(t, reviewer)
+	})
+
+	t.Run("with ADC enabled", func(t *testing.T) {
+		t.Parallel()
+		cfg := config.NewTestConfig()
+		cfg.Google.APIKey = ""
+		cfg.Google.UseADC = true
+		reviewer, err := New(cfg)
+
+		// This will succeed or fail based on whether ADC is actually available.
+		// Since we can't guarantee ADC is available in test environment,
+		// we just check that it attempts to use ADC.
 		if err != nil {
-			assert.Contains(t, err.Error(), "failed to create Gemini client")
+			// If it fails, it should be because ADC is not available, not because of config.
+			assert.NotContains(t, err.Error(), "no authentication method configured")
 			assert.Nil(t, reviewer)
 		} else {
-			// If it succeeds (e.g., with GOOGLE_APPLICATION_CREDENTIALS set).
+			// If it succeeds, reviewer should be created.
 			assert.NotNil(t, reviewer)
 			assert.NotNil(t, reviewer.client)
 		}

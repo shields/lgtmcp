@@ -5,8 +5,20 @@
 
 # Google Gemini API configuration
 google:
-  # API key for Gemini (required)
+  # Authentication options (choose one):
+
+  # Option 1: API key authentication
+  # Get your API key from: https://ai.google.dev/gemini-api/docs/api-key
   api_key: "your-gemini-api-key-here"
+
+  # Option 2: Application Default Credentials (ADC)
+  # Set to true to use ADC instead of API key
+  # Requires one of:
+  #   - GOOGLE_APPLICATION_CREDENTIALS environment variable pointing to service account JSON
+  #   - gcloud auth application-default login (for local development)
+  #   - Running on GCP with attached service account (for production)
+  # Learn more: https://cloud.google.com/docs/authentication/application-default-credentials
+  # use_adc: true
 
 # Model configuration
 gemini:

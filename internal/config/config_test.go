@@ -132,6 +132,79 @@ gemini:
 		assert.Nil(t, cfg)
 		assert.Equal(t, ErrNoCredentials, err)
 	})
+
+	t.Run("application default credentials", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+
+		configPath := filepath.Join(lgtmcpDir, "config.yaml")
+		configContent := `
+google:
+  use_adc: true
+gemini:
+  model: "gemini-2.5-pro"
+logging:
+  level: "info"
+`
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.NotNil(t, cfg)
+		assert.Empty(t, cfg.Google.APIKey)
+		assert.True(t, cfg.Google.UseADC)
+		assert.Equal(t, "gemini-2.5-pro", cfg.Gemini.Model)
+	})
+
+	t.Run("api key takes precedence over ADC", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+
+		configPath := filepath.Join(lgtmcpDir, "config.yaml")
+		configContent := `
+google:
+  api_key: "test-api-key"
+  use_adc: true
+gemini:
+  model: "gemini-2.5-pro"
+`
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.NotNil(t, cfg)
+		assert.Equal(t, "test-api-key", cfg.Google.APIKey)
+		assert.True(t, cfg.Google.UseADC)
+		// Both can be set, API key will be used preferentially in the review module.
+	})
+
+	t.Run("neither api key nor ADC", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+
+		configPath := filepath.Join(lgtmcpDir, "config.yaml")
+		configContent := `
+google:
+  use_adc: false
+gemini:
+  model: "gemini-2.5-pro"
+`
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		cfg, err := Load()
+		require.Error(t, err)
+		assert.Nil(t, cfg)
+		assert.Equal(t, ErrNoCredentials, err)
+	})
 }
 
 func TestGetConfigPath(t *testing.T) {

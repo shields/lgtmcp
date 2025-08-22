@@ -25,6 +25,8 @@ var (
 	ErrEmptyResponse = errors.New("empty response from Gemini")
 	// ErrEmptyDiff indicates that the diff is empty.
 	ErrEmptyDiff = errors.New("diff cannot be empty")
+	// ErrNoAuthMethod indicates no authentication method is configured.
+	ErrNoAuthMethod = errors.New("no authentication method configured")
 )
 
 // Result represents the result of a code review.
@@ -90,13 +92,32 @@ type Reviewer struct {
 }
 
 // New creates a new Reviewer instance.
+// New creates a new Reviewer with the Gemini API client.
+// New creates a new Reviewer with the Gemini API client.
 func New(cfg *config.Config) (*Reviewer, error) {
 	ctx := context.Background()
 
-	// Create client with the new SDK.
+	// Create client configuration.
 	clientConfig := &genai.ClientConfig{
-		APIKey:  cfg.Google.APIKey,
 		Backend: genai.BackendGeminiAPI,
+	}
+
+	// Handle authentication based on configuration.
+	switch {
+	case cfg.Google.APIKey != "":
+		// Use API key if provided.
+		clientConfig.APIKey = cfg.Google.APIKey
+		slog.Info("Using API key authentication")
+	case cfg.Google.UseADC:
+		// Use Application Default Credentials.
+		// The genai client will automatically use ADC when no API key is provided
+		// and no explicit credentials are set.
+		slog.Info("Using Application Default Credentials")
+		// Note: We don't need to explicitly set credentials here.
+		// The SDK will automatically use ADC when APIKey is empty.
+	default:
+		// This shouldn't happen due to config validation, but handle it anyway.
+		return nil, ErrNoAuthMethod
 	}
 
 	client, err := genai.NewClient(ctx, clientConfig)

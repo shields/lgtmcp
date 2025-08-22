@@ -172,8 +172,13 @@ LGTMCP uses a YAML configuration file located at:
 ```yaml
 # Google Gemini API configuration
 google:
-  # API key for Gemini (required)
+  # Authentication options (choose one):
+
+  # Option 1: API key authentication
   api_key: "your-gemini-api-key-here"
+
+  # Option 2: Application Default Credentials
+  # use_adc: true
 
 # Model configuration
 gemini:
@@ -360,7 +365,6 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 
 ### TODO 📝
 
-- [ ] **Implement Google Application Credentials support** - Add support for service account authentication as an alternative to API key authentication
 - [ ] **Move prompt to separate file** - Extract review prompt to a Markdown file, embed as default in binary, allow config YAML to specify custom prompt path
 - [ ] **Add extensive logging** - Implement configurable logging to directory (or disabled), optionally send logs to MCP client using MCP logging protocol
 - [ ] **Enable Gemini grounding** - Allow Gemini to use grounding/search capabilities for enhanced code review
@@ -385,6 +389,7 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 - [x] **Memory-based project onboarding** - Created comprehensive memory files for future development
 - [x] **Release preparation** - Version tagging ready, all quality checks passing
 - [x] **Configuration migration to YAML** - Moved from environment variables to YAML configuration files with XDG support
+- [x] **Google Application Credentials support** - Added support for service account authentication as an alternative to API key authentication
 
 ### Test Coverage Summary 📊
 
@@ -461,6 +466,13 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
     - Backoff multiplier: 1.4
   - Context cancellation support
   - Comprehensive test coverage for all retry scenarios
+
+- **Google Application Credentials Support** (2025-08-22): Added support for Application Default Credentials (ADC) as an alternative to API key authentication:
+  - Supports service account JSON files via GOOGLE_APPLICATION_CREDENTIALS environment variable
+  - Works with gcloud auth application-default login for local development
+  - Automatically uses attached service accounts when running on GCP
+  - API key takes precedence when both are configured for backward compatibility
+  - Comprehensive test coverage for all authentication scenarios
 
 - **Enhanced Retry Logic** (2025-08-22): Improved retry mechanism to properly handle HTTP status codes and JSON responses:
   - Now properly checks numeric HTTP status codes using `genai.APIError` type

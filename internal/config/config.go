@@ -9,12 +9,15 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// ErrNoCredentials indicates that API key is not configured.
-var ErrNoCredentials = errors.New("google.api_key must be set in config")
+// ErrNoCredentials indicates that no authentication method is configured.
+var ErrNoCredentials = errors.New("no authentication method configured: either google.api_key must be set or google.use_adc must be true")
 
-// GoogleConfig represents Google API configuration.
+// GoogleConfig holds Google/GCP configuration.
 type GoogleConfig struct {
-	APIKey string `json:"api_key"`
+	// APIKey is the Gemini API key (optional if using Application Default Credentials).
+	APIKey string `json:"api_key,omitempty"`
+	// UseADC indicates whether to use Application Default Credentials.
+	UseADC bool `json:"use_adc,omitempty"`
 }
 
 // GitleaksConfig represents Gitleaks configuration.
@@ -52,6 +55,7 @@ type Config struct {
 	Logging  LoggingConfig  `json:"logging"`
 }
 
+// Load loads the configuration from the YAML file.
 // Load loads the configuration from the YAML file.
 func Load() (*Config, error) {
 	configPath := GetConfigPath()
@@ -101,11 +105,12 @@ func Load() (*Config, error) {
 		}
 	}
 
-	// Validate required fields.
-	if cfg.Google.APIKey == "" {
+	// Validate credentials: either API key or ADC must be configured.
+	if cfg.Google.APIKey == "" && !cfg.Google.UseADC {
 		return nil, ErrNoCredentials
 	}
 
+	// If both are set, API key takes precedence (logged during client creation).
 	return &cfg, nil
 }
 
