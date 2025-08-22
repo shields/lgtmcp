@@ -1,0 +1,54 @@
+# LGTMCP Configuration File
+# Copy this file to one of the following locations:
+# - $XDG_CONFIG_HOME/lgtmcp/config.yaml
+# - ~/.config/lgtmcp/config.yaml
+
+# Google Gemini API configuration
+google:
+  # API key for Gemini (required)
+  api_key: "your-gemini-api-key-here"
+
+# Model configuration
+gemini:
+  # Model to use for code review
+  # Default: gemini-2.5-pro
+  model: "gemini-2.5-pro"
+
+  # Temperature for response generation (0.0-1.0)
+  # Lower values (0.0-0.3) are more deterministic and focused
+  # Higher values (0.7-1.0) are more creative and varied
+  # Default: 0.2 (recommended for highly consistent code reviews)
+  temperature: 0.2
+
+  # Retry configuration for handling rate limits and transient errors
+  retry:
+    # Maximum number of retry attempts (not including the initial attempt)
+    # Default: 5
+    max_retries: 5
+
+    # Initial backoff duration before first retry
+    # Format: Go duration string (e.g., "1s", "500ms", "2m")
+    # Default: 1s
+    initial_backoff: "1s"
+
+    # Maximum backoff duration between retries
+    # Format: Go duration string (e.g., "60s", "5m")
+    # Default: 60s
+    max_backoff: "60s"
+
+    # Backoff multiplier for exponential backoff
+    # Each retry waits: initial_backoff * (multiplier ^ attempt)
+    # Default: 1.4
+    backoff_multiplier: 1.4
+
+# Security configuration
+gitleaks:
+  # Custom gitleaks configuration file (optional)
+  # Note: Custom configs are not currently supported in the embedded library
+  config: ""
+
+# Logging configuration
+logging:
+  # Log level: debug, info, warn, error
+  # Default: info
+  level: "info"

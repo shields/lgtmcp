@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "lgtmcp": {
+      "type": "stdio",
+      "command": "bin/lgtmcp",
+      "args": [],
+      "env": {}
+    }
+  }
+}

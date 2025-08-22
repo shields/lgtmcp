@@ -1,0 +1,26 @@
+# Lefthook configuration for lgtmcp project
+# Ensures code quality before commits and pushes
+
+pre-commit:
+  parallel: false
+  commands:
+    format:
+      glob: "*.go"
+      run: bin/gofumpt -w {staged_files}
+      stage_fixed: true
+
+    lint:
+      run: bin/golangci-lint run --fix ./...
+      stage_fixed: true
+
+    mod-tidy:
+      glob: "go.mod"
+      run: go mod tidy
+      stage_fixed: true
+
+    test:
+      run: go test -short -race ./...
+
+skip_output:
+  - meta
+  - summary
