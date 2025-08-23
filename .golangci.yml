@@ -26,6 +26,7 @@ linters:
     - nestif # Disable nested if complexity checking
     - tenv # Deprecated linter, replaced by usetesting
     - mnd # Magic numbers are often clear in context
+    - nlreturn # Too opinionated about blank lines before returns
 
 linters-settings:
   dupl:
@@ -39,7 +40,7 @@ linters-settings:
     default-signifies-exhaustive: true
 
   godot:
-    scope: all
+    scope: declarations
 
   gofumpt:
     extra-rules: true
@@ -50,6 +51,8 @@ linters-settings:
 
   govet:
     enable-all: true
+    disable:
+      - fieldalignment # Struct field optimization is not always necessary
 
   lll:
     line-length: 120
