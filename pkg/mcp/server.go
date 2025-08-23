@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/shields/lgtmcp/internal/config"
 	"github.com/shields/lgtmcp/internal/git"
+	"github.com/shields/lgtmcp/internal/logging"
 	"github.com/shields/lgtmcp/internal/review"
 	"github.com/shields/lgtmcp/internal/security"
 )
@@ -34,10 +34,11 @@ type Server struct {
 	mcpServer *server.MCPServer
 	reviewer  *review.Reviewer
 	scanner   *security.Scanner
+	logger    logging.Logger
 }
 
 // New creates a new MCP server instance.
-func New(cfg *config.Config) (*Server, error) {
+func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 	// Create MCP server with stdio transport.
 	mcpServer := server.NewMCPServer(
 		"lgtmcp",
@@ -45,7 +46,7 @@ func New(cfg *config.Config) (*Server, error) {
 	)
 
 	// Initialize components.
-	reviewer, err := review.New(cfg)
+	reviewer, err := review.New(cfg, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reviewer: %w", err)
 	}
@@ -59,6 +60,7 @@ func New(cfg *config.Config) (*Server, error) {
 		mcpServer: mcpServer,
 		reviewer:  reviewer,
 		scanner:   scanner,
+		logger:    logger,
 	}
 
 	// Register the review_and_commit tool.
@@ -141,9 +143,9 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 	}
 
 	// Get the diff of staged and unstaged changes.
-	slog.Info("Getting git diff", "directory", directory)
+	s.logger.Info("Getting git diff", "directory", directory)
 	diff, err := gitClient.GetDiff(ctx)
-	slog.Info("Got diff result", "diff_length", len(diff), "error", err)
+	s.logger.Info("Got diff result", "diff_length", len(diff), "error", err)
 	if err != nil {
 		// Check if it's the "no changes" error.
 		if errors.Is(err, git.ErrNoChanges) {
@@ -196,21 +198,21 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 
 // performReview executes the review with Gemini.
 func (s *Server) performReview(ctx context.Context, rc *reviewContext) (*review.Result, error) {
-	slog.Info("Calling Gemini for review", "changed_files", len(rc.changedFiles))
+	s.logger.Info("Calling Gemini for review", "changed_files", len(rc.changedFiles))
 	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath)
-	slog.Info("Gemini review complete", "error", err)
+	s.logger.Info("Gemini review complete", "error", err)
 
 	return reviewResult, err
 }
 
 // HandleReviewOnly reviews code changes without committing.
 func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	slog.Info("handleReviewOnly called", "request", request)
+	s.logger.Info("handleReviewOnly called", "tool", request.Params.Name, "arguments", request.Params.Arguments)
 
 	// Parse arguments.
 	args, ok := request.Params.Arguments.(map[string]any)
 	if !ok {
-		slog.Error("Invalid arguments format", "args", request.Params.Arguments)
+		s.logger.Error("Invalid arguments format", "tool", request.Params.Name)
 
 		return nil, ErrInvalidArguments
 	}
@@ -254,6 +256,8 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 
 // HandleReviewAndCommit handles the review_and_commit tool invocation.
 func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	s.logger.Info("handleReviewAndCommit called", "tool", request.Params.Name, "arguments", request.Params.Arguments)
+
 	// Parse arguments.
 	args, ok := request.Params.Arguments.(map[string]any)
 	if !ok {
@@ -319,7 +323,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 
 // Run starts the MCP server.
 func (s *Server) Run(_ context.Context) error {
-	slog.Info("Starting LGTMCP server", "version", Version)
+	s.logger.Info("Starting LGTMCP server", "version", Version)
 
 	return server.ServeStdio(s.mcpServer)
 }

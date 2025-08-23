@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math"
 	"math/rand"
 	"net/http"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/shields/lgtmcp/internal/config"
+	"github.com/shields/lgtmcp/internal/logging"
 	"github.com/shields/lgtmcp/internal/prompts"
 	"google.golang.org/genai"
 )
@@ -84,20 +84,19 @@ func (c *RealGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*gen
 }
 
 // Reviewer handles code review using Gemini.
-//
-//nolint:govet // Field alignment optimization not necessary for this struct
 type Reviewer struct {
 	client        GeminiClient
 	retryConfig   *config.RetryConfig
 	modelName     string
 	temperature   float32
 	promptManager *prompts.Manager
+	logger        logging.Logger
 }
 
 // New creates a new Reviewer instance.
 // New creates a new Reviewer with the Gemini API client.
 // New creates a new Reviewer with the Gemini API client.
-func New(cfg *config.Config) (*Reviewer, error) {
+func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 	ctx := context.Background()
 
 	// Create client configuration.
@@ -110,12 +109,12 @@ func New(cfg *config.Config) (*Reviewer, error) {
 	case cfg.Google.APIKey != "":
 		// Use API key if provided.
 		clientConfig.APIKey = cfg.Google.APIKey
-		slog.Info("Using API key authentication")
+		logger.Info("Using API key authentication")
 	case cfg.Google.UseADC:
 		// Use Application Default Credentials.
 		// The genai client will automatically use ADC when no API key is provided
 		// and no explicit credentials are set.
-		slog.Info("Using Application Default Credentials")
+		logger.Info("Using Application Default Credentials")
 		// Note: We don't need to explicitly set credentials here.
 		// The SDK will automatically use ADC when APIKey is empty.
 	default:
@@ -137,6 +136,7 @@ func New(cfg *config.Config) (*Reviewer, error) {
 			cfg.Prompts.ReviewPromptPath,
 			cfg.Prompts.ContextGatheringPromptPath,
 		),
+		logger: logger,
 	}, nil
 }
 
@@ -330,14 +330,14 @@ func (r *Reviewer) retryableOperation(
 		// First, check if the API provided a retry delay.
 		if apiDelay := extractRetryDelay(err); apiDelay > 0 {
 			backoff = apiDelay
-			slog.Debug("Using API-provided retry delay",
+			r.logger.Debug("Using API-provided retry delay",
 				"operation", operationName,
 				"attempt", attempt+1,
 				"delay", backoff)
 		} else {
 			// Use exponential backoff with jitter.
 			backoff = calculateBackoff(attempt, r.retryConfig)
-			slog.Debug("Using calculated backoff",
+			r.logger.Debug("Using calculated backoff",
 				"operation", operationName,
 				"attempt", attempt+1,
 				"delay", backoff)
@@ -354,7 +354,7 @@ func (r *Reviewer) retryableOperation(
 			// Continue to next attempt.
 		}
 
-		slog.Info("Retrying operation after rate limit",
+		r.logger.Info("Retrying operation after rate limit",
 			"operation", operationName,
 			"attempt", attempt+2,
 			"max_attempts", r.retryConfig.MaxRetries+1)
@@ -434,7 +434,7 @@ func (r *Reviewer) ReviewDiff(
 		for _, part := range candidate.Content.Parts {
 			if part.FunctionCall != nil {
 				hasToolCalls = true
-				slog.Debug("Model requested file",
+				r.logger.Debug("Model requested file",
 					"function", part.FunctionCall.Name,
 					"filepath", part.FunctionCall.Args["filepath"])
 
@@ -442,7 +442,7 @@ func (r *Reviewer) ReviewDiff(
 				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath)
 
 				// Log the function response for debugging.
-				slog.Debug("Sending function response",
+				r.logger.Debug("Sending function response",
 					"function", part.FunctionCall.Name)
 
 				err = r.retryableOperation(ctx, func() error {
@@ -523,7 +523,7 @@ func (r *Reviewer) ReviewDiff(
 	for _, part := range candidate.Content.Parts {
 		if part.Text != "" {
 			// Log the raw response for debugging.
-			slog.Debug("Raw review response from Gemini", "text", part.Text)
+			r.logger.Debug("Raw review response from Gemini", "text", part.Text)
 
 			// Parse the JSON response.
 			var result Result

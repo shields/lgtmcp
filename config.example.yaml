@@ -61,9 +61,24 @@ gitleaks:
 
 # Logging configuration
 logging:
-  # Log level: debug, info, warn, error
-  # Default: info
+  # Log level: debug, info, warn, error (default: info)
   level: "info"
+
+  # Output destination (default: directory)
+  # Options:
+  #   - "none": Disable logging
+  #   - "stdout": Log to standard output
+  #   - "stderr": Log to standard error
+  #   - "directory": Log to files in directory (default if empty/missing)
+  #   - "mcp": Send logs to MCP client (future feature)
+  output: "directory"
+
+  # Directory for log files (optional when output is "directory")
+  # Default locations:
+  #   - macOS: ~/Library/Logs/lgtmcp/
+  #   - Linux: ~/.local/share/lgtmcp/logs/
+  #   - Windows: %LOCALAPPDATA%\lgtmcp\logs\
+  # directory: "/custom/log/path"
 
 # Prompts configuration (optional)
 # Customize the prompts used for code review

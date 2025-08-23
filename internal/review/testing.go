@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/shields/lgtmcp/internal/logging"
 	"github.com/shields/lgtmcp/internal/prompts"
 	"google.golang.org/genai"
 )
@@ -15,11 +16,17 @@ func IsTestMode() bool {
 
 // NewForTesting creates a Reviewer with a stub client for testing.
 func NewForTesting() *Reviewer {
+	logger, err := logging.New(logging.Config{Output: "none"})
+	if err != nil {
+		// This should never happen with "none" output.
+		panic(err)
+	}
 	return &Reviewer{
 		client:        newDefaultStubClient(),
 		modelName:     "gemini-2.5-pro",
 		temperature:   0.2,
 		promptManager: prompts.New("", ""),
+		logger:        logger,
 	}
 }
 
@@ -77,6 +84,11 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 	}
 	responseJSON := `{"lgtm": ` + lgtmStr + `, "comments": "` + comments + `"}`
 
+	logger, err := logging.New(logging.Config{Output: "none"})
+	if err != nil {
+		// This should never happen with "none" output.
+		panic(err)
+	}
 	return &Reviewer{
 		client: &StubGeminiClient{
 			CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
@@ -122,5 +134,6 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 		temperature:   0.2,
 		retryConfig:   nil, // No retry for testing by default.
 		promptManager: prompts.New("", ""),
+		logger:        logger,
 	}
 }

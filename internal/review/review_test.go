@@ -10,11 +10,22 @@ import (
 	"time"
 
 	"github.com/shields/lgtmcp/internal/config"
+	"github.com/shields/lgtmcp/internal/logging"
 	"github.com/shields/lgtmcp/internal/prompts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
 )
+
+func newTestLogger() logging.Logger {
+	logger, err := logging.New(logging.Config{
+		Output: "none", // Disable logging in tests.
+	})
+	if err != nil {
+		panic(err)
+	}
+	return logger
+}
 
 func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 	t.Parallel()
@@ -43,7 +54,7 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 	require.NoError(t, err)
 
 	cfg := config.NewTestConfig()
-	reviewer, err := New(cfg)
+	reviewer, err := New(cfg, newTestLogger())
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -138,7 +149,7 @@ func TestNew(t *testing.T) {
 		// This test doesn't actually call Gemini API during New().
 		// So it should succeed regardless of API key validity.
 		cfg := config.NewTestConfig()
-		reviewer, err := New(cfg)
+		reviewer, err := New(cfg, newTestLogger())
 
 		// The New function should succeed even with invalid API key.
 		// Since it doesn't validate the key during creation.
@@ -152,7 +163,7 @@ func TestNew(t *testing.T) {
 		cfg := config.NewTestConfig()
 		cfg.Google.APIKey = ""
 		cfg.Google.UseADC = false // Explicitly disable ADC.
-		reviewer, err := New(cfg)
+		reviewer, err := New(cfg, newTestLogger())
 
 		// Should fail without API key or ADC.
 		require.Error(t, err)
@@ -165,7 +176,7 @@ func TestNew(t *testing.T) {
 		cfg := config.NewTestConfig()
 		cfg.Google.APIKey = ""
 		cfg.Google.UseADC = true
-		reviewer, err := New(cfg)
+		reviewer, err := New(cfg, newTestLogger())
 
 		// This will succeed or fail based on whether ADC is actually available.
 		// Since we can't guarantee ADC is available in test environment,
@@ -186,7 +197,7 @@ func TestNew(t *testing.T) {
 		cfg := config.NewTestConfig()
 		cfg.Gemini.Model = "gemini-1.5-pro"
 
-		reviewer, err := New(cfg)
+		reviewer, err := New(cfg, newTestLogger())
 		require.NoError(t, err)
 		assert.NotNil(t, reviewer)
 	})
@@ -196,7 +207,7 @@ func TestNew(t *testing.T) {
 		cfg := config.NewTestConfig()
 		// Cfg already has default model set to gemini-2.5-pro.
 
-		reviewer, err := New(cfg)
+		reviewer, err := New(cfg, newTestLogger())
 		require.NoError(t, err)
 		assert.NotNil(t, reviewer)
 	})
@@ -204,7 +215,7 @@ func TestNew(t *testing.T) {
 
 func TestHandleFileRetrieval(t *testing.T) {
 	t.Parallel()
-	r := &Reviewer{}
+	r := &Reviewer{logger: newTestLogger()}
 	tmpDir := t.TempDir()
 
 	// Create a test file.
@@ -391,6 +402,7 @@ func TestReviewDiff_ErrorCases(t *testing.T) {
 			modelName:     "gemini-2.5-pro",
 			temperature:   0.2,
 			promptManager: prompts.New("", ""),
+			logger:        newTestLogger(),
 		}
 
 		ctx, cancel := context.WithCancel(t.Context())
@@ -787,7 +799,7 @@ func TestRetryableOperation(t *testing.T) {
 			BackoffMultiplier: 2.0,
 		}
 
-		reviewer := &Reviewer{retryConfig: cfg}
+		reviewer := &Reviewer{retryConfig: cfg, logger: newTestLogger()}
 		callCount := 0
 
 		err := reviewer.retryableOperation(t.Context(), func() error {
@@ -810,7 +822,7 @@ func TestRetryableOperation(t *testing.T) {
 			BackoffMultiplier: 2.0,
 		}
 
-		reviewer := &Reviewer{retryConfig: cfg}
+		reviewer := &Reviewer{retryConfig: cfg, logger: newTestLogger()}
 		callCount := 0
 
 		err := reviewer.retryableOperation(t.Context(), func() error {
@@ -836,7 +848,7 @@ func TestRetryableOperation(t *testing.T) {
 			BackoffMultiplier: 2.0,
 		}
 
-		reviewer := &Reviewer{retryConfig: cfg}
+		reviewer := &Reviewer{retryConfig: cfg, logger: newTestLogger()}
 		callCount := 0
 		expectedErr := errors.New("invalid API key") //nolint:err113 // test case
 
@@ -860,7 +872,7 @@ func TestRetryableOperation(t *testing.T) {
 			BackoffMultiplier: 2.0,
 		}
 
-		reviewer := &Reviewer{retryConfig: cfg}
+		reviewer := &Reviewer{retryConfig: cfg, logger: newTestLogger()}
 		callCount := 0
 
 		err := reviewer.retryableOperation(t.Context(), func() error {
@@ -884,7 +896,7 @@ func TestRetryableOperation(t *testing.T) {
 			BackoffMultiplier: 2.0,
 		}
 
-		reviewer := &Reviewer{retryConfig: cfg}
+		reviewer := &Reviewer{retryConfig: cfg, logger: newTestLogger()}
 		callCount := 0
 
 		ctx, cancel := context.WithCancel(t.Context())
@@ -908,7 +920,7 @@ func TestRetryableOperation(t *testing.T) {
 	t.Run("no retry config", func(t *testing.T) {
 		t.Parallel()
 
-		reviewer := &Reviewer{retryConfig: nil}
+		reviewer := &Reviewer{retryConfig: nil, logger: newTestLogger()}
 		callCount := 0
 		expectedErr := errors.New("Error 429: Rate limit exceeded") //nolint:err113 // test case
 

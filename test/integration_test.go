@@ -13,6 +13,7 @@ import (
 
 	"github.com/shields/lgtmcp/internal/config"
 	"github.com/shields/lgtmcp/internal/git"
+	"github.com/shields/lgtmcp/internal/logging"
 	"github.com/shields/lgtmcp/internal/review"
 	"github.com/shields/lgtmcp/internal/security"
 	mcpserver "github.com/shields/lgtmcp/pkg/mcp"
@@ -21,6 +22,17 @@ import (
 )
 
 var fakeSecrets = security.FakeSecrets{}
+
+func newTestLogger() logging.Logger {
+	logger, err := logging.New(logging.Config{
+		Output: "none", // Disable logging in tests by default.
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return logger
+}
 
 // TestGitIntegration tests the complete git workflow.
 func TestGitIntegration(t *testing.T) {
@@ -250,7 +262,7 @@ func main() { println("Hello, World!") }`), 0o644))
 func TestMCPServerIntegration(t *testing.T) {
 	t.Parallel()
 	cfg := config.NewTestConfig()
-	server, err := mcpserver.New(cfg)
+	server, err := mcpserver.New(cfg, newTestLogger())
 	if err != nil {
 		t.Skipf("Cannot create MCP server: %v", err)
 	}

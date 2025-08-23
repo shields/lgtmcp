@@ -115,6 +115,33 @@ All configuration is managed through the YAML configuration file located at:
 
 See `config.example.yaml` for all available configuration options.
 
+## Logging
+
+LGTMCP logs are written to platform-specific default locations:
+
+- **macOS**: `~/Library/Logs/lgtmcp/lgtmcp.log`
+- **Linux**: `~/.local/share/lgtmcp/logs/lgtmcp.log` (or `$XDG_DATA_HOME/lgtmcp/logs/lgtmcp.log`)
+- **Windows**: `%LOCALAPPDATA%\lgtmcp\logs\lgtmcp.log`
+
+You can configure logging in your `config.yaml`:
+
+```yaml
+logging:
+  output: "directory" # Options: none, stdout, stderr, directory, mcp
+  level: "info" # Options: debug, info, warn, error
+  # directory: "/custom/log/path"  # Optional custom directory
+```
+
+To view logs on macOS:
+
+```bash
+# View the log file
+tail -f ~/Library/Logs/lgtmcp/lgtmcp.log
+
+# Or open in Console.app
+open ~/Library/Logs/lgtmcp/lgtmcp.log
+```
+
 ## Development
 
 ### Building

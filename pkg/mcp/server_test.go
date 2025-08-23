@@ -9,6 +9,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/shields/lgtmcp/internal/config"
+	"github.com/shields/lgtmcp/internal/logging"
 	"github.com/shields/lgtmcp/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,12 +17,23 @@ import (
 
 var fakeSecrets = security.FakeSecrets{}
 
+func newTestLogger() logging.Logger {
+	logger, err := logging.New(logging.Config{
+		Output: "none", // Disable logging in tests by default.
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return logger
+}
+
 func TestNew(t *testing.T) {
 	t.Parallel()
 	t.Run("with valid API key", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 		if err != nil {
 			// This might fail with invalid API key, which is expected in CI.
 			assert.Contains(t, err.Error(), "failed to create reviewer")
@@ -38,7 +50,7 @@ func TestNew(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
 		cfg.Google.APIKey = ""
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 		if err != nil {
 			// Expected if no credentials are configured.
 			assert.Contains(t, err.Error(), "failed to create reviewer")
@@ -55,7 +67,7 @@ func TestNew(t *testing.T) {
 		t.Parallel()
 		// We can't easily mock this, but we can verify the error handling.
 		cfg := config.NewTestConfig()
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 		if err != nil {
 			// Either security scanner or reviewer failed - both are valid.
 			require.Error(t, err)
@@ -67,7 +79,9 @@ func TestNew(t *testing.T) {
 func TestHandleReviewAndCommit(t *testing.T) {
 	t.Parallel()
 	// Create a minimal server for testing argument parsing.
-	server := &Server{}
+	server := &Server{
+		logger: newTestLogger(),
+	}
 	ctx := t.Context()
 
 	t.Run("invalid arguments format", func(t *testing.T) {
@@ -137,7 +151,9 @@ func TestHandleReviewAndCommit(t *testing.T) {
 func TestHandleReviewOnly(t *testing.T) {
 	t.Parallel()
 	// Create a minimal server for testing argument parsing.
-	server := &Server{}
+	server := &Server{
+		logger: newTestLogger(),
+	}
 	ctx := t.Context()
 
 	t.Run("invalid arguments format", func(t *testing.T) {
@@ -193,7 +209,7 @@ func TestRegisterTools(t *testing.T) {
 		t.Parallel()
 		// Create a server with minimal setup to test registerTools.
 		cfg := config.NewTestConfig()
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 		if err != nil {
 			// If we can't create the server (no credentials), skip this test.
 			t.Skip("Cannot create server for testing - likely missing credentials")
@@ -215,7 +231,7 @@ func TestRun(t *testing.T) {
 		t.Parallel()
 		// Create a server with minimal setup.
 		cfg := config.NewTestConfig()
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 		if err != nil {
 			// If we can't create the server (no credentials), skip this test.
 			t.Skip("Cannot create server for testing - likely missing credentials")
@@ -233,7 +249,7 @@ func TestHandleReviewAndCommitWithRealRepo(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.NewTestConfig()
-	server, err := New(cfg)
+	server, err := New(cfg, newTestLogger())
 	if err != nil {
 		t.Skip("Cannot create server for testing - likely missing credentials")
 	}
@@ -330,7 +346,7 @@ func TestHandleReviewOnlyWithRealRepo(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.NewTestConfig()
-	server, err := New(cfg)
+	server, err := New(cfg, newTestLogger())
 	if err != nil {
 		t.Skip("Cannot create server for testing - likely missing credentials")
 	}
@@ -410,7 +426,9 @@ func TestHandleReviewOnlyWithRealRepo(t *testing.T) {
 
 func TestHandleReviewAndCommitArgumentValidation(t *testing.T) {
 	t.Parallel()
-	server := &Server{}
+	server := &Server{
+		logger: newTestLogger(),
+	}
 	ctx := t.Context()
 
 	t.Run("directory not string type", func(t *testing.T) {
@@ -450,7 +468,9 @@ func TestHandleReviewAndCommitArgumentValidation(t *testing.T) {
 
 func TestHandleReviewOnlyArgumentValidation(t *testing.T) {
 	t.Parallel()
-	server := &Server{}
+	server := &Server{
+		logger: newTestLogger(),
+	}
 	ctx := t.Context()
 
 	t.Run("directory not string type", func(t *testing.T) {
@@ -492,7 +512,7 @@ func TestNewErrorHandling(t *testing.T) {
 		t.Parallel()
 		// Test that New() properly handles all component initialization.
 		cfg := config.NewTestConfig()
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 
 		// Either succeeds or fails gracefully.
 		if err != nil {
@@ -512,7 +532,7 @@ func TestRunContextCancellation(t *testing.T) {
 	t.Run("run with canceled context", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		server, err := New(cfg)
+		server, err := New(cfg, newTestLogger())
 		if err != nil {
 			t.Skip("Cannot create server for testing - likely missing credentials")
 		}
@@ -547,7 +567,7 @@ func TestHandleReviewAndCommitWithSecrets(t *testing.T) {
 	runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 	cfg := config.NewTestConfig()
-	server, err := New(cfg)
+	server, err := New(cfg, newTestLogger())
 	if err != nil {
 		t.Skip("Cannot create server for testing - likely missing credentials")
 	}
@@ -606,7 +626,7 @@ func TestHandleReviewOnlyWithSecrets(t *testing.T) {
 	runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 	cfg := config.NewTestConfig()
-	server, err := New(cfg)
+	server, err := New(cfg, newTestLogger())
 	if err != nil {
 		t.Skip("Cannot create server for testing - likely missing credentials")
 	}
@@ -653,7 +673,7 @@ func TestHandleReviewAndCommitWithDiffError(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := config.NewTestConfig()
-	server, err := New(cfg)
+	server, err := New(cfg, newTestLogger())
 	if err != nil {
 		t.Skip("Cannot create server for testing - likely missing credentials")
 	}
@@ -684,7 +704,7 @@ func TestHandleReviewOnlyWithDiffError(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	cfg := config.NewTestConfig()
-	server, err := New(cfg)
+	server, err := New(cfg, newTestLogger())
 	if err != nil {
 		t.Skip("Cannot create server for testing - likely missing credentials")
 	}

@@ -29,7 +29,23 @@ type GitleaksConfig struct {
 
 // LoggingConfig represents logging configuration.
 type LoggingConfig struct {
+	// Level is the minimum log level (debug, info, warn, error).
 	Level string `json:"level"`
+
+	// Output specifies where logs should be written:
+	// - "none": Disable logging
+	// - "stdout": Write to standard output
+	// - "stderr": Write to standard error
+	// - "directory": Write to files in specified directory (default if empty)
+	// - "mcp": Send logs to MCP client (if supported).
+	Output string `json:"output,omitempty"`
+
+	// Directory is the directory for log files (when Output is "directory").
+	// If not specified, uses the standard platform location:
+	// - macOS: ~/Library/Logs/lgtmcp/
+	// - Linux: ~/.local/share/lgtmcp/logs/
+	// - Windows: %LOCALAPPDATA%\lgtmcp\logs\.
+	Directory string `json:"directory,omitempty"`
 }
 
 // PromptsConfig holds prompt file configuration.
@@ -54,8 +70,6 @@ type GeminiConfig struct {
 }
 
 // Config represents the application configuration.
-//
-//nolint:govet // Field alignment optimization not necessary for config struct
 type Config struct {
 	Gemini   GeminiConfig   `json:"gemini"`
 	Google   GoogleConfig   `json:"google"`
