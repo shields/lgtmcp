@@ -358,10 +358,20 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 
 ### TODO 📝
 
-- [ ] **Add extensive logging** - Implement configurable logging to directory (or disabled), optionally send logs to MCP client using MCP logging protocol
 - [ ] **Enable Gemini grounding** - Allow Gemini to use grounding/search capabilities for enhanced code review
 - [ ] **Add file size limits** - Implement protection against uploading large files to Gemini API to prevent excessive token usage
 - [ ] **Cost logging and reporting** - Track and report API usage costs for Gemini API calls, including token counts and estimated costs
+
+### Future Improvements (Not Planned) 🔮
+
+These are documented as possibilities but intentionally not implemented to keep the tool simple for single-user CLI usage:
+
+- **Advanced log rotation** - OS/user can manage log files; could use lumberjack if needed
+- **Metrics export** - Prometheus/OpenTelemetry would be overkill for single-user CLI
+- **Branch tracking in logs** - Could add if useful: `git symbolic-ref --short HEAD`
+- **Separate debug log files** - Current log levels are sufficient
+
+See `docs/logging-improvements.md` for details on what was implemented vs. future possibilities.
 
 ### Completed ✅
 
@@ -384,6 +394,7 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 - [x] **Google Application Credentials support** - Added support for service account authentication as an alternative to API key authentication
 - [x] **Customizable prompts** - Extracted review prompts to separate Markdown files, embedded as defaults in binary, with config YAML support for custom prompt paths
 - [x] **Configurable git diff context** - Added configurable context lines for git diff output (default 20 lines instead of 3)
+- [x] **Practical logging improvements** - Added request IDs, timing metrics, sensitive data masking, and repository context for single-user CLI usage
 
 ### Test Coverage Summary 📊
 

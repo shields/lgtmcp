@@ -2,9 +2,12 @@ package mcp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -128,6 +131,15 @@ func (*Server) parseDirectory(args map[string]any) (string, error) {
 	return absPath, nil
 }
 
+// generateRequestID creates a short unique ID for request tracing.
+func generateRequestID() (string, error) {
+	b := make([]byte, 4)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate request ID: %w", err)
+	}
+	return hex.EncodeToString(b), nil
+}
+
 // reviewContext holds the context needed for performing a review.
 type reviewContext struct {
 	gitClient    *git.Git
@@ -149,9 +161,20 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 	}
 
 	// Get the diff of staged and unstaged changes.
-	s.logger.Info("Getting git diff", "directory", directory)
+	start := time.Now()
 	diff, err := gitClient.GetDiff(ctx)
-	s.logger.Info("Got diff result", "diff_length", len(diff), "error", err)
+	diffDuration := time.Since(start)
+	if err != nil {
+		s.logger.Error("Git diff failed",
+			"repo", filepath.Base(directory),
+			"duration_ms", diffDuration.Milliseconds(),
+			"error", err)
+	} else {
+		s.logger.Info("Git diff completed",
+			"repo", filepath.Base(directory),
+			"diff_size", len(diff),
+			"duration_ms", diffDuration.Milliseconds())
+	}
 	if err != nil {
 		// Check if it's the "no changes" error.
 		if errors.Is(err, git.ErrNoChanges) {
@@ -177,7 +200,18 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 	getFileContent := func(path string) (string, error) {
 		return gitClient.GetFileContent(ctx, path)
 	}
+	scanStart := time.Now()
 	findings, err := s.scanner.ScanDiff(ctx, diff, getFileContent)
+	scanDuration := time.Since(scanStart)
+	if err != nil {
+		s.logger.Error("Security scan failed",
+			"duration_ms", scanDuration.Milliseconds(),
+			"error", err)
+	} else {
+		s.logger.Info("Security scan completed",
+			"duration_ms", scanDuration.Milliseconds(),
+			"findings", len(findings))
+	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("security scan failed: %w", err)
 	}
@@ -204,47 +238,109 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 
 // performReview executes the review with Gemini.
 func (s *Server) performReview(ctx context.Context, rc *reviewContext) (*review.Result, error) {
-	s.logger.Info("Calling Gemini for review", "changed_files", len(rc.changedFiles))
+	start := time.Now()
+	s.logger.Info("Starting Gemini review",
+		"repo", filepath.Base(rc.absPath),
+		"changed_files", len(rc.changedFiles),
+		"diff_size", len(rc.diff))
+
 	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath)
-	s.logger.Info("Gemini review complete", "error", err)
+
+	duration := time.Since(start)
+	if err != nil {
+		s.logger.Error("Gemini review failed",
+			"duration_ms", duration.Milliseconds(),
+			"error", err)
+	} else {
+		s.logger.Info("Gemini review completed",
+			"duration_ms", duration.Milliseconds(),
+			"approved", reviewResult.LGTM)
+	}
 
 	return reviewResult, err
 }
 
 // HandleReviewOnly reviews code changes without committing.
 func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	s.logger.Info("handleReviewOnly called", "tool", request.Params.Name, "arguments", request.Params.Arguments)
+	requestID, err := generateRequestID()
+	if err != nil {
+		s.logger.Error("Failed to generate request ID", "error", err)
+		return nil, err
+	}
+	start := time.Now()
+
+	s.logger.Info("Review request started",
+		"request_id", requestID,
+		"tool", "review_only")
 
 	// Parse arguments.
 	args, ok := request.Params.Arguments.(map[string]any)
 	if !ok {
-		s.logger.Error("Invalid arguments format", "tool", request.Params.Name)
-
+		s.logger.Error("Invalid arguments format",
+			"request_id", requestID,
+			"tool", "review_only")
 		return nil, ErrInvalidArguments
 	}
 
 	// Parse and validate directory.
 	directory, err := s.parseDirectory(args)
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Failed to parse directory",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, err
 	}
 
+	s.logger.Info("Processing repository",
+		"request_id", requestID,
+		"repo", filepath.Base(directory))
+
 	// Prepare for review (get diff, security scan, etc.)
+	prepStart := time.Now()
 	reviewCtx, earlyReturn, err := s.prepareReview(ctx, directory)
+	prepDuration := time.Since(prepStart)
+
+	s.logger.Info("Review preparation completed",
+		"request_id", requestID,
+		"duration_ms", prepDuration.Milliseconds(),
+		"early_return", earlyReturn != nil,
+		"error", err)
+
 	if earlyReturn != nil {
 		return earlyReturn, nil
 	}
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Review preparation failed",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, err
 	}
 
 	// Perform the review.
+	s.logger.Info("Starting review analysis",
+		"request_id", requestID)
+
 	reviewResult, err := s.performReview(ctx, reviewCtx)
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Review failed",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, fmt.Errorf("review failed: %w", err)
 	}
 
 	// Return review result (approved or not).
+	elapsed := time.Since(start)
+	s.logger.Info("Review completed",
+		"request_id", requestID,
+		"approved", reviewResult.LGTM,
+		"total_duration_ms", elapsed.Milliseconds())
+
 	if reviewResult.LGTM {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -262,7 +358,18 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 
 // HandleReviewAndCommit handles the review_and_commit tool invocation.
 func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	s.logger.Info("handleReviewAndCommit called", "tool", request.Params.Name, "arguments", request.Params.Arguments)
+	requestID, err := generateRequestID()
+	if err != nil {
+		s.logger.Error("Failed to generate request ID", "error", err)
+		return nil, err
+	}
+	start := time.Now()
+
+	// Log request start without exposing arguments
+	s.logger.Info("Review and commit request started",
+		"request_id", requestID,
+		"tool", "review_and_commit",
+		"arguments", "map[...]")
 
 	// Parse arguments.
 	args, ok := request.Params.Arguments.(map[string]any)
@@ -273,8 +380,17 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	// Parse and validate directory.
 	directory, err := s.parseDirectory(args)
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Failed to parse directory",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, err
 	}
+
+	s.logger.Info("Processing repository",
+		"request_id", requestID,
+		"repo", filepath.Base(directory))
 
 	// Parse commit message.
 	commitMessage, ok := args["commit_message"].(string)
@@ -283,22 +399,49 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	}
 
 	// Prepare for review (get diff, security scan, etc.)
+	prepStart := time.Now()
 	reviewCtx, earlyReturn, err := s.prepareReview(ctx, directory)
+	prepDuration := time.Since(prepStart)
+
+	s.logger.Info("Review preparation completed",
+		"request_id", requestID,
+		"duration_ms", prepDuration.Milliseconds(),
+		"early_return", earlyReturn != nil,
+		"error", err)
+
 	if earlyReturn != nil {
 		return earlyReturn, nil
 	}
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Review preparation failed",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, err
 	}
 
 	// Perform the review.
+	s.logger.Info("Starting review analysis",
+		"request_id", requestID)
+
 	reviewResult, err := s.performReview(ctx, reviewCtx)
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Review failed",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, fmt.Errorf("review failed: %w", err)
 	}
 
 	// If not approved, return review comments.
 	if !reviewResult.LGTM {
+		elapsed := time.Since(start)
+		s.logger.Info("Review rejected changes",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds())
+
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
 				mcp.NewTextContent("Review Result: NOT APPROVED\n\n" + reviewResult.Comments),
@@ -310,15 +453,39 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	approvalMsg := "Review Result: APPROVED (LGTM)\n\n" + reviewResult.Comments
 
 	// Stage all changes.
+	stageStart := time.Now()
 	if stageErr := reviewCtx.gitClient.StageAll(ctx); stageErr != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Failed to stage changes",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", stageErr)
 		return nil, fmt.Errorf("failed to stage changes: %w", stageErr)
 	}
+	stageDuration := time.Since(stageStart)
+	s.logger.Info("Changes staged",
+		"request_id", requestID,
+		"duration_ms", stageDuration.Milliseconds())
 
 	// Commit the changes.
+	commitStart := time.Now()
 	commitHash, err := reviewCtx.gitClient.Commit(ctx, commitMessage)
 	if err != nil {
+		elapsed := time.Since(start)
+		s.logger.Error("Failed to commit",
+			"request_id", requestID,
+			"total_duration_ms", elapsed.Milliseconds(),
+			"error", err)
 		return nil, fmt.Errorf("failed to commit: %w", err)
 	}
+	commitDuration := time.Since(commitStart)
+
+	elapsed := time.Since(start)
+	s.logger.Info("Review and commit completed",
+		"request_id", requestID,
+		"commit_hash", commitHash,
+		"commit_duration_ms", commitDuration.Milliseconds(),
+		"total_duration_ms", elapsed.Milliseconds())
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
