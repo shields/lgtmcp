@@ -22,6 +22,13 @@ type GoogleConfig struct {
 	UseADC bool `json:"use_adc,omitempty"`
 }
 
+// GitConfig represents Git configuration.
+type GitConfig struct {
+	// DiffContextLines is the number of context lines to include in git diff output.
+	// Use pointer to distinguish between unset (nil = default 20) and explicitly set to 0.
+	DiffContextLines *int `json:"diff_context_lines,omitempty"`
+}
+
 // GitleaksConfig represents Gitleaks configuration.
 type GitleaksConfig struct {
 	Config string `json:"config,omitempty"`
@@ -73,6 +80,7 @@ type GeminiConfig struct {
 type Config struct {
 	Gemini   GeminiConfig   `json:"gemini"`
 	Google   GoogleConfig   `json:"google"`
+	Git      GitConfig      `json:"git,omitempty"`
 	Gitleaks GitleaksConfig `json:"gitleaks,omitempty"`
 	Logging  LoggingConfig  `json:"logging"`
 	Prompts  PromptsConfig  `json:"prompts,omitempty"`

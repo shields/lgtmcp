@@ -35,6 +35,7 @@ type Server struct {
 	reviewer  *review.Reviewer
 	scanner   *security.Scanner
 	logger    logging.Logger
+	config    *config.Config
 }
 
 // New creates a new MCP server instance.
@@ -61,6 +62,7 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 		reviewer:  reviewer,
 		scanner:   scanner,
 		logger:    logger,
+		config:    cfg,
 	}
 
 	// Register the review_and_commit tool.
@@ -137,7 +139,11 @@ type reviewContext struct {
 // prepareReview handles common review preparation logic: getting diff, security scan, etc.
 func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewContext, *mcp.CallToolResult, error) {
 	// Create a git client for this repository.
-	gitClient, err := git.New(directory)
+	var gitConfig *config.GitConfig
+	if s.config != nil {
+		gitConfig = &s.config.Git
+	}
+	gitClient, err := git.New(directory, gitConfig)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid git repository: %w", err)
 	}

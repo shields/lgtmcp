@@ -53,6 +53,14 @@ gemini:
     # Default: 1.4
     backoff_multiplier: 1.4
 
+# Git configuration
+git:
+  # Number of context lines to include in git diff output
+  # Higher values provide more context for code review but increase token usage
+  # Default: 20 (if not specified)
+  # Set to 0 for minimal context (only changed lines)
+  diff_context_lines: 20
+
 # Security configuration
 gitleaks:
   # Custom gitleaks configuration file (optional)

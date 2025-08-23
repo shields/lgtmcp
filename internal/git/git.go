@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/shields/lgtmcp/internal/config"
 )
 
 const (
@@ -30,10 +32,11 @@ var (
 )
 
 type Git struct {
-	repoPath string
+	repoPath         string
+	diffContextLines int
 }
 
-func New(repoPath string) (*Git, error) {
+func New(repoPath string, cfg *config.GitConfig) (*Git, error) {
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %w", err)
@@ -43,8 +46,15 @@ func New(repoPath string) (*Git, error) {
 		return nil, ErrNotGitRepo
 	}
 
+	// Default to 20 lines of context if not specified
+	contextLines := 20
+	if cfg != nil && cfg.DiffContextLines != nil {
+		contextLines = *cfg.DiffContextLines
+	}
+
 	return &Git{
-		repoPath: absPath,
+		repoPath:         absPath,
+		diffContextLines: contextLines,
 	}, nil
 }
 
@@ -103,7 +113,9 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	} else {
 		// Normal case: diff between HEAD and working directory (including untracked files).
 		// This shows all changes regardless of staging status.
-		diff, err = g.runGitCommand(ctx, "diff", "HEAD", "--", ".")
+		// Use the configured context lines (default 20).
+		contextFlag := fmt.Sprintf("--unified=%d", g.diffContextLines)
+		diff, err = g.runGitCommand(ctx, "diff", contextFlag, "HEAD", "--", ".")
 		if err != nil {
 			return "", fmt.Errorf("failed to get diff against HEAD: %w", err)
 		}

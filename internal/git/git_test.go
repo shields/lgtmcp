@@ -2,12 +2,14 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/shields/lgtmcp/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +19,7 @@ func TestNew(t *testing.T) {
 	t.Run("valid git repository", func(t *testing.T) {
 		t.Parallel()
 		dir := createTempGitRepo(t)
-		g, err := New(dir)
+		g, err := New(dir, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, g)
 		assert.Equal(t, dir, g.repoPath)
@@ -26,7 +28,7 @@ func TestNew(t *testing.T) {
 	t.Run("not a git repository", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
-		g, err := New(dir)
+		g, err := New(dir, nil)
 		require.ErrorIs(t, err, ErrNotGitRepo)
 		assert.Nil(t, g)
 	})
@@ -44,7 +46,7 @@ func TestGetDiff(t *testing.T) {
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		diff, err := g.GetDiff(t.Context())
@@ -60,7 +62,7 @@ func TestGetDiff(t *testing.T) {
 		createFile(t, tmpDir, "file1.txt", "content1")
 		createFile(t, tmpDir, "file2.txt", "content2")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		diff, err := g.GetDiff(t.Context())
@@ -83,7 +85,7 @@ func TestGetDiff(t *testing.T) {
 
 		createFile(t, tmpDir, "file1.txt", "modified")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		diff, err := g.GetDiff(t.Context())
@@ -106,7 +108,7 @@ func TestGetDiff(t *testing.T) {
 		// Add untracked file.
 		createFile(t, tmpDir, "untracked.txt", "new content")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		diff, err := g.GetDiff(t.Context())
@@ -139,7 +141,7 @@ func TestGetDiff(t *testing.T) {
 		// Add untracked file.
 		createFile(t, tmpDir, "untracked.txt", "untracked content")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		diff, err := g.GetDiff(t.Context())
@@ -159,12 +161,125 @@ func TestGetDiff(t *testing.T) {
 		assert.Contains(t, diff, "+untracked content")
 	})
 
+	t.Run("custom context lines", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+		defer cleanupTempDir(t, tmpDir)
+
+		// Create a file with multiple lines
+		file := filepath.Join(tmpDir, "multiline.txt")
+		lines := []string{}
+		for i := 1; i <= 30; i++ {
+			lines = append(lines, fmt.Sprintf("Line %d", i))
+		}
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+
+		// Commit the file
+		runGitCmd(t, tmpDir, "add", ".")
+		runGitCmd(t, tmpDir, "commit", "-m", "Initial commit")
+
+		// Modify a line in the middle
+		lines[15] = "MODIFIED LINE 16"
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+
+		// Test with custom context lines
+		contextLines := 5
+		cfg := &config.GitConfig{
+			DiffContextLines: &contextLines,
+		}
+		g, err := New(tmpDir, cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 5, g.diffContextLines)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+
+		// The diff should include context lines around line 16
+		// With 5 lines of context, we should see 5 lines before and 5 lines after
+		// That's lines 11-15 (before), line 16 (changed), and lines 17-21 (after)
+		assert.Contains(t, diff, "Line 11")
+		assert.Contains(t, diff, "Line 15")
+		assert.Contains(t, diff, "-Line 16")
+		assert.Contains(t, diff, "+MODIFIED LINE 16")
+		assert.Contains(t, diff, "Line 17")
+		assert.Contains(t, diff, "Line 21")
+
+		// Actually, git includes one more line to show the hunk header properly
+		// So Line 10 might be visible as context
+		// Let's check for lines definitely outside the range
+		assert.NotContains(t, diff, "Line 9")
+		assert.NotContains(t, diff, "Line 22")
+	})
+
+	t.Run("default context lines", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+		defer cleanupTempDir(t, tmpDir)
+
+		// Test with nil config (should default to 20)
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+		assert.Equal(t, 20, g.diffContextLines)
+
+		// Test with zero context lines (should be 0, not default)
+		zeroLines := 0
+		cfg := &config.GitConfig{
+			DiffContextLines: &zeroLines,
+		}
+		g2, err := New(tmpDir, cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 0, g2.diffContextLines)
+	})
+
+	t.Run("zero context lines", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+		defer cleanupTempDir(t, tmpDir)
+
+		// Create a file with multiple lines
+		file := filepath.Join(tmpDir, "multiline.txt")
+		lines := []string{}
+		for i := 1; i <= 30; i++ {
+			lines = append(lines, fmt.Sprintf("Line %d", i))
+		}
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+
+		// Commit the file
+		runGitCmd(t, tmpDir, "add", ".")
+		runGitCmd(t, tmpDir, "commit", "-m", "Initial commit")
+
+		// Modify a line in the middle
+		lines[15] = "MODIFIED LINE 16"
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+
+		// Test with zero context lines
+		zeroLines := 0
+		cfg := &config.GitConfig{
+			DiffContextLines: &zeroLines,
+		}
+		g, err := New(tmpDir, cfg)
+		require.NoError(t, err)
+		assert.Equal(t, 0, g.diffContextLines)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+
+		// With 0 context lines, we should only see the changed line
+		assert.Contains(t, diff, "-Line 16")
+		assert.Contains(t, diff, "+MODIFIED LINE 16")
+
+		// Git shows one line of context even with --unified=0 for the hunk header
+		// But it shouldn't show more than that
+		assert.NotContains(t, diff, "Line 14")
+		assert.NotContains(t, diff, "Line 18")
+	})
+
 	t.Run("context cancellation", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithCancel(t.Context())
@@ -185,7 +300,7 @@ func TestStageAll(t *testing.T) {
 		createFile(t, tmpDir, "file1.txt", "content1")
 		createFile(t, tmpDir, "file2.txt", "content2")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		err = g.StageAll(t.Context())
@@ -201,7 +316,7 @@ func TestStageAll(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		err = g.StageAll(t.Context())
@@ -219,7 +334,7 @@ func TestCommit(t *testing.T) {
 		createFile(t, tmpDir, "file.txt", "content")
 		runGitCmd(t, tmpDir, "add", "file.txt")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		sha, err := g.Commit(t.Context(), "test commit")
@@ -236,7 +351,7 @@ func TestCommit(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		sha, err := g.Commit(t.Context(), "")
@@ -250,7 +365,7 @@ func TestCommit(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		sha, err := g.Commit(t.Context(), "test commit")
@@ -268,7 +383,7 @@ func TestGetFileContent(t *testing.T) {
 
 		createFile(t, tmpDir, "test.txt", "file content")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		content, err := g.GetFileContent(t.Context(), "test.txt")
@@ -284,7 +399,7 @@ func TestGetFileContent(t *testing.T) {
 		require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0o755))
 		createFile(t, tmpDir, "subdir/file.txt", "nested content")
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		content, err := g.GetFileContent(t.Context(), "subdir/file.txt")
@@ -297,7 +412,7 @@ func TestGetFileContent(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		content, err := g.GetFileContent(t.Context(), "nonexistent.txt")
@@ -311,7 +426,7 @@ func TestGetFileContent(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		content, err := g.GetFileContent(t.Context(), "/etc/passwd")
@@ -324,7 +439,7 @@ func TestGetFileContent(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		content, err := g.GetFileContent(t.Context(), "../../../etc/passwd")
@@ -339,7 +454,7 @@ func TestGetFileContent(t *testing.T) {
 
 		require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(tmpDir, "link")))
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		content, err := g.GetFileContent(t.Context(), "link")
@@ -366,7 +481,7 @@ func TestGetFileContent(t *testing.T) {
 		require.NoError(t, os.WriteFile(secretFile, []byte("SECRET DATA"), 0o644))
 
 		// Initialize git repo.
-		g, err := New(repoDir)
+		g, err := New(repoDir, nil)
 		require.NoError(t, err)
 
 		// Try to access the secret file using a crafted path.
@@ -390,7 +505,7 @@ func TestGetRepoPath(t *testing.T) {
 	tmpDir := createTempGitRepo(t)
 	defer cleanupTempDir(t, tmpDir)
 
-	g, err := New(tmpDir)
+	g, err := New(tmpDir, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, tmpDir, g.GetRepoPath())
@@ -432,7 +547,7 @@ func TestRunGitCommand(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		ctx, cancel := context.WithTimeout(t.Context(), 1)
@@ -448,7 +563,7 @@ func TestRunGitCommand(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		g, err := New(tmpDir)
+		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
 		_, err = g.runGitCommand(t.Context(), "invalid-command")

@@ -173,6 +173,12 @@ gemini:
     max_backoff: "60s" # Maximum wait time (default: 60s)
     backoff_multiplier: 1.4 # Exponential growth factor (default: 1.4)
 
+# Git configuration
+git:
+  # Number of context lines to include in git diff output (default: 20)
+  # Higher values provide more context for code review
+  diff_context_lines: 20
+
 # Security configuration
 gitleaks:
   # Custom gitleaks configuration file (optional)
@@ -377,6 +383,7 @@ LGTMCP is used as an MCP server, not as a direct command-line tool. Configure it
 - [x] **Configuration migration to YAML** - Moved from environment variables to YAML configuration files with XDG support
 - [x] **Google Application Credentials support** - Added support for service account authentication as an alternative to API key authentication
 - [x] **Customizable prompts** - Extracted review prompts to separate Markdown files, embedded as defaults in binary, with config YAML support for custom prompt paths
+- [x] **Configurable git diff context** - Added configurable context lines for git diff output (default 20 lines instead of 3)
 
 ### Test Coverage Summary 📊
 

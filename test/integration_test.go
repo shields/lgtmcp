@@ -43,7 +43,7 @@ func TestGitIntegration(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		t.Cleanup(func() { cleanup(t, tmpDir) })
 
-		gitClient, err := git.New(tmpDir)
+		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
 
 		// Create initial file.
@@ -100,7 +100,7 @@ func main() {
 		tmpDir := createTempGitRepo(t)
 		t.Cleanup(func() { cleanup(t, tmpDir) })
 
-		gitClient, err := git.New(tmpDir)
+		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
 
 		// Test repository path.
@@ -331,7 +331,7 @@ func main() {
 		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o644))
 
 		// 3. Initialize git client.
-		gitClient, err := git.New(tmpDir)
+		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
 
 		// 4. Get diff.
@@ -379,7 +379,7 @@ DATABASE_URL=postgres://localhost/mydb`
 
 		require.NoError(t, os.WriteFile(secretFile, []byte(secretContent), 0o644))
 
-		gitClient, err := git.New(tmpDir)
+		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
 
 		ctx := t.Context()
