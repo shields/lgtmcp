@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,14 +28,351 @@ func newTestLogger() logging.Logger {
 	return logger
 }
 
+func TestHandleFileRetrieval_GitIgnore(t *testing.T) {
+	t.Parallel()
+	// Create a temporary repository directory.
+	repoDir := t.TempDir()
+
+	// Initialize it as a git repository.
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repoDir
+	err := cmd.Run()
+	require.NoError(t, err, "Failed to initialize git repo")
+
+	// Create a .gitignore file.
+	gitignorePath := filepath.Join(repoDir, ".gitignore")
+	gitignoreContent := `# Sensitive files
+secrets.txt
+*.key
+*.pem
+config/*.secret
+node_modules/
+.env
+.env.*
+build/
+dist/
+`
+	err = os.WriteFile(gitignorePath, []byte(gitignoreContent), 0o644)
+	require.NoError(t, err)
+
+	// Create various test files.
+	// 1. Normal file (not ignored).
+	allowedFile := filepath.Join(repoDir, "allowed.txt")
+	err = os.WriteFile(allowedFile, []byte("allowed content"), 0o644)
+	require.NoError(t, err)
+
+	// 2. Directly ignored file.
+	secretsFile := filepath.Join(repoDir, "secrets.txt")
+	err = os.WriteFile(secretsFile, []byte("secret content"), 0o644)
+	require.NoError(t, err)
+
+	// 3. Pattern-matched ignored file.
+	keyFile := filepath.Join(repoDir, "private.key")
+	err = os.WriteFile(keyFile, []byte("private key content"), 0o644)
+	require.NoError(t, err)
+
+	// 4. .env file (ignored).
+	envFile := filepath.Join(repoDir, ".env")
+	err = os.WriteFile(envFile, []byte("API_KEY=secret123"), 0o644)
+	require.NoError(t, err)
+
+	// 5. .env.local file (pattern ignored).
+	envLocalFile := filepath.Join(repoDir, ".env.local")
+	err = os.WriteFile(envLocalFile, []byte("DB_PASSWORD=secret456"), 0o644)
+	require.NoError(t, err)
+
+	// 6. File in ignored directory.
+	err = os.MkdirAll(filepath.Join(repoDir, "node_modules"), 0o755)
+	require.NoError(t, err)
+	nodeModuleFile := filepath.Join(repoDir, "node_modules", "package.json")
+	err = os.WriteFile(nodeModuleFile, []byte(`{"name": "test"}`), 0o644)
+	require.NoError(t, err)
+
+	// 7. File in config directory with .secret extension (pattern match).
+	err = os.MkdirAll(filepath.Join(repoDir, "config"), 0o755)
+	require.NoError(t, err)
+	configSecretFile := filepath.Join(repoDir, "config", "database.secret")
+	err = os.WriteFile(configSecretFile, []byte("db_password=secret"), 0o644)
+	require.NoError(t, err)
+
+	// 8. Normal file in config directory (not ignored).
+	configNormalFile := filepath.Join(repoDir, "config", "app.json")
+	err = os.WriteFile(configNormalFile, []byte(`{"port": 3000}`), 0o644)
+	require.NoError(t, err)
+
+	// 9. Build directory file (ignored).
+	err = os.MkdirAll(filepath.Join(repoDir, "build"), 0o755)
+	require.NoError(t, err)
+	buildFile := filepath.Join(repoDir, "build", "output.js")
+	err = os.WriteFile(buildFile, []byte("compiled code"), 0o644)
+	require.NoError(t, err)
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, newTestLogger())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		filepath      string
+		expectContent string
+		shouldSucceed bool
+		expectedError string
+	}{
+		{
+			name:          "normal file access",
+			filepath:      "allowed.txt",
+			shouldSucceed: true,
+			expectContent: "allowed content",
+		},
+		{
+			name:          "directly ignored file - secrets.txt",
+			filepath:      "secrets.txt",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          "pattern ignored file - .key extension",
+			filepath:      "private.key",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          ".env file (ignored)",
+			filepath:      ".env",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          ".env.local file (pattern ignored)",
+			filepath:      ".env.local",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          "file in ignored directory - node_modules",
+			filepath:      "node_modules/package.json",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          "pattern ignored in subdirectory - config/*.secret",
+			filepath:      "config/database.secret",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          "normal file in config directory",
+			filepath:      "config/app.json",
+			shouldSucceed: true,
+			expectContent: `{"port": 3000}`,
+		},
+		{
+			name:          "file in build directory (ignored)",
+			filepath:      "build/output.js",
+			shouldSucceed: false,
+			expectedError: "access denied: file is gitignored",
+		},
+		{
+			name:          ".gitignore file itself",
+			filepath:      ".gitignore",
+			shouldSucceed: true, // .gitignore itself should be readable
+			expectContent: gitignoreContent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Create function call.
+			funcCall := &genai.FunctionCall{
+				Name: "get_file_content",
+				Args: map[string]any{
+					"filepath": tt.filepath,
+				},
+			}
+
+			t.Logf("Testing with filepath: %s, repoDir: %s", tt.filepath, repoDir)
+			result := reviewer.handleFileRetrieval(funcCall, repoDir)
+
+			// Extract the response from the FunctionResponse.
+			var response map[string]any
+			if result.FunctionResponse != nil {
+				response = result.FunctionResponse.Response
+			}
+
+			if tt.shouldSucceed {
+				content, hasContent := response["content"].(string)
+				if !hasContent {
+					// Debug: print what we got instead.
+					if errMsg, hasError := response["error"].(string); hasError {
+						t.Fatalf("Got error instead of content: %s", errMsg)
+					}
+					t.Fatalf("Response missing content: %+v", response)
+				}
+				assert.Equal(t, tt.expectContent, content)
+			} else {
+				// Should have an error.
+				errMsg, hasError := response["error"].(string)
+				assert.True(t, hasError, "Expected error in response for %s, got: %+v", tt.filepath, response)
+				if tt.expectedError != "" {
+					assert.Contains(t, errMsg, tt.expectedError,
+						"Expected error message to contain '%s' for file %s, got: %s",
+						tt.expectedError, tt.filepath, errMsg)
+				}
+			}
+		})
+	}
+}
+
+func TestHandleFileRetrieval_NestedGitIgnore(t *testing.T) {
+	t.Parallel()
+	// Create a temporary repository directory.
+	repoDir := t.TempDir()
+
+	// Initialize it as a git repository.
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repoDir
+	err := cmd.Run()
+	require.NoError(t, err, "Failed to initialize git repo")
+
+	// Create root .gitignore file.
+	gitignorePath := filepath.Join(repoDir, ".gitignore")
+	err = os.WriteFile(gitignorePath, []byte("root-secret.txt\n"), 0o644)
+	require.NoError(t, err)
+
+	// Create a subdirectory with its own .gitignore.
+	subdir := filepath.Join(repoDir, "subdir")
+	err = os.MkdirAll(subdir, 0o755)
+	require.NoError(t, err)
+
+	subdirGitignore := filepath.Join(subdir, ".gitignore")
+	err = os.WriteFile(subdirGitignore, []byte("local-secret.txt\n"), 0o644)
+	require.NoError(t, err)
+
+	// Create test files.
+	// 1. Root-level ignored file.
+	rootSecret := filepath.Join(repoDir, "root-secret.txt")
+	err = os.WriteFile(rootSecret, []byte("root secret"), 0o644)
+	require.NoError(t, err)
+
+	// 2. Subdirectory ignored file (by nested .gitignore).
+	subdirSecret := filepath.Join(subdir, "local-secret.txt")
+	err = os.WriteFile(subdirSecret, []byte("subdir secret"), 0o644)
+	require.NoError(t, err)
+
+	// 3. Normal file in subdirectory.
+	subdirNormal := filepath.Join(subdir, "normal.txt")
+	err = os.WriteFile(subdirNormal, []byte("normal content"), 0o644)
+	require.NoError(t, err)
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, newTestLogger())
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		filepath      string
+		shouldSucceed bool
+		expectContent string
+	}{
+		{
+			name:          "root-level ignored file",
+			filepath:      "root-secret.txt",
+			shouldSucceed: false,
+		},
+		{
+			name:          "nested gitignore - file ignored by subdir .gitignore",
+			filepath:      "subdir/local-secret.txt",
+			shouldSucceed: false,
+		},
+		{
+			name:          "normal file in subdirectory",
+			filepath:      "subdir/normal.txt",
+			shouldSucceed: true,
+			expectContent: "normal content",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			funcCall := &genai.FunctionCall{
+				Name: "get_file_content",
+				Args: map[string]any{
+					"filepath": tt.filepath,
+				},
+			}
+
+			result := reviewer.handleFileRetrieval(funcCall, repoDir)
+
+			var response map[string]any
+			if result.FunctionResponse != nil {
+				response = result.FunctionResponse.Response
+			}
+
+			if tt.shouldSucceed {
+				content, hasContent := response["content"].(string)
+				assert.True(t, hasContent, "Expected content in response")
+				assert.Equal(t, tt.expectContent, content)
+			} else {
+				errMsg, hasError := response["error"].(string)
+				assert.True(t, hasError, "Expected error in response")
+				assert.Contains(t, errMsg, "access denied: file is gitignored")
+			}
+		})
+	}
+}
+
+func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
+	t.Parallel()
+	// Create a temporary directory that is NOT a git repository
+	nonGitDir := t.TempDir()
+
+	// Create a test file
+	testFile := filepath.Join(nonGitDir, "test.txt")
+	err := os.WriteFile(testFile, []byte("test content"), 0o644)
+	require.NoError(t, err)
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, newTestLogger())
+	require.NoError(t, err)
+
+	// Test that when git check-ignore fails (not a git repo), access is denied
+	funcCall := &genai.FunctionCall{
+		Name: "get_file_content",
+		Args: map[string]any{
+			"filepath": "test.txt",
+		},
+	}
+
+	result := reviewer.handleFileRetrieval(funcCall, nonGitDir)
+
+	var response map[string]any
+	if result.FunctionResponse != nil {
+		response = result.FunctionResponse.Response
+	}
+
+	// Should have an error due to git command failure
+	errMsg, hasError := response["error"].(string)
+	assert.True(t, hasError, "Expected error when git command fails")
+	assert.Contains(t, errMsg, "access denied: unable to verify gitignore status",
+		"Should fail closed when git check-ignore cannot run")
+}
+
 func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 	t.Parallel()
 	// Create a temporary repository directory.
 	repoDir := t.TempDir()
 
+	// Initialize it as a git repository for gitignore checks to work
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repoDir
+	err := cmd.Run()
+	require.NoError(t, err, "Failed to initialize git repo")
+
 	// Create a file in the repo.
 	repoFile := filepath.Join(repoDir, "allowed.txt")
-	err := os.WriteFile(repoFile, []byte("allowed content"), 0o644)
+	err = os.WriteFile(repoFile, []byte("allowed content"), 0o644)
 	require.NoError(t, err)
 
 	// Create a sensitive file outside the repo.
@@ -218,10 +556,16 @@ func TestHandleFileRetrieval(t *testing.T) {
 	r := &Reviewer{logger: newTestLogger()}
 	tmpDir := t.TempDir()
 
+	// Initialize it as a git repository for gitignore checks to work
+	cmd := exec.Command("git", "init")
+	cmd.Dir = tmpDir
+	err := cmd.Run()
+	require.NoError(t, err, "Failed to initialize git repo")
+
 	// Create a test file.
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "test file content"
-	err := os.WriteFile(testFile, []byte(testContent), 0o644)
+	err = os.WriteFile(testFile, []byte(testContent), 0o644)
 	require.NoError(t, err)
 
 	t.Run("successful file retrieval", func(t *testing.T) {

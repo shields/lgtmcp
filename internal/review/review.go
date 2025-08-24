@@ -1,6 +1,7 @@
 package review
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -597,6 +599,26 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		)
 	}
 
+	// SECURITY CHECK: Check if file is gitignored
+	isIgnored, err := isFileGitIgnored(requestedPath, repoPath)
+	if err != nil {
+		// Fail closed on any error for security
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": fmt.Sprintf("access denied: unable to verify gitignore status: %v", err),
+			},
+		)
+	}
+	if isIgnored {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": "access denied: file is gitignored",
+			},
+		)
+	}
+
 	// Now check if file exists and resolve symlinks if it does.
 	realPath := absPath
 	if info, statErr := os.Lstat(absPath); statErr == nil {
@@ -643,4 +665,41 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 			"content": string(content),
 		},
 	)
+}
+
+// isFileGitIgnored checks if a file is ignored by git.
+// It uses git check-ignore to properly respect all .gitignore rules including nested ones.
+// Returns (isIgnored, error) - if error is not nil, the caller should fail closed for security.
+func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
+	// Use git check-ignore to check if the file is ignored
+	// This respects all .gitignore files in the repository hierarchy
+	cmd := exec.Command("git", "check-ignore", relativePath)
+	cmd.Dir = repoPath
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	if err != nil {
+		// Check if it's an exit error
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			// git check-ignore returns exit code 1 when file is NOT ignored
+			// This is expected behavior, not an error
+			if exitErr.ExitCode() == 1 {
+				return false, nil
+			}
+			// Exit code 128 typically means not a git repository or other git errors
+			// We should fail closed in this case for security
+			if exitErr.ExitCode() == 128 {
+				stderrStr := stderr.String()
+				return false, fmt.Errorf("git check-ignore failed: %w: %s", err, stderrStr)
+			}
+		}
+		// For any other error (e.g., git not found), fail closed
+		return false, fmt.Errorf("failed to execute git check-ignore: %w", err)
+	}
+	// Exit code 0 means the file is ignored
+	return true, nil
 }

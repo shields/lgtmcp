@@ -92,6 +92,13 @@ make fmt     # Format code
 - [ ] **File size limits** - Prevent excessive Gemini API token usage
 - [ ] **Cost tracking** - Log API usage costs and token counts
 
+## Security Features
+
+- **Gitignore Protection**: The `get_file_contents` tool respects `.gitignore` files and refuses access to any ignored files
+  - Prevents accidental exposure of sensitive files like `.env`, API keys, secrets
+  - Respects nested `.gitignore` files throughout the repository hierarchy
+  - Uses `git check-ignore` for accurate gitignore rule evaluation
+
 ## Technical Choices
 
 - **Go**: Single binary, excellent performance, native git ops
