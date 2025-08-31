@@ -20,6 +20,7 @@ BINARY_PATH=bin/$(BINARY_NAME)
 MAIN_PATH=./cmd/lgtmcp
 COVERAGE_FILE=coverage.out
 COVERAGE_HTML=coverage.html
+INSTALL_PATH?=$(HOME)/bin
 
 # Go commands
 GOCMD=go
@@ -49,7 +50,7 @@ help:
 	@echo "  lint          - Run golangci-lint"
 	@echo "  fmt           - Format code with gofumpt"
 	@echo "  clean         - Remove built binaries and test artifacts"
-	@echo "  install       - Install the binary to GOPATH/bin"
+	@echo "  install       - Install the binary to ~/bin (or INSTALL_PATH)"
 	@echo "  run           - Run the application"
 
 # Install tools locally
@@ -128,9 +129,9 @@ clean:
 
 # Install binary
 install: build
-	@echo "==> Installing $(BINARY_NAME)..."
-	$(GOINSTALL) $(MAIN_PATH)
-	@echo "$(BINARY_NAME) installed to $$GOPATH/bin"
+	@echo "==> Installing $(BINARY_NAME) to $(INSTALL_PATH)..."
+	mkdir -p $(INSTALL_PATH)
+	cp $(BINARY_PATH) $(INSTALL_PATH)/$(BINARY_NAME)
 
 # Run the application
 run: build
