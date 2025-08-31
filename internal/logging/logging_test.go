@@ -98,7 +98,7 @@ func TestNew(t *testing.T) {
 				require.NoError(t, err)
 				assert.NotNil(t, logger)
 				if logger != nil {
-					logger.Close()
+					_ = logger.Close()
 				}
 			}
 		})
@@ -115,7 +115,7 @@ func TestLogger_LogLevels(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Cast to access the buffer.
 	bufLogger, ok := logger.(*bufferLogger)
@@ -189,7 +189,7 @@ func TestLogger_LogLevelFiltering(t *testing.T) {
 
 			logger, err := New(config)
 			require.NoError(t, err)
-			defer logger.Close()
+			defer func() { _ = logger.Close() }()
 
 			bufLogger, ok := logger.(*bufferLogger)
 			require.True(t, ok)
@@ -241,7 +241,7 @@ func TestDirectoryLogger(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Log some messages.
 	logger.Info("test message 1")
@@ -270,7 +270,7 @@ func TestDirectoryLogger_LargeMessages(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Log a large message.
 	largeMessage := strings.Repeat("This is a large message for testing. ", 100)
@@ -298,7 +298,7 @@ func TestMCPLogger(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// Log messages.
 	logger.Info("test info", "key", "value")
@@ -326,7 +326,7 @@ func TestNopLogger(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer logger.Close()
+	defer func() { _ = logger.Close() }()
 
 	// These should not panic.
 	logger.Debug("debug")
@@ -347,7 +347,7 @@ func TestWith(t *testing.T) {
 
 		logger, err := New(config)
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() { _ = logger.Close() }()
 
 		// Create context logger.
 		ctxLogger := logger.With("request_id", "123")
@@ -376,7 +376,7 @@ func TestWith(t *testing.T) {
 
 		logger, err := New(config)
 		require.NoError(t, err)
-		defer logger.Close()
+		defer func() { _ = logger.Close() }()
 
 		// Create context logger with multiple attributes.
 		ctxLogger := logger.With("request_id", "456", "user", "alice")
