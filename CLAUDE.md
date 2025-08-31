@@ -84,24 +84,39 @@ prompts:
 ## Development
 
 ```bash
-make test    # Run tests (71.8% coverage)
+make test    # Run tests
+make coverage # Run tests with coverage (77.4%)
 make build   # Build binary
 make lint    # Run golangci-lint
-make fmt     # Format code
+make fmt     # Format code with gofumpt
+make clean   # Remove build artifacts
+make deps    # Install tools and dependencies
 ```
+
+### Tool Management
+
+Tools (golangci-lint v2.4.0, gofumpt v0.8.0) are managed separately in `tools/` directory:
+
+- `tools/go.mod` - Isolated tool dependencies
+- `tools/tools.go` - Tool imports for version pinning
+- Makefile uses `go -C tools` for tool installation
 
 ### Key Commands
 
-- **Lint check**: `bin/golangci-lint run`
+- **Lint check**: `make lint`
+- **Format code**: `make fmt`
 - **Run with lefthook**: `lefthook run pre-commit`
 
 ## Testing Coverage
 
-- **Overall**: 71.8% (practical maximum)
-- **internal/git**: 87.3%
-- **internal/security**: 98.5%
-- **pkg/mcp**: 66.7%
-- **internal/review**: 56.3% (requires real API credentials)
+- **Overall**: 77.4% (well above 70% threshold)
+- **internal/git**: 86.4%
+- **internal/security**: 97.4%
+- **pkg/mcp**: 73.4%
+- **internal/review**: 80.4%
+- **internal/config**: 69.7%
+- **internal/prompts**: 88.1%
+- **internal/logging**: 70.2%
 
 ## TODO
 
