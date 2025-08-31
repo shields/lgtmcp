@@ -18,6 +18,11 @@
 pre-commit:
   parallel: false
   commands:
+    # Ensure tools are installed before running checks
+    install-tools:
+      run: make tools
+      priority: 1
+
     format-go:
       glob: "**/*.go"
       run: bin/gofumpt -w {staged_files}
