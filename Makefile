@@ -41,7 +41,7 @@ help:
 tools:
 	@echo "==> Installing tools..."
 	@mkdir -p bin
-	@GOBIN=$(PWD)/bin $(GOCMD) install mvdan.cc/gofumpt@latest
+	@GOBIN=$(PWD)/bin $(GOCMD) install mvdan.cc/gofumpt@v0.8.0
 	@GOBIN=$(PWD)/bin $(GOCMD) install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.4.0
 	@echo "Tools installed to bin/"
 
