@@ -16,7 +16,11 @@ limitations under the License.
 
 # LGTMCP - AI Code Review via MCP
 
-**IMPORTANT**: Update this file after completing any task to document changes.
+**IMPORTANT**:
+
+1. Update this file after completing any task to document changes.
+2. After completing any task, run `make lint`, `make test`, then use `mcp__lgtmcp__review_only` to review changes.
+3. Do not use conventional commit prefixes (feat:, fix:, docs:, etc.) in commit messages.
 
 ## Overview
 
@@ -86,12 +90,23 @@ prompts:
 ```bash
 make test    # Run tests
 make coverage # Run tests with coverage (77.4%)
-make build   # Build binary
+make build   # Build binary (VERSION=x.y.z for custom version)
 make lint    # Run golangci-lint
 make fmt     # Format code with gofumpt
 make clean   # Remove build artifacts
 make deps    # Install tools and dependencies
 ```
+
+### Version Information
+
+The binary supports a `--version` flag that displays:
+
+- Version (defaults to "dev", set via `VERSION` during build)
+- Git commit hash (automatically detected)
+- Dirty status (if working tree has uncommitted changes)
+- OS/Architecture
+
+Example: `lgtmcp --version` outputs `lgtmcp version 1.0.0 (ef22d19, darwin/arm64)`
 
 ### Tool Management
 
@@ -106,6 +121,10 @@ Tools (golangci-lint v2.4.0, gofumpt v0.8.0) are managed separately in `tools/` 
 - **Lint check**: `make lint`
 - **Format code**: `make fmt`
 - **Run with lefthook**: `lefthook run pre-commit`
+- **Code review**: After completing any task:
+  1. Run `make lint` to check for lint errors
+  2. Run `make test` to ensure all tests pass
+  3. Use `mcp__lgtmcp__review_only` to review your changes
 
 ## Testing Coverage
 

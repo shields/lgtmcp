@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/shields/lgtmcp/internal/config"
 	"github.com/shields/lgtmcp/internal/logging"
+	"github.com/shields/lgtmcp/internal/version"
 	mcpserver "github.com/shields/lgtmcp/pkg/mcp"
 )
 
@@ -32,6 +34,16 @@ func main() {
 }
 
 func run() int {
+	// Parse command-line flags.
+	versionFlag := flag.Bool("version", false, "Show version information")
+	flag.Parse()
+
+	// Handle version flag.
+	if *versionFlag {
+		_, _ = fmt.Fprintln(os.Stdout, version.String()) //nolint:errcheck // Version output to stdout is not critical
+		return 0
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
