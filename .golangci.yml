@@ -1,4 +1,5 @@
-# golangci-lint configuration
+# golangci-lint v2 configuration
+version: 2
 
 run:
   timeout: 5m
@@ -24,7 +25,6 @@ linters:
     - gocognit # Disable cognitive complexity checking
     - gocyclo # Disable cyclomatic complexity checking
     - nestif # Disable nested if complexity checking
-    - tenv # Deprecated linter, replaced by usetesting
     - mnd # Magic numbers are often clear in context
     - nlreturn # Too opinionated about blank lines before returns
 
@@ -92,9 +92,6 @@ linters-settings:
 
   stylecheck:
     checks: ["all"]
-
-  testpackage:
-    skip-regexp: "_test\\.go$"
 
   unused:
     check-exported: true

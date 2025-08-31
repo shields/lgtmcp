@@ -45,7 +45,7 @@ func run() int {
 
 		return 1
 	}
-	defer appLogger.Close()
+	defer func() { _ = appLogger.Close() }()
 
 	// Create server.
 	server, err := mcpserver.New(cfg, appLogger)
