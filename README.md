@@ -39,6 +39,25 @@ cd lgtmcp
 make build
 ```
 
+### Install to ~/bin
+
+```bash
+make install
+```
+
+This installs the binary to `~/bin` by default. You can customize the installation directory:
+
+```bash
+make install INSTALL_PATH=/usr/local/bin
+```
+
+**Note**: Ensure `~/bin` is in your shell's `PATH`. Add this to your shell configuration file if needed:
+
+```bash
+# For bash/zsh
+export PATH="$HOME/bin:$PATH"
+```
+
 ### Configuration
 
 1. Get a Google API key from [Google AI Studio](https://aistudio.google.com/apikey).
