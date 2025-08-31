@@ -1,3 +1,4 @@
+// Package main implements the LGTMCP MCP server.
 package main
 
 import (
@@ -45,7 +46,11 @@ func run() int {
 
 		return 1
 	}
-	defer func() { _ = appLogger.Close() }()
+	defer func() {
+		if closeErr := appLogger.Close(); closeErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "Error closing logger: %v\n", closeErr)
+		}
+	}()
 
 	// Create server.
 	server, err := mcpserver.New(cfg, appLogger)

@@ -34,7 +34,7 @@ id = "test-rule"
 description = "Test rule"
 regex = '''(?i)test_secret'''
 `
-		err := os.WriteFile(configPath, []byte(configContent), 0o644)
+		err := os.WriteFile(configPath, []byte(configContent), 0o600)
 		require.NoError(t, err)
 
 		scanner, err := New(configPath)
@@ -55,7 +55,7 @@ regex = '''(?i)test_secret'''
 		t.Parallel()
 		tmpDir := t.TempDir()
 		configPath := filepath.Join(tmpDir, ".gitleaks.toml")
-		err := os.WriteFile(configPath, []byte("invalid toml content {{"), 0o644)
+		err := os.WriteFile(configPath, []byte("invalid toml content {{"), 0o600)
 		require.NoError(t, err)
 
 		scanner, err := New(configPath)

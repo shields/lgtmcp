@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const testDiffGitHeader = "diff --git a/main.go b/main.go"
+
 func TestManager_LoadPrompt(t *testing.T) {
 	t.Parallel()
 
@@ -35,7 +37,7 @@ func TestManager_LoadPrompt(t *testing.T) {
 		tmpDir := t.TempDir()
 		customPromptPath := filepath.Join(tmpDir, "custom_review.md")
 		customContent := "# Custom Review Prompt\n\nThis is a custom review prompt with {{.Diff}}"
-		err := os.WriteFile(customPromptPath, []byte(customContent), 0o644)
+		err := os.WriteFile(customPromptPath, []byte(customContent), 0o600)
 		require.NoError(t, err)
 
 		m := New(customPromptPath, "")
@@ -67,7 +69,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 	t.Run("build review prompt with analysis", func(t *testing.T) {
 		t.Parallel()
 		m := New("", "")
-		diff := "diff --git a/main.go b/main.go"
+		diff := testDiffGitHeader
 		changedFiles := []string{"main.go", "test.go"}
 		analysisText := "The code looks good overall"
 
@@ -83,7 +85,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 	t.Run("build review prompt without analysis", func(t *testing.T) {
 		t.Parallel()
 		m := New("", "")
-		diff := "diff --git a/main.go b/main.go"
+		diff := testDiffGitHeader
 		changedFiles := []string{"main.go"}
 
 		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "")
@@ -98,7 +100,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		tmpDir := t.TempDir()
 		customPromptPath := filepath.Join(tmpDir, "custom.md")
 		customContent := "Custom: {{.Diff}} Files: {{.FilesList}}"
-		err := os.WriteFile(customPromptPath, []byte(customContent), 0o644)
+		err := os.WriteFile(customPromptPath, []byte(customContent), 0o600)
 		require.NoError(t, err)
 
 		m := New(customPromptPath, "")
@@ -113,7 +115,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		tmpDir := t.TempDir()
 		customPromptPath := filepath.Join(tmpDir, "invalid.md")
 		customContent := "Invalid: {{.UnknownField"
-		err := os.WriteFile(customPromptPath, []byte(customContent), 0o644)
+		err := os.WriteFile(customPromptPath, []byte(customContent), 0o600)
 		require.NoError(t, err)
 
 		m := New(customPromptPath, "")
@@ -129,7 +131,7 @@ func TestManager_BuildContextGatheringPrompt(t *testing.T) {
 	t.Run("build context gathering prompt", func(t *testing.T) {
 		t.Parallel()
 		m := New("", "")
-		diff := "diff --git a/main.go b/main.go"
+		diff := testDiffGitHeader
 		changedFiles := []string{"main.go", "lib.go"}
 
 		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles)
@@ -145,7 +147,7 @@ func TestManager_BuildContextGatheringPrompt(t *testing.T) {
 		tmpDir := t.TempDir()
 		customPromptPath := filepath.Join(tmpDir, "custom_context.md")
 		customContent := "Analyze: {{.Diff}} in {{.FilesList}}"
-		err := os.WriteFile(customPromptPath, []byte(customContent), 0o644)
+		err := os.WriteFile(customPromptPath, []byte(customContent), 0o600)
 		require.NoError(t, err)
 
 		m := New("", customPromptPath)

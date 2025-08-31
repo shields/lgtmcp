@@ -98,7 +98,7 @@ func TestNew(t *testing.T) {
 				require.NoError(t, err)
 				assert.NotNil(t, logger)
 				if logger != nil {
-					_ = logger.Close()
+					logger.Close() //nolint:errcheck // Test cleanup
 				}
 			}
 		})
@@ -115,7 +115,7 @@ func TestLogger_LogLevels(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer func() { _ = logger.Close() }()
+	defer logger.Close() //nolint:errcheck // Test cleanup
 
 	// Cast to access the buffer.
 	bufLogger, ok := logger.(*bufferLogger)
@@ -189,7 +189,7 @@ func TestLogger_LogLevelFiltering(t *testing.T) {
 
 			logger, err := New(config)
 			require.NoError(t, err)
-			defer func() { _ = logger.Close() }()
+			defer logger.Close() //nolint:errcheck // Test cleanup
 
 			bufLogger, ok := logger.(*bufferLogger)
 			require.True(t, ok)
@@ -241,7 +241,7 @@ func TestDirectoryLogger(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer func() { _ = logger.Close() }()
+	defer logger.Close() //nolint:errcheck // Test cleanup
 
 	// Log some messages.
 	logger.Info("test message 1")
@@ -252,7 +252,7 @@ func TestDirectoryLogger(t *testing.T) {
 	assert.FileExists(t, logFile)
 
 	// Read the log file.
-	content, err := os.ReadFile(logFile)
+	content, err := os.ReadFile(logFile) //nolint:gosec // Test file path is safe
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "test message 1")
 	assert.Contains(t, string(content), "test message 2")
@@ -270,7 +270,7 @@ func TestDirectoryLogger_LargeMessages(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer func() { _ = logger.Close() }()
+	defer logger.Close() //nolint:errcheck // Test cleanup
 
 	// Log a large message.
 	largeMessage := strings.Repeat("This is a large message for testing. ", 100)
@@ -281,7 +281,7 @@ func TestDirectoryLogger_LargeMessages(t *testing.T) {
 	assert.FileExists(t, logFile)
 
 	// Read the log file.
-	content, err := os.ReadFile(logFile)
+	content, err := os.ReadFile(logFile) //nolint:gosec // Test file path is safe
 	require.NoError(t, err)
 	assert.Contains(t, string(content), "This is a large message")
 }
@@ -298,7 +298,7 @@ func TestMCPLogger(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer func() { _ = logger.Close() }()
+	defer logger.Close() //nolint:errcheck // Test cleanup
 
 	// Log messages.
 	logger.Info("test info", "key", "value")
@@ -326,7 +326,7 @@ func TestNopLogger(t *testing.T) {
 
 	logger, err := New(config)
 	require.NoError(t, err)
-	defer func() { _ = logger.Close() }()
+	defer logger.Close() //nolint:errcheck // Test cleanup
 
 	// These should not panic.
 	logger.Debug("debug")
@@ -347,7 +347,7 @@ func TestWith(t *testing.T) {
 
 		logger, err := New(config)
 		require.NoError(t, err)
-		defer func() { _ = logger.Close() }()
+		defer logger.Close() //nolint:errcheck // Test cleanup
 
 		// Create context logger.
 		ctxLogger := logger.With("request_id", "123")
@@ -376,7 +376,7 @@ func TestWith(t *testing.T) {
 
 		logger, err := New(config)
 		require.NoError(t, err)
-		defer func() { _ = logger.Close() }()
+		defer logger.Close() //nolint:errcheck // Test cleanup
 
 		// Create context logger with multiple attributes.
 		ctxLogger := logger.With("request_id", "456", "user", "alice")

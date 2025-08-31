@@ -22,14 +22,14 @@ gemini:
 logging:
   level: "debug"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		// Set XDG to point to our temp dir minus the lgtmcp subdirectory.
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
 		// Create the expected directory structure.
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 		require.NoError(t, os.Rename(configPath, filepath.Join(lgtmcpDir, "config.yaml")))
 
 		cfg, err := Load()
@@ -54,11 +54,11 @@ logging:
 	t.Run("invalid yaml", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		invalidContent := `invalid: yaml: content:`
-		require.NoError(t, os.WriteFile(configPath, []byte(invalidContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(invalidContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -71,7 +71,7 @@ logging:
 	t.Run("missing api key", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
@@ -80,7 +80,7 @@ gemini:
 logging:
   level: "info"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -93,14 +93,14 @@ logging:
 	t.Run("defaults are applied", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
 google:
   api_key: "test-api-key"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -114,7 +114,7 @@ google:
 	t.Run("api key is required", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
@@ -123,7 +123,7 @@ google:
 gemini:
   model: "gemini-2.5-pro"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -136,7 +136,7 @@ gemini:
 	t.Run("application default credentials", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
@@ -147,7 +147,7 @@ gemini:
 logging:
   level: "info"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -162,7 +162,7 @@ logging:
 	t.Run("api key takes precedence over ADC", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
@@ -172,7 +172,7 @@ google:
 gemini:
   model: "gemini-2.5-pro"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 
@@ -187,7 +187,7 @@ gemini:
 	t.Run("neither api key nor ADC", func(t *testing.T) {
 		tmpDir := t.TempDir()
 		lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o755))
+		require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
 
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
@@ -196,7 +196,7 @@ google:
 gemini:
   model: "gemini-2.5-pro"
 `
-		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o644))
+		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
 		t.Setenv("XDG_CONFIG_HOME", tmpDir)
 

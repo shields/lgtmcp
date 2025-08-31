@@ -268,7 +268,7 @@ func TestHandleReviewAndCommitWithRealRepo(t *testing.T) {
 
 		// Create a test file.
 		testFile := filepath.Join(tmpDir, "test.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -305,12 +305,12 @@ func TestHandleReviewAndCommitWithRealRepo(t *testing.T) {
 
 		// Create a test file.
 		testFile := filepath.Join(tmpDir, "test.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// Create changes by modifying the file.
-		require.NoError(t, os.WriteFile(testFile, []byte("new modified content"), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte("new modified content"), 0o600))
 
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
@@ -365,7 +365,7 @@ func TestHandleReviewOnlyWithRealRepo(t *testing.T) {
 
 		// Create a test file.
 		testFile := filepath.Join(tmpDir, "test.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -400,12 +400,12 @@ func TestHandleReviewOnlyWithRealRepo(t *testing.T) {
 
 		// Create a test file.
 		testFile := filepath.Join(tmpDir, "test.txt")
-		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// Create changes by modifying the file.
-		require.NoError(t, os.WriteFile(testFile, []byte("new modified content for review"), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte("new modified content for review"), 0o600))
 
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
@@ -562,7 +562,7 @@ func TestHandleReviewAndCommitWithSecrets(t *testing.T) {
 
 	// Create a test file.
 	testFile := filepath.Join(tmpDir, "config.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+	require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o600))
 	runGitCmd(t, tmpDir, "add", ".")
 	runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -578,7 +578,7 @@ func TestHandleReviewAndCommitWithSecrets(t *testing.T) {
 		t.Parallel()
 		// Create changes with a secret that should be detected.
 		secretContent := "token: " + fakeSecrets.GitHubPAT() + "\nother: content"
-		require.NoError(t, os.WriteFile(testFile, []byte(secretContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(secretContent), 0o600))
 
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{
@@ -621,7 +621,7 @@ func TestHandleReviewOnlyWithSecrets(t *testing.T) {
 
 	// Create a test file.
 	testFile := filepath.Join(tmpDir, "config.txt")
-	require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o644))
+	require.NoError(t, os.WriteFile(testFile, []byte("initial content"), 0o600))
 	runGitCmd(t, tmpDir, "add", ".")
 	runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -637,7 +637,7 @@ func TestHandleReviewOnlyWithSecrets(t *testing.T) {
 		t.Parallel()
 		// Create changes with a secret that should be detected.
 		secretContent := "token: " + fakeSecrets.GitHubPAT() + "\nother: content"
-		require.NoError(t, os.WriteFile(testFile, []byte(secretContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(secretContent), 0o600))
 
 		request := mcp.CallToolRequest{
 			Params: mcp.CallToolParams{

@@ -1,3 +1,4 @@
+// Package mcp implements the Model Context Protocol server for LGTMCP.
 package mcp
 
 import (
@@ -33,6 +34,7 @@ const (
 	Version = "0.0.0-dev"
 )
 
+// Server implements the MCP server for LGTMCP.
 type Server struct {
 	mcpServer *server.MCPServer
 	reviewer  *review.Reviewer
@@ -75,7 +77,7 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 }
 
 // registerTools registers all MCP tools.
-func (s *Server) registerTools() {
+func (s *Server) registerTools() { //nolint:funcorder // Helper method
 	// Register review_only tool.
 	s.mcpServer.AddTool(mcp.Tool{
 		Name: "review_only",
@@ -116,7 +118,7 @@ func (s *Server) registerTools() {
 }
 
 // parseDirectory extracts and validates the directory argument from the request.
-func (*Server) parseDirectory(args map[string]any) (string, error) {
+func (*Server) parseDirectory(args map[string]any) (string, error) { //nolint:funcorder // Helper method
 	directory, ok := args["directory"].(string)
 	if !ok {
 		return "", ErrDirectoryNotString
@@ -149,6 +151,8 @@ type reviewContext struct {
 }
 
 // prepareReview handles common review preparation logic: getting diff, security scan, etc.
+//
+//nolint:funcorder // Helper method
 func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewContext, *mcp.CallToolResult, error) {
 	// Create a git client for this repository.
 	var gitConfig *config.GitConfig
@@ -237,6 +241,8 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 }
 
 // performReview executes the review with Gemini.
+//
+//nolint:funcorder // Helper method
 func (s *Server) performReview(ctx context.Context, rc *reviewContext) (*review.Result, error) {
 	start := time.Now()
 	s.logger.Info("Starting Gemini review",

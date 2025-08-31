@@ -69,7 +69,7 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 	}
 
 	// Try to load from the custom path.
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path) //nolint:gosec // Path is user-configured and validated
 	if err != nil {
 		return "", fmt.Errorf("failed to read prompt file %s: %w", path, err)
 	}

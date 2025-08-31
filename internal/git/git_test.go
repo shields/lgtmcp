@@ -172,7 +172,7 @@ func TestGetDiff(t *testing.T) {
 		for i := 1; i <= 30; i++ {
 			lines = append(lines, fmt.Sprintf("Line %d", i))
 		}
-		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o600))
 
 		// Commit the file
 		runGitCmd(t, tmpDir, "add", ".")
@@ -180,7 +180,7 @@ func TestGetDiff(t *testing.T) {
 
 		// Modify a line in the middle
 		lines[15] = "MODIFIED LINE 16"
-		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o600))
 
 		// Test with custom context lines
 		contextLines := 5
@@ -242,7 +242,7 @@ func TestGetDiff(t *testing.T) {
 		for i := 1; i <= 30; i++ {
 			lines = append(lines, fmt.Sprintf("Line %d", i))
 		}
-		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o600))
 
 		// Commit the file
 		runGitCmd(t, tmpDir, "add", ".")
@@ -250,7 +250,7 @@ func TestGetDiff(t *testing.T) {
 
 		// Modify a line in the middle
 		lines[15] = "MODIFIED LINE 16"
-		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o644))
+		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o600))
 
 		// Test with zero context lines
 		zeroLines := 0
@@ -396,7 +396,7 @@ func TestGetFileContent(t *testing.T) {
 		tmpDir := createTempGitRepo(t)
 		defer cleanupTempDir(t, tmpDir)
 
-		require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0o755))
+		require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0o750))
 		createFile(t, tmpDir, "subdir/file.txt", "nested content")
 
 		g, err := New(tmpDir, nil)
@@ -472,13 +472,13 @@ func TestGetFileContent(t *testing.T) {
 		siblingDir := filepath.Join(baseDir, "repo-secrets")
 
 		// Initialize the repo directory.
-		require.NoError(t, os.MkdirAll(repoDir, 0o755))
-		require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755))
+		require.NoError(t, os.MkdirAll(repoDir, 0o750))
+		require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".git"), 0o750))
 
 		// Create a secret file in the sibling directory.
-		require.NoError(t, os.MkdirAll(siblingDir, 0o755))
+		require.NoError(t, os.MkdirAll(siblingDir, 0o750))
 		secretFile := filepath.Join(siblingDir, "secret.txt")
-		require.NoError(t, os.WriteFile(secretFile, []byte("SECRET DATA"), 0o644))
+		require.NoError(t, os.WriteFile(secretFile, []byte("SECRET DATA"), 0o600))
 
 		// Initialize git repo.
 		g, err := New(repoDir, nil)
@@ -584,10 +584,10 @@ func createTempGitRepo(t *testing.T) string {
 func createFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	fullPath := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
 		t.Fatalf("Failed to create directories: %v", err)
 	}
-	err := os.WriteFile(fullPath, []byte(content), 0o644)
+	err := os.WriteFile(fullPath, []byte(content), 0o600)
 	require.NoError(t, err)
 }
 

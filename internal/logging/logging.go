@@ -123,13 +123,13 @@ func newDirectoryLogger(config Config) (Logger, error) {
 	}
 
 	// Ensure directory exists.
-	if err := os.MkdirAll(logDir, 0o755); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
 	// Create or open log file.
 	filename := filepath.Join(logDir, "lgtmcp.log")
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // Safe path construction
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -299,6 +299,7 @@ type nopLogger struct{}
 // bufferLogger for testing purposes.
 type bufferLogger struct {
 	*standardLogger
+
 	buffer *strings.Builder
 }
 
