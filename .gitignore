@@ -14,3 +14,4 @@
 
 coverage.out
 bin/
+tools/node_modules/

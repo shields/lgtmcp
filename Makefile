@@ -48,7 +48,8 @@ help:
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-all      - Run all tests with coverage"
 	@echo "  lint          - Run golangci-lint"
-	@echo "  fmt           - Format code with gofumpt"
+	@echo "  lint-fix      - Run golangci-lint with auto-fix"
+	@echo "  fmt           - Format code with gofumpt and prettier"
 	@echo "  clean         - Remove built binaries and test artifacts"
 	@echo "  install       - Install the binary to ~/bin (or INSTALL_PATH)"
 	@echo "  run           - Run the application"
@@ -59,6 +60,7 @@ tools:
 	@mkdir -p bin
 	@GOBIN=$(PWD)/bin $(GOCMD) -C tools install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	@GOBIN=$(PWD)/bin $(GOCMD) -C tools install mvdan.cc/gofumpt
+	@npm ci --prefix tools
 	@echo "Tools installed to bin/"
 
 # Download dependencies
@@ -111,14 +113,21 @@ test-integration:
 test-all: test test-integration coverage
 
 # Run linter
-lint:
+lint: tools
 	@echo "==> Running golangci-lint..."
 	$(GOLINT) run ./...
 
+# Run linter with auto-fix
+lint-fix: tools
+	@echo "==> Running golangci-lint with auto-fix..."
+	$(GOLINT) run --fix ./...
+
 # Format code
-fmt:
-	@echo "==> Formatting code..."
+fmt: tools
+	@echo "==> Formatting Go code..."
 	$(GOFUMPT) -w .
+	@echo "==> Formatting Markdown, JSON, YAML files..."
+	@git ls-files -z '*.md' '*.json' '*.json5' '*.yaml' '*.yml' | xargs -0 -r npx --prefix tools prettier --write
 
 # Clean build artifacts
 clean:
