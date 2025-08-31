@@ -18,13 +18,14 @@
 pre-commit:
   parallel: false
   commands:
-    format:
-      glob: "*.go"
+    format-go:
+      glob: "**/*.go"
       run: bin/gofumpt -w {staged_files}
       stage_fixed: true
 
-    lint:
-      run: bin/golangci-lint run --fix ./...
+    format-prettier:
+      glob: "**/*.{md,json,json5,yaml,yml}"
+      run: npx --prefix tools prettier --write {staged_files}
       stage_fixed: true
 
     mod-tidy:
@@ -32,8 +33,13 @@ pre-commit:
       run: go mod tidy
       stage_fixed: true
 
+    # Lint check only - does not auto-fix to avoid unintended changes
+    # Use 'make lint-fix' manually if you want auto-fixes
+    lint:
+      run: make lint
+
     test:
-      run: go test -short -race ./...
+      run: make test
 
 skip_output:
   - meta
