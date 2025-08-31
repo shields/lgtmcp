@@ -52,59 +52,59 @@ node_modules/
 build/
 dist/
 `
-	err = os.WriteFile(gitignorePath, []byte(gitignoreContent), 0o644)
+	err = os.WriteFile(gitignorePath, []byte(gitignoreContent), 0o600)
 	require.NoError(t, err)
 
 	// Create various test files.
 	// 1. Normal file (not ignored).
 	allowedFile := filepath.Join(repoDir, "allowed.txt")
-	err = os.WriteFile(allowedFile, []byte("allowed content"), 0o644)
+	err = os.WriteFile(allowedFile, []byte("allowed content"), 0o600)
 	require.NoError(t, err)
 
 	// 2. Directly ignored file.
 	secretsFile := filepath.Join(repoDir, "secrets.txt")
-	err = os.WriteFile(secretsFile, []byte("secret content"), 0o644)
+	err = os.WriteFile(secretsFile, []byte("secret content"), 0o600)
 	require.NoError(t, err)
 
 	// 3. Pattern-matched ignored file.
 	keyFile := filepath.Join(repoDir, "private.key")
-	err = os.WriteFile(keyFile, []byte("private key content"), 0o644)
+	err = os.WriteFile(keyFile, []byte("private key content"), 0o600)
 	require.NoError(t, err)
 
 	// 4. .env file (ignored).
 	envFile := filepath.Join(repoDir, ".env")
-	err = os.WriteFile(envFile, []byte("API_KEY=secret123"), 0o644)
+	err = os.WriteFile(envFile, []byte("API_KEY=secret123"), 0o600)
 	require.NoError(t, err)
 
 	// 5. .env.local file (pattern ignored).
 	envLocalFile := filepath.Join(repoDir, ".env.local")
-	err = os.WriteFile(envLocalFile, []byte("DB_PASSWORD=secret456"), 0o644)
+	err = os.WriteFile(envLocalFile, []byte("DB_PASSWORD=secret456"), 0o600)
 	require.NoError(t, err)
 
 	// 6. File in ignored directory.
-	err = os.MkdirAll(filepath.Join(repoDir, "node_modules"), 0o755)
+	err = os.MkdirAll(filepath.Join(repoDir, "node_modules"), 0o750)
 	require.NoError(t, err)
 	nodeModuleFile := filepath.Join(repoDir, "node_modules", "package.json")
-	err = os.WriteFile(nodeModuleFile, []byte(`{"name": "test"}`), 0o644)
+	err = os.WriteFile(nodeModuleFile, []byte(`{"name": "test"}`), 0o600)
 	require.NoError(t, err)
 
 	// 7. File in config directory with .secret extension (pattern match).
-	err = os.MkdirAll(filepath.Join(repoDir, "config"), 0o755)
+	err = os.MkdirAll(filepath.Join(repoDir, "config"), 0o750)
 	require.NoError(t, err)
 	configSecretFile := filepath.Join(repoDir, "config", "database.secret")
-	err = os.WriteFile(configSecretFile, []byte("db_password=secret"), 0o644)
+	err = os.WriteFile(configSecretFile, []byte("db_password=secret"), 0o600)
 	require.NoError(t, err)
 
 	// 8. Normal file in config directory (not ignored).
 	configNormalFile := filepath.Join(repoDir, "config", "app.json")
-	err = os.WriteFile(configNormalFile, []byte(`{"port": 3000}`), 0o644)
+	err = os.WriteFile(configNormalFile, []byte(`{"port": 3000}`), 0o600)
 	require.NoError(t, err)
 
 	// 9. Build directory file (ignored).
-	err = os.MkdirAll(filepath.Join(repoDir, "build"), 0o755)
+	err = os.MkdirAll(filepath.Join(repoDir, "build"), 0o750)
 	require.NoError(t, err)
 	buildFile := filepath.Join(repoDir, "build", "output.js")
-	err = os.WriteFile(buildFile, []byte("compiled code"), 0o644)
+	err = os.WriteFile(buildFile, []byte("compiled code"), 0o600)
 	require.NoError(t, err)
 
 	cfg := config.NewTestConfig()
@@ -237,32 +237,32 @@ func TestHandleFileRetrieval_NestedGitIgnore(t *testing.T) {
 
 	// Create root .gitignore file.
 	gitignorePath := filepath.Join(repoDir, ".gitignore")
-	err = os.WriteFile(gitignorePath, []byte("root-secret.txt\n"), 0o644)
+	err = os.WriteFile(gitignorePath, []byte("root-secret.txt\n"), 0o600)
 	require.NoError(t, err)
 
 	// Create a subdirectory with its own .gitignore.
 	subdir := filepath.Join(repoDir, "subdir")
-	err = os.MkdirAll(subdir, 0o755)
+	err = os.MkdirAll(subdir, 0o750)
 	require.NoError(t, err)
 
 	subdirGitignore := filepath.Join(subdir, ".gitignore")
-	err = os.WriteFile(subdirGitignore, []byte("local-secret.txt\n"), 0o644)
+	err = os.WriteFile(subdirGitignore, []byte("local-secret.txt\n"), 0o600)
 	require.NoError(t, err)
 
 	// Create test files.
 	// 1. Root-level ignored file.
 	rootSecret := filepath.Join(repoDir, "root-secret.txt")
-	err = os.WriteFile(rootSecret, []byte("root secret"), 0o644)
+	err = os.WriteFile(rootSecret, []byte("root secret"), 0o600)
 	require.NoError(t, err)
 
 	// 2. Subdirectory ignored file (by nested .gitignore).
 	subdirSecret := filepath.Join(subdir, "local-secret.txt")
-	err = os.WriteFile(subdirSecret, []byte("subdir secret"), 0o644)
+	err = os.WriteFile(subdirSecret, []byte("subdir secret"), 0o600)
 	require.NoError(t, err)
 
 	// 3. Normal file in subdirectory.
 	subdirNormal := filepath.Join(subdir, "normal.txt")
-	err = os.WriteFile(subdirNormal, []byte("normal content"), 0o644)
+	err = os.WriteFile(subdirNormal, []byte("normal content"), 0o600)
 	require.NoError(t, err)
 
 	cfg := config.NewTestConfig()
@@ -330,7 +330,7 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 
 	// Create a test file
 	testFile := filepath.Join(nonGitDir, "test.txt")
-	err := os.WriteFile(testFile, []byte("test content"), 0o644)
+	err := os.WriteFile(testFile, []byte("test content"), 0o600)
 	require.NoError(t, err)
 
 	cfg := config.NewTestConfig()
@@ -372,13 +372,13 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 
 	// Create a file in the repo.
 	repoFile := filepath.Join(repoDir, "allowed.txt")
-	err = os.WriteFile(repoFile, []byte("allowed content"), 0o644)
+	err = os.WriteFile(repoFile, []byte("allowed content"), 0o600)
 	require.NoError(t, err)
 
 	// Create a sensitive file outside the repo.
 	sensitiveDir := t.TempDir()
 	sensitiveFile := filepath.Join(sensitiveDir, "sensitive.txt")
-	err = os.WriteFile(sensitiveFile, []byte("sensitive content"), 0o644)
+	err = os.WriteFile(sensitiveFile, []byte("sensitive content"), 0o600)
 	require.NoError(t, err)
 
 	// Calculate relative path from repo to sensitive file.
@@ -565,7 +565,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 	// Create a test file.
 	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "test file content"
-	err = os.WriteFile(testFile, []byte(testContent), 0o644)
+	err = os.WriteFile(testFile, []byte(testContent), 0o600)
 	require.NoError(t, err)
 
 	t.Run("successful file retrieval", func(t *testing.T) {

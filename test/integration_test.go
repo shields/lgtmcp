@@ -55,7 +55,7 @@ import "fmt"
 func main() {
 	fmt.Println("Hello, World!")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -68,7 +68,7 @@ func main() {
 	fmt.Println("Hello, LGTMCP!")
 	fmt.Println("This is a test change")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o600))
 
 		// Test GetDiff.
 		ctx := t.Context()
@@ -111,8 +111,8 @@ func main() {
 		file1 := filepath.Join(tmpDir, "file1.txt")
 		file2 := filepath.Join(tmpDir, "file2.txt")
 
-		require.NoError(t, os.WriteFile(file1, []byte("content1"), 0o644))
-		require.NoError(t, os.WriteFile(file2, []byte("content2"), 0o644))
+		require.NoError(t, os.WriteFile(file1, []byte("content1"), 0o600))
+		require.NoError(t, os.WriteFile(file2, []byte("content2"), 0o600))
 
 		ctx := t.Context()
 		diff, err := gitClient.GetDiff(ctx)
@@ -243,7 +243,7 @@ index 0000000..1111111 100644
 		testFile := filepath.Join(tmpDir, "hello.go")
 		require.NoError(t, os.WriteFile(testFile, []byte(`package main
 
-func main() { println("Hello, World!") }`), 0o644))
+func main() { println("Hello, World!") }`), 0o600))
 
 		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
@@ -286,7 +286,7 @@ import "fmt"
 
 func main() {
 	fmt.Println("Hello, World!")
-}`), 0o644))
+}`), 0o600))
 
 		// (Actual MCP protocol testing would require more complex setup).
 		assert.NotNil(t, server)
@@ -315,7 +315,7 @@ import "fmt"
 func main() {
 	fmt.Println("Hello")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -328,7 +328,7 @@ func main() {
 	fmt.Println("Hello, LGTMCP!")
 	fmt.Println("This change improves the greeting")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o600))
 
 		// 3. Initialize git client.
 		gitClient, err := git.New(tmpDir, nil)
@@ -377,7 +377,7 @@ func main() {
 GITHUB_TOKEN=` + fakeSecrets.GitHubPAT() + `
 DATABASE_URL=postgres://localhost/mydb`
 
-		require.NoError(t, os.WriteFile(secretFile, []byte(secretContent), 0o644))
+		require.NoError(t, os.WriteFile(secretFile, []byte(secretContent), 0o600))
 
 		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
@@ -404,7 +404,7 @@ DATABASE_URL=postgres://localhost/mydb`
 			assert.Contains(t, formatted, "config.env")
 		} else {
 			// If no secrets detected, that's also acceptable for this test.
-			t.Logf("No secrets detected by scanner (this may be expected depending on gitleaks rules)")
+			t.Log("No secrets detected by scanner (this may be expected depending on gitleaks rules)")
 		}
 	})
 }

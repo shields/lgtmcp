@@ -46,7 +46,7 @@ import "fmt"
 func main() {
 	fmt.Println("Hello")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -59,7 +59,7 @@ func main() {
 	fmt.Println("Hello, World!")
 	fmt.Println("This is a clean change")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o600))
 
 		// Create MCP request
 		request := mcp.CallToolRequest{
@@ -99,7 +99,7 @@ func main() {
 func main() {
 	println("hello")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(content), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(content), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -133,7 +133,7 @@ func main() {
 		testFile := filepath.Join(tmpDir, "config.yaml")
 		initialContent := `api:
   endpoint: https://api.example.com`
-		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial config")
 
@@ -141,7 +141,7 @@ func main() {
 		secretContent := `api:
   endpoint: https://api.example.com
   token: ` + fakeSecrets.GitHubPAT() + "`"
-		require.NoError(t, os.WriteFile(testFile, []byte(secretContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(secretContent), 0o600))
 
 		// Create MCP request
 		request := mcp.CallToolRequest{
@@ -179,7 +179,7 @@ func main() {
 func main() {
 	println("hello")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
@@ -191,7 +191,7 @@ import "fmt"
 func main() {
 	fmt.Println("Hello, World!")
 }`
-		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o644))
+		require.NoError(t, os.WriteFile(testFile, []byte(modifiedContent), 0o600))
 
 		// Create MCP request
 		request := mcp.CallToolRequest{
@@ -340,8 +340,8 @@ func main() {
 
 A simple Go application.`
 
-		require.NoError(t, os.WriteFile(mainFile, []byte(initialContent), 0o644))
-		require.NoError(t, os.WriteFile(readmeFile, []byte(readmeContent), 0o644))
+		require.NoError(t, os.WriteFile(mainFile, []byte(initialContent), 0o600))
+		require.NoError(t, os.WriteFile(readmeFile, []byte(readmeContent), 0o600))
 		runGitCmd(t, tmpDir, "add", ".")
 		runGitCmd(t, tmpDir, "commit", "-m", "initial project setup")
 
@@ -376,8 +376,8 @@ go run main.go [name]
 - Customizable greeting
 - Command-line argument support`
 
-		require.NoError(t, os.WriteFile(mainFile, []byte(improvedContent), 0o644))
-		require.NoError(t, os.WriteFile(readmeFile, []byte(improvedReadme), 0o644))
+		require.NoError(t, os.WriteFile(mainFile, []byte(improvedContent), 0o600))
+		require.NoError(t, os.WriteFile(readmeFile, []byte(improvedReadme), 0o600))
 
 		// 3. Test review_only first
 		reviewRequest := mcp.CallToolRequest{

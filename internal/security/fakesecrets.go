@@ -1,3 +1,4 @@
+// Package security provides secret detection and security scanning.
 package security
 
 import "strings"

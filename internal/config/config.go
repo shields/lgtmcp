@@ -1,3 +1,4 @@
+// Package config provides configuration management for LGTMCP.
 package config
 
 import (
@@ -91,7 +92,7 @@ type Config struct {
 func Load() (*Config, error) {
 	configPath := GetConfigPath()
 
-	data, err := os.ReadFile(configPath)
+	data, err := os.ReadFile(configPath) //nolint:gosec // Path comes from GetConfigPath which is safe
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config file at %s: %w", configPath, err)
 	}

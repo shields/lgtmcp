@@ -1,3 +1,4 @@
+// Package review provides code review functionality using Google Gemini.
 package review
 
 import (
@@ -38,7 +39,6 @@ type Result struct {
 	LGTM     bool   `json:"lgtm"`
 }
 
-// Reviewer handles code review using Gemini.
 // GeminiClient abstracts the Gemini API operations for testing.
 type GeminiClient interface {
 	CreateChat(ctx context.Context, modelName string, genConfig *genai.GenerateContentConfig) (GeminiChat, error)
@@ -181,12 +181,16 @@ func isRetryableError(err error) bool {
 			return true
 		case http.StatusNotImplemented: // 501 - NOT retryable.
 			return false
+		default:
+			// Fall through to check Status field
 		}
 
 		// Also check the Status field for gRPC-style status codes.
 		switch apiErr.Status {
 		case "RESOURCE_EXHAUSTED", "INTERNAL", "UNAVAILABLE", "DEADLINE_EXCEEDED":
 			return true
+		default:
+			return false
 		}
 	}
 
@@ -289,7 +293,7 @@ func calculateBackoff(attempt int, retryConfig *config.RetryConfig) time.Duratio
 }
 
 // retryableOperation performs an operation with retry logic.
-func (r *Reviewer) retryableOperation(
+func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used by ReviewDiff
 	ctx context.Context,
 	operation func() error,
 	operationName string,
@@ -365,6 +369,7 @@ func (r *Reviewer) retryableOperation(
 	return fmt.Errorf("operation %s failed after %d attempts: %w", operationName, r.retryConfig.MaxRetries+1, lastErr)
 }
 
+// ReviewDiff performs a code review on the provided diff.
 func (r *Reviewer) ReviewDiff(
 	ctx context.Context, diff string, changedFiles []string, repoPath string,
 ) (*Result, error) {
@@ -649,7 +654,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 	}
 
 	// Read the file content.
-	content, err := os.ReadFile(realPath)
+	content, err := os.ReadFile(realPath) //nolint:gosec // Path is validated and sanitized above
 	if err != nil {
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,

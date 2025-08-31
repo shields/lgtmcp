@@ -1,5 +1,5 @@
 # golangci-lint v2 configuration
-version: 2
+version: "2"
 
 run:
   timeout: 5m
@@ -8,115 +8,89 @@ run:
     - integration
 
 linters:
-  enable-all: true
+  default: all
   disable:
-    - depguard # Too restrictive for dependencies
-    - exhaustruct # Too noisy, requires all struct fields
-    - funlen # Sometimes long functions are necessary
-    - godox # We want to allow TODO/FIXME comments during development
-    - wsl # Too opinionated about whitespace
-    - wrapcheck # Too strict about error wrapping
-    - varnamelen # Too opinionated about variable name length
-    - ireturn # Sometimes returning interfaces is necessary
-    - exhaustive # Can be too strict for switch statements
-    - gochecknoglobals # Sometimes globals are needed
-    - tagliatelle # JSON tags don't always need to match Go style
-    - cyclop # Disable cyclomatic complexity checking
-    - gocognit # Disable cognitive complexity checking
-    - gocyclo # Disable cyclomatic complexity checking
-    - nestif # Disable nested if complexity checking
-    - mnd # Magic numbers are often clear in context
-    - nlreturn # Too opinionated about blank lines before returns
+    - depguard
+    - exhaustruct
+    - funlen
+    - godox
+    - wsl
+    - wrapcheck
+    - varnamelen
+    - ireturn
+    - exhaustive
+    - gochecknoglobals
+    - tagliatelle
+    - cyclop
+    - gocognit
+    - gocyclo
+    - nestif
+    - mnd
+    - nlreturn
+    - wsl_v5 # Too opinionated about whitespace
+    - testpackage # Tests in same package are fine
+    - noctx # Not all functions need context
+    - noinlineerr # Inline errors are often clearer
 
-linters-settings:
-  dupl:
-    threshold: 150
+  settings:
+    dupl:
+      threshold: 150
 
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
 
-  exhaustive:
-    default-signifies-exhaustive: true
+    exhaustive:
+      default-signifies-exhaustive: true
 
-  godot:
-    scope: declarations
+    godot:
+      scope: declarations
 
-  gofumpt:
-    extra-rules: true
+    gosec:
+      severity: medium
+      confidence: medium
 
-  gosec:
-    severity: medium
-    confidence: medium
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
 
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment # Struct field optimization is not always necessary
+    lll:
+      line-length: 120
 
-  lll:
-    line-length: 120
+    misspell:
+      locale: US
 
-  misspell:
-    locale: US
+    nakedret:
+      max-func-lines: 30
 
-  nakedret:
-    max-func-lines: 30
+    nolintlint:
+      require-explanation: true
+      require-specific: true
 
-  nolintlint:
-    require-explanation: true
-    require-specific: true
+    revive:
+      enable-all-rules: true
+      rules:
+        - name: line-length-limit
+          disabled: true
+        - name: max-public-structs
+          disabled: true
+        - name: add-constant
+          disabled: true
+        - name: cognitive-complexity
+          disabled: true
+        - name: cyclomatic
+          disabled: true
+        - name: function-length
+          disabled: true
+        - name: banned-characters
+          disabled: true
+        - name: file-header
+          disabled: true
 
-  revive:
-    enable-all-rules: true
-    rules:
-      - name: line-length-limit
-        disabled: true
-      - name: max-public-structs
-        disabled: true
-      - name: add-constant
-        disabled: true
-      - name: cognitive-complexity
-        disabled: true
-      - name: cyclomatic
-        disabled: true
-      - name: function-length
-        disabled: true
-      - name: banned-characters
-        disabled: true
-      - name: file-header
-        disabled: true
-
-  staticcheck:
-    checks: ["all"]
-
-  stylecheck:
-    checks: ["all"]
-
-  unused:
-    check-exported: true
+    staticcheck:
+      checks: ["all"]
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - dupl
-        - goconst
-        - gosec
-        - maintidx
-
-    - path: test/
-      linters:
-        - gosec
-        - goconst
-
-    - path: cmd/
-      linters:
-        - gochecknoinits
-
-    - linters:
-        - staticcheck
-      text: "SA1019:" # Allow deprecated for compatibility
-
   max-issues-per-linter: 0
   max-same-issues: 0

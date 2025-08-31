@@ -1,3 +1,4 @@
+// Package git provides Git repository operations.
 package git
 
 import (
@@ -20,22 +21,33 @@ const (
 )
 
 var (
-	ErrNotGitRepo      = errors.New("directory is not a git repository")
-	ErrNoChanges       = errors.New("no changes to commit")
-	ErrCommandFailed   = errors.New("git command failed")
-	ErrInvalidPath     = errors.New("invalid path")
-	ErrEmptyCommitMsg  = errors.New("commit message cannot be empty")
-	ErrFileNotFound    = errors.New("file not found")
-	ErrCommandTimeout  = errors.New("git command timed out")
+	// ErrNotGitRepo indicates the directory is not a git repository.
+	ErrNotGitRepo = errors.New("directory is not a git repository")
+	// ErrNoChanges indicates there are no changes to commit.
+	ErrNoChanges = errors.New("no changes to commit")
+	// ErrCommandFailed indicates a git command failed to execute.
+	ErrCommandFailed = errors.New("git command failed")
+	// ErrInvalidPath indicates an invalid file path was provided.
+	ErrInvalidPath = errors.New("invalid path")
+	// ErrEmptyCommitMsg indicates the commit message is empty.
+	ErrEmptyCommitMsg = errors.New("commit message cannot be empty")
+	// ErrFileNotFound indicates the requested file was not found.
+	ErrFileNotFound = errors.New("file not found")
+	// ErrCommandTimeout indicates a git command timed out.
+	ErrCommandTimeout = errors.New("git command timed out")
+	// ErrPathOutsideRepo indicates the path is outside the repository.
 	ErrPathOutsideRepo = errors.New("path is outside repository")
-	ErrNotRegularFile  = errors.New("not a regular file")
+	// ErrNotRegularFile indicates the path is not a regular file.
+	ErrNotRegularFile = errors.New("not a regular file")
 )
 
+// Git provides git repository operations.
 type Git struct {
 	repoPath         string
 	diffContextLines int
 }
 
+// New creates a new Git instance for the given repository path.
 func New(repoPath string, cfg *config.GitConfig) (*Git, error) {
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
@@ -58,6 +70,7 @@ func New(repoPath string, cfg *config.GitConfig) (*Git, error) {
 	}, nil
 }
 
+// GetDiff returns the diff of all changes in the repository.
 func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	// Check if this is an initial commit (no HEAD exists).
 	_, err := g.runGitCommand(ctx, "rev-parse", "HEAD")
@@ -160,6 +173,7 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	return diff, nil
 }
 
+// StageAll stages all changes in the repository.
 func (g *Git) StageAll(ctx context.Context) error {
 	_, err := g.runGitCommand(ctx, "add", "-A")
 	if err != nil {
@@ -169,6 +183,7 @@ func (g *Git) StageAll(ctx context.Context) error {
 	return nil
 }
 
+// Commit creates a commit with the given message.
 func (g *Git) Commit(ctx context.Context, message string) (string, error) {
 	if message == "" {
 		return "", ErrEmptyCommitMsg
@@ -198,6 +213,7 @@ func (g *Git) Commit(ctx context.Context, message string) (string, error) {
 	return strings.TrimSpace(hash), nil
 }
 
+// GetFileContent returns the content of a file at the given relative path.
 func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, error) {
 	// Reject absolute paths.
 	if filepath.IsAbs(relativePath) {
@@ -258,7 +274,7 @@ func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, er
 	}
 
 	// Read the file content.
-	content, err := os.ReadFile(fullPath)
+	content, err := os.ReadFile(fullPath) //nolint:gosec // Path is validated and sanitized above
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
@@ -266,6 +282,7 @@ func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, er
 	return string(content), nil
 }
 
+// GetRepoPath returns the absolute path to the repository.
 func (g *Git) GetRepoPath() string {
 	return g.repoPath
 }
@@ -307,6 +324,7 @@ func isGitRepo(path string) bool {
 	return info.IsDir()
 }
 
+// CheckGitRepo verifies that the given path is a valid git repository.
 func CheckGitRepo(path string) bool {
 	return isGitRepo(path)
 }
