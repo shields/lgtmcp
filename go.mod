@@ -3,7 +3,7 @@ module github.com/shields/lgtmcp
 go 1.25
 
 require (
-	github.com/mark3labs/mcp-go v0.38.0
+	github.com/mark3labs/mcp-go v0.39.1
 	github.com/stretchr/testify v1.11.1
 	github.com/zricethezav/gitleaks/v8 v8.28.0
 	google.golang.org/genai v1.22.0
