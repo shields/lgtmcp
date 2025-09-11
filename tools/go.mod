@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/golangci/golangci-lint/v2 v2.4.0
-	mvdan.cc/gofumpt v0.8.0
+	mvdan.cc/gofumpt v0.9.1
 )
 
 require (
