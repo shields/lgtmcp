@@ -557,7 +557,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses default model when not specified", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		// Cfg already has default model set to gemini-2.5-pro.
+		// Cfg already has default model set to gemini-3-pro-preview.
 
 		reviewer, err := New(cfg, newTestLogger())
 		require.NoError(t, err)
@@ -757,7 +757,7 @@ func TestReviewDiff_ErrorCases(t *testing.T) {
 					}
 				},
 			},
-			modelName:     "gemini-2.5-pro",
+			modelName:     "gemini-3-pro-preview",
 			temperature:   0.2,
 			promptManager: prompts.New("", ""),
 			logger:        newTestLogger(),

@@ -118,7 +118,7 @@ func Load() (*Config, error) {
 
 	// Set defaults.
 	if cfg.Gemini.Model == "" {
-		cfg.Gemini.Model = "gemini-2.5-pro"
+		cfg.Gemini.Model = "gemini-3-pro-preview"
 	}
 	if cfg.Gemini.Temperature == 0 {
 		cfg.Gemini.Temperature = 0.2
@@ -184,7 +184,7 @@ func NewTestConfig() *Config {
 			APIKey: "test-api-key",
 		},
 		Gemini: GeminiConfig{
-			Model:       "gemini-2.5-pro",
+			Model:       "gemini-3-pro-preview",
 			Temperature: 0.2,
 			Retry: &RetryConfig{
 				MaxRetries:        5,

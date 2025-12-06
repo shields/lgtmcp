@@ -24,7 +24,7 @@ limitations under the License.
 
 ## Overview
 
-LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 2.5 Pro and either commits them (if approved) or returns review comments.
+LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3 Pro and either commits them (if approved) or returns review comments.
 
 **Note**: The `mcp__lgtmcp__` tools may run a different version than this repository. Always test with actual code.
 
@@ -58,7 +58,7 @@ LGTMCP is a Model Context Protocol server that reviews code changes using Google
 ## Architecture
 
 - **MCP Server** (`pkg/mcp/`) - Protocol implementation using mark3labs/mcp-go
-- **Review Engine** (`internal/review/`) - Gemini 2.5 Pro integration with file retrieval
+- **Review Engine** (`internal/review/`) - Gemini 3 Pro integration with file retrieval
 - **Git Operations** (`internal/git/`) - Diff generation and commit management
 - **Security** (`internal/security/`) - Gitleaks v8 for secret detection
 - **Prompts** (`internal/prompts/`) - Customizable review prompts with embedded defaults
@@ -72,7 +72,7 @@ google:
   api_key: "your-key" # Or use_adc: true for Application Default Credentials
 
 gemini:
-  model: "gemini-2.5-pro"
+  model: "gemini-3-pro-preview"
   temperature: 0.2
 
 git:
@@ -154,7 +154,7 @@ Tools (golangci-lint v2.4.0, gofumpt v0.8.0) are managed separately in `tools/` 
 - **Go**: Single binary, excellent performance, native git ops
 - **mark3labs/mcp-go**: Most mature MCP implementation
 - **Gitleaks v8**: MIT licensed, embedded library (no subprocess)
-- **Gemini 2.5 Pro**: Latest stable model with excellent code understanding
+- **Gemini 3 Pro Preview**: Advanced reasoning model for code understanding
 
 ## Troubleshooting
 
