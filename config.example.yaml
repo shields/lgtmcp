@@ -37,8 +37,8 @@ google:
 # Model configuration
 gemini:
   # Model to use for code review
-  # Default: gemini-2.5-pro
-  model: "gemini-2.5-pro"
+  # Default: gemini-3-pro-preview
+  model: "gemini-3-pro-preview"
 
   # Temperature for response generation (0.0-1.0)
   # Lower values (0.0-0.3) are more deterministic and focused
