@@ -38,6 +38,12 @@ pre-commit:
       run: go mod tidy
       stage_fixed: true
 
+    tools-mod-tidy:
+      glob: "tools/go.mod"
+      run: go -C tools mod tidy
+      stage_fixed: true
+      priority: 2
+
     # Lint check only - does not auto-fix to avoid unintended changes
     # Use 'make lint-fix' manually if you want auto-fixes
     lint:
