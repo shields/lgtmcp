@@ -84,11 +84,15 @@ type RetryConfig struct {
 	BackoffMultiplier float64 `json:"backoff_multiplier"`
 }
 
+// FallbackModelNone disables quota fallback when set as FallbackModel.
+const FallbackModelNone = "none"
+
 // GeminiConfig represents Gemini model configuration.
 type GeminiConfig struct {
-	Retry       *RetryConfig `json:"retry,omitempty"`
-	Model       string       `json:"model"`
-	Temperature float32      `json:"temperature,omitempty"`
+	Retry         *RetryConfig `json:"retry,omitempty"`
+	Model         string       `json:"model"`
+	FallbackModel string       `json:"fallback_model,omitempty"`
+	Temperature   float32      `json:"temperature,omitempty"`
 }
 
 // Config represents the application configuration.
@@ -119,6 +123,9 @@ func Load() (*Config, error) {
 	// Set defaults.
 	if cfg.Gemini.Model == "" {
 		cfg.Gemini.Model = "gemini-3-pro-preview"
+	}
+	if cfg.Gemini.FallbackModel == "" {
+		cfg.Gemini.FallbackModel = "gemini-2.5-pro"
 	}
 	if cfg.Gemini.Temperature == 0 {
 		cfg.Gemini.Temperature = 0.2

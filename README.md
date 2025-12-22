@@ -81,9 +81,13 @@ export PATH="$HOME/bin:$PATH"
      api_key: "your-gemini-api-key-here"
    gemini:
      model: "gemini-3-pro-preview"
+     fallback_model: "gemini-2.5-pro" # Default; set to "none" to disable
    logging:
      level: "info"
    ```
+
+The `fallback_model` is use when we run into quota exhaustion on the primary
+model. While Gemini 3 Pro is in preview, it has very low daily rate limits.
 
 ### Claude Code configuration
 

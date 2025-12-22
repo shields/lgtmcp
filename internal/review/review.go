@@ -45,7 +45,37 @@ var (
 	ErrEmptyDiff = errors.New("diff cannot be empty")
 	// ErrNoAuthMethod indicates no authentication method is configured.
 	ErrNoAuthMethod = errors.New("no authentication method configured")
+	// ErrQuotaExhausted indicates the Gemini API quota has been exceeded.
+	ErrQuotaExhausted = errors.New("gemini API quota exhausted")
 )
+
+// quotaFailureType is the gRPC error detail type for quota exhaustion.
+const quotaFailureType = "type.googleapis.com/google.rpc.QuotaFailure"
+
+// isQuotaExhaustedError checks if the error is a quota exhaustion (not rate limit).
+// Quota failures have QuotaFailure in the error details, indicating a daily/monthly
+// limit has been reached. This is distinct from rate limiting, which is temporary.
+func isQuotaExhaustedError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check APIError.Details for QuotaFailure type.
+	var apiErr *genai.APIError
+	if errors.As(err, &apiErr) && apiErr.Details != nil {
+		for _, detail := range apiErr.Details {
+			if typeVal, ok := detail["@type"].(string); ok {
+				if typeVal == quotaFailureType {
+					return true
+				}
+			}
+		}
+	}
+
+	// Fallback: check error string for the QuotaFailure type.
+	// This handles cases where the error is wrapped or stringified.
+	return strings.Contains(err.Error(), quotaFailureType)
+}
 
 // Result represents the result of a code review.
 type Result struct {
@@ -104,6 +134,7 @@ type Reviewer struct {
 	client        GeminiClient
 	retryConfig   *config.RetryConfig
 	modelName     string
+	fallbackModel string
 	temperature   float32
 	promptManager *prompts.Manager
 	logger        logging.Logger
@@ -119,6 +150,7 @@ type modelPricing struct {
 // Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
 var pricingByModel = map[string]modelPricing{
 	"gemini-3-pro-preview":   {InputPrice: 2.00, OutputPrice: 12.00},
+	"gemini-2.5-pro":         {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-flash":       {InputPrice: 0.15, OutputPrice: 0.60},
 	"gemini-1.5-pro":         {InputPrice: 1.25, OutputPrice: 5.00},
@@ -203,10 +235,11 @@ func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 	}
 
 	return &Reviewer{
-		client:      &RealGeminiClient{client: client},
-		modelName:   cfg.Gemini.Model,
-		temperature: cfg.Gemini.Temperature,
-		retryConfig: cfg.Gemini.Retry,
+		client:        &RealGeminiClient{client: client},
+		modelName:     cfg.Gemini.Model,
+		fallbackModel: cfg.Gemini.FallbackModel,
+		temperature:   cfg.Gemini.Temperature,
+		retryConfig:   cfg.Gemini.Retry,
 		promptManager: prompts.New(
 			cfg.Prompts.ReviewPromptPath,
 			cfg.Prompts.ContextGatheringPromptPath,
@@ -232,6 +265,11 @@ func NewWithClient(client GeminiClient, modelName string, temperature float32, r
 // isRetryableError checks if the error is retryable (rate limit or server errors).
 func isRetryableError(err error) bool {
 	if err == nil {
+		return false
+	}
+
+	// Quota exhaustion is not retryable - should fallback to a different model instead.
+	if isQuotaExhaustedError(err) {
 		return false
 	}
 
@@ -368,7 +406,11 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 ) error {
 	if r.retryConfig == nil || r.retryConfig.MaxRetries <= 0 {
 		// No retry configured, just run the operation once.
-		return operation()
+		err := operation()
+		if err != nil && isQuotaExhaustedError(err) {
+			return errors.Join(ErrQuotaExhausted, err)
+		}
+		return err
 	}
 
 	var lastErr error
@@ -390,6 +432,10 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 
 		// Check if error is retryable.
 		if !isRetryableError(err) {
+			// Wrap quota errors with sentinel for caller detection.
+			if isQuotaExhaustedError(err) {
+				return errors.Join(ErrQuotaExhausted, err)
+			}
 			return err // Non-retryable error.
 		}
 
@@ -438,8 +484,26 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 }
 
 // ReviewDiff performs a code review on the provided diff.
+// If the primary model's quota is exhausted, it falls back to the fallback model.
 func (r *Reviewer) ReviewDiff(
 	ctx context.Context, diff string, changedFiles []string, repoPath string,
+) (*Result, error) {
+	result, err := r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.modelName)
+
+	// On quota exhaustion, try fallback model once.
+	if errors.Is(err, ErrQuotaExhausted) && r.fallbackModel != config.FallbackModelNone && r.fallbackModel != r.modelName {
+		r.logger.Warn("Primary model quota exhausted, falling back",
+			"primary_model", r.modelName,
+			"fallback_model", r.fallbackModel)
+		return r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.fallbackModel)
+	}
+
+	return result, err
+}
+
+// reviewDiffWithModel performs a code review using the specified model.
+func (r *Reviewer) reviewDiffWithModel(
+	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string,
 ) (*Result, error) {
 	// Validate inputs.
 	if diff == "" {
@@ -466,7 +530,7 @@ func (r *Reviewer) ReviewDiff(
 			if usage.ToolUseTokens > 0 {
 				logArgs = append(logArgs, "tool_use_tokens", usage.ToolUseTokens)
 			}
-			if cost := usage.cost(r.modelName); cost >= 0 {
+			if cost := usage.cost(modelName); cost >= 0 {
 				logArgs = append(logArgs, "cost_usd", cost)
 			}
 			r.logger.Info("Token usage", logArgs...)
@@ -507,7 +571,7 @@ func (r *Reviewer) ReviewDiff(
 	toolConfig.Tools = []*genai.Tool{fileRetrievalTool}
 
 	// Start the chat session for context gathering.
-	chat, err := r.client.CreateChat(ctx, r.modelName, toolConfig)
+	chat, err := r.client.CreateChat(ctx, modelName, toolConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create chat session: %w", err)
 	}
@@ -610,7 +674,7 @@ func (r *Reviewer) ReviewDiff(
 	var reviewResponse *genai.GenerateContentResponse
 	err = r.retryableOperation(ctx, func() error {
 		var sendErr error
-		reviewResponse, sendErr = r.client.GenerateContent(ctx, r.modelName, reviewContent, jsonConfig)
+		reviewResponse, sendErr = r.client.GenerateContent(ctx, modelName, reviewContent, jsonConfig)
 
 		return sendErr
 	}, "review_prompt")
