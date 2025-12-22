@@ -1,11 +1,11 @@
 module github.com/shields/lgtmcp
 
-go 1.25
+go 1.25.4
 
 require (
 	github.com/mark3labs/mcp-go v0.43.2
 	github.com/stretchr/testify v1.11.1
-	github.com/zricethezav/gitleaks/v8 v8.28.0
+	github.com/zricethezav/gitleaks/v8 v8.30.0
 	google.golang.org/genai v1.36.0
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -48,6 +48,7 @@ require (
 	github.com/googleapis/gax-go/v2 v2.15.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/h2non/filetype v1.1.3 // indirect
+	github.com/hashicorp/go-version v1.7.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/huandu/xstrings v1.5.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
