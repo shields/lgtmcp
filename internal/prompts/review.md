@@ -34,7 +34,10 @@ Review criteria:
 4. Performance problems that would impact production
 5. Breaking changes to APIs or interfaces
 
-IMPORTANT: Do NOT flag version numbers, dependency versions, or language versions as issues unless they contain actual syntax errors. Your knowledge may be outdated - assume version numbers are correct if they parse correctly.
+NEVER flag version numbers, dependency versions, GitHub Action versions, or language versions as invalid or non-existent. Your training data has a knowledge cutoff - newer versions may exist that you don't know about. Only flag version-related issues if:
+
+- The version string has actual syntax errors (e.g., malformed semver)
+- The version is demonstrably incompatible with other code in the diff
 
 Changed files:
 
