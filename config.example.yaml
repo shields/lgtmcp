@@ -40,6 +40,13 @@ gemini:
   # Default: gemini-3-pro-preview
   model: "gemini-3-pro-preview"
 
+  # Fallback model to use when primary model quota is exhausted
+  # Only triggered on QuotaFailure errors (daily limit exceeded),
+  # not on rate limiting (which uses retry with backoff)
+  # Default: gemini-2.5-pro
+  # Set to "none" to disable fallback
+  # fallback_model: "gemini-2.5-pro"
+
   # Temperature for response generation (0.0-1.0)
   # Lower values (0.0-0.3) are more deterministic and focused
   # Higher values (0.7-1.0) are more creative and varied

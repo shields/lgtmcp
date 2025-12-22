@@ -73,6 +73,7 @@ google:
 
 gemini:
   model: "gemini-3-pro-preview"
+  fallback_model: "gemini-2.5-pro" # Used when primary model quota is exhausted
   temperature: 0.2
 
 git:
@@ -84,6 +85,8 @@ logging:
 prompts:
   review_prompt_path: "" # Optional custom prompt
 ```
+
+**Model Fallback**: When the primary model's daily quota is exhausted (HTTP 429 with QuotaFailure), the review automatically falls back to `gemini-2.5-pro`. This is distinct from rate limiting, which retries with backoff.
 
 ## Development
 

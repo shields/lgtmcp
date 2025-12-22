@@ -1472,3 +1472,143 @@ func TestTokenUsage(t *testing.T) {
 		}
 	})
 }
+
+func TestIsQuotaExhaustedError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		err      error
+		name     string
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name: "APIError with QuotaFailure in Details",
+			err: &genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "You exceeded your current quota",
+				Status:  "RESOURCE_EXHAUSTED",
+				Details: []map[string]any{
+					{
+						"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+						"violations": []map[string]any{
+							{"quotaId": "GenerateRequestsPerDayPerProjectPerModel"},
+						},
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "APIError with RESOURCE_EXHAUSTED but no QuotaFailure (rate limit)",
+			err: &genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "Rate limit exceeded",
+				Status:  "RESOURCE_EXHAUSTED",
+				Details: []map[string]any{
+					{
+						"@type": "type.googleapis.com/google.rpc.RetryInfo",
+					},
+				},
+			},
+			expected: false, // Rate limit, not quota exhaustion.
+		},
+		{
+			name:     "QuotaFailure type in error string",
+			err:      errors.New("Details: [@type:type.googleapis.com/google.rpc.QuotaFailure]"), //nolint:err113 // test case
+			expected: true,
+		},
+		{
+			name: "exceeded your current quota without QuotaFailure type (rate limit)",
+			//nolint:err113 // test case
+			err:      errors.New("Error 429: You exceeded your current quota"),
+			expected: false, // No QuotaFailure type, so this is a rate limit.
+		},
+		{
+			name: "Regular 429 without quota info",
+			err: &genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "Too many requests",
+			},
+			expected: false,
+		},
+		{
+			name:     "Non-quota error",
+			err:      errors.New("internal server error"), //nolint:err113 // test case
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isQuotaExhaustedError(tt.err)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRetryableOperationQuotaFailure(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.RetryConfig{
+		MaxRetries:        3,
+		InitialBackoff:    "10ms",
+		MaxBackoff:        "100ms",
+		BackoffMultiplier: 2.0,
+	}
+
+	reviewer := &Reviewer{retryConfig: cfg, logger: newTestLogger()}
+	callCount := 0
+
+	// Create a quota exhaustion error.
+	quotaErr := &genai.APIError{
+		Code:    http.StatusTooManyRequests,
+		Message: "You exceeded your current quota",
+		Status:  "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+				"violations": []map[string]any{
+					{"quotaId": "GenerateRequestsPerDayPerProjectPerModel"},
+				},
+			},
+		},
+	}
+
+	err := reviewer.retryableOperation(t.Context(), func() error {
+		callCount++
+		return quotaErr
+	}, "test_operation")
+
+	// Should return ErrQuotaExhausted immediately without retrying.
+	require.Error(t, err)
+	require.ErrorIs(t, err, ErrQuotaExhausted, "should return ErrQuotaExhausted")
+	assert.Equal(t, 1, callCount, "operation should only be called once (no retries)")
+}
+
+func TestIsRetryableErrorWithQuotaFailure(t *testing.T) {
+	t.Parallel()
+
+	// Quota exhaustion should NOT be retryable (should fallback instead).
+	quotaErr := &genai.APIError{
+		Code:    http.StatusTooManyRequests,
+		Message: "You exceeded your current quota",
+		Status:  "RESOURCE_EXHAUSTED",
+		Details: []map[string]any{
+			{
+				"@type": "type.googleapis.com/google.rpc.QuotaFailure",
+				"violations": []map[string]any{
+					{"quotaId": "GenerateRequestsPerDayPerProjectPerModel"},
+				},
+			},
+		},
+	}
+
+	result := isRetryableError(quotaErr)
+	assert.False(t, result, "quota exhaustion should not be retryable")
+}
