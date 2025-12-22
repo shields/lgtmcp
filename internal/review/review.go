@@ -109,6 +109,65 @@ type Reviewer struct {
 	logger        logging.Logger
 }
 
+// modelPricing contains per-million-token pricing for supported models.
+type modelPricing struct {
+	InputPrice  float64 // USD per 1M input tokens
+	OutputPrice float64 // USD per 1M output tokens
+}
+
+// pricingByModel maps model names to their pricing (≤200K context).
+// Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
+var pricingByModel = map[string]modelPricing{
+	"gemini-3-pro-preview":   {InputPrice: 2.00, OutputPrice: 12.00},
+	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},
+	"gemini-2.5-flash":       {InputPrice: 0.15, OutputPrice: 0.60},
+	"gemini-1.5-pro":         {InputPrice: 1.25, OutputPrice: 5.00},
+	"gemini-1.5-flash":       {InputPrice: 0.075, OutputPrice: 0.30},
+}
+
+// tokenUsage tracks cumulative token counts across API calls.
+type tokenUsage struct {
+	PromptTokens     int32
+	CandidatesTokens int32
+	CachedTokens     int32
+	ThoughtsTokens   int32
+	ToolUseTokens    int32
+}
+
+// addFromResponse accumulates token counts from a Gemini response.
+func (t *tokenUsage) addFromResponse(resp *genai.GenerateContentResponse) {
+	if resp == nil || resp.UsageMetadata == nil {
+		return
+	}
+	t.PromptTokens += resp.UsageMetadata.PromptTokenCount
+	t.CandidatesTokens += resp.UsageMetadata.CandidatesTokenCount
+	t.CachedTokens += resp.UsageMetadata.CachedContentTokenCount
+	t.ThoughtsTokens += resp.UsageMetadata.ThoughtsTokenCount
+	t.ToolUseTokens += resp.UsageMetadata.ToolUsePromptTokenCount
+}
+
+// total returns the total number of tokens used (input + output + thoughts).
+func (t *tokenUsage) total() int32 {
+	return t.PromptTokens + t.CandidatesTokens + t.ThoughtsTokens
+}
+
+// cost returns the estimated cost in USD for the given model.
+// Returns -1 if the model is not in the pricing table.
+// Note: Uses base pricing tier (≤200K context). Large contexts may cost more.
+func (t *tokenUsage) cost(modelName string) float64 {
+	pricing, ok := pricingByModel[modelName]
+	if !ok {
+		return -1 // Unknown model
+	}
+	// Input cost: full price for prompt tokens, 10% for cached tokens.
+	inputCost := float64(t.PromptTokens)/1_000_000*pricing.InputPrice +
+		float64(t.CachedTokens)/1_000_000*pricing.InputPrice*0.1
+	// Output cost: includes thoughts tokens (reasoning models bill these as output).
+	outputTokens := t.CandidatesTokens + t.ThoughtsTokens
+	outputCost := float64(outputTokens) / 1_000_000 * pricing.OutputPrice
+	return inputCost + outputCost
+}
+
 // New creates a new Reviewer instance.
 // New creates a new Reviewer with the Gemini API client.
 // New creates a new Reviewer with the Gemini API client.
@@ -392,6 +451,33 @@ func (r *Reviewer) ReviewDiff(
 		return nil, ErrEmptyDiff
 	}
 
+	// Track token usage across all API calls.
+	usage := &tokenUsage{}
+
+	// Log token usage when function exits (success or failure).
+	defer func() {
+		if usage.total() > 0 {
+			logArgs := []any{
+				"prompt_tokens", usage.PromptTokens,
+				"candidates_tokens", usage.CandidatesTokens,
+				"total_tokens", usage.total(),
+			}
+			if usage.CachedTokens > 0 {
+				logArgs = append(logArgs, "cached_tokens", usage.CachedTokens)
+			}
+			if usage.ThoughtsTokens > 0 {
+				logArgs = append(logArgs, "thoughts_tokens", usage.ThoughtsTokens)
+			}
+			if usage.ToolUseTokens > 0 {
+				logArgs = append(logArgs, "tool_use_tokens", usage.ToolUseTokens)
+			}
+			if cost := usage.cost(r.modelName); cost >= 0 {
+				logArgs = append(logArgs, "cost_usd", cost)
+			}
+			r.logger.Info("Token usage", logArgs...)
+		}
+	}()
+
 	// Phase 1: Let Gemini analyze the code with tool support for file retrieval.
 	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(diff, changedFiles)
 	if err != nil {
@@ -445,6 +531,7 @@ func (r *Reviewer) ReviewDiff(
 	if err != nil {
 		return nil, fmt.Errorf("failed to send message to Gemini: %w", err)
 	}
+	usage.addFromResponse(response)
 
 	// Handle function calls.
 	for response != nil && len(response.Candidates) > 0 {
@@ -475,6 +562,7 @@ func (r *Reviewer) ReviewDiff(
 				if err != nil {
 					return nil, fmt.Errorf("failed to send function response: %w", err)
 				}
+				usage.addFromResponse(response)
 
 				break
 			} else if part.Text != "" {
@@ -534,6 +622,7 @@ func (r *Reviewer) ReviewDiff(
 	if err != nil {
 		return nil, fmt.Errorf("failed to get review response: %w", err)
 	}
+	usage.addFromResponse(reviewResponse)
 
 	// Parse the structured response.
 	if reviewResponse == nil || len(reviewResponse.Candidates) == 0 {
