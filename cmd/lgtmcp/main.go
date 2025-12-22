@@ -36,7 +36,7 @@ func main() {
 func run() int {
 	// Parse command-line flags.
 	versionFlag := flag.Bool("version", false, "Show version information")
-	flag.Parse()
+	flag.Parse() //nolint:revive // deep-exit is expected in main
 
 	// Handle version flag.
 	if *versionFlag {

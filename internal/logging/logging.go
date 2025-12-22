@@ -75,15 +75,15 @@ func New(config Config) (Logger, error) {
 		return newStdLogger(os.Stdout, config.Level)
 	case "stderr":
 		return newStdLogger(os.Stderr, config.Level)
-	case "directory", "": // Default to directory for empty string
-		return newDirectoryLogger(config)
 	case "mcp":
 		return newMCPLogger(config)
 	case "buffer":
 		// For testing.
 		return newBufferLogger(config.Level)
+	case "directory", "":
+		fallthrough
 	default:
-		// Default to directory logging for unrecognized output types.
+		// Default to directory logging for empty, "directory", or unrecognized output types.
 		return newDirectoryLogger(config)
 	}
 }
@@ -179,12 +179,12 @@ func parseLevel(level string) slog.Level {
 	switch level {
 	case "debug":
 		return slog.LevelDebug
-	case "info":
-		return slog.LevelInfo
 	case "warn":
 		return slog.LevelWarn
 	case "error":
 		return slog.LevelError
+	case "info":
+		fallthrough
 	default:
 		return slog.LevelInfo
 	}
