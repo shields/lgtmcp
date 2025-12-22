@@ -140,7 +140,7 @@ Tools (golangci-lint v2.4.0, gofumpt v0.8.0) are managed separately in `tools/` 
 ## TODO
 
 - [ ] **File size limits** - Prevent excessive Gemini API token usage
-- [ ] **Cost tracking** - Log API usage costs and token counts
+- [x] **Token and cost logging** - Log API usage token counts and estimated cost in USD
 
 ## Security Features
 

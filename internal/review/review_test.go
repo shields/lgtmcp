@@ -1292,3 +1292,183 @@ func TestRetryableOperation(t *testing.T) {
 		assert.Equal(t, 1, callCount) // Should not retry.
 	})
 }
+
+func TestTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("addFromResponse with nil response", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{}
+		usage.addFromResponse(nil)
+
+		assert.Equal(t, int32(0), usage.PromptTokens)
+		assert.Equal(t, int32(0), usage.CandidatesTokens)
+	})
+
+	t.Run("addFromResponse with nil UsageMetadata", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{}
+		usage.addFromResponse(&genai.GenerateContentResponse{
+			UsageMetadata: nil,
+		})
+
+		assert.Equal(t, int32(0), usage.PromptTokens)
+		assert.Equal(t, int32(0), usage.CandidatesTokens)
+	})
+
+	t.Run("addFromResponse accumulates tokens", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{}
+
+		// First response.
+		usage.addFromResponse(&genai.GenerateContentResponse{
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:     100,
+				CandidatesTokenCount: 50,
+			},
+		})
+
+		assert.Equal(t, int32(100), usage.PromptTokens)
+		assert.Equal(t, int32(50), usage.CandidatesTokens)
+
+		// Second response should accumulate.
+		usage.addFromResponse(&genai.GenerateContentResponse{
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:     200,
+				CandidatesTokenCount: 100,
+			},
+		})
+
+		assert.Equal(t, int32(300), usage.PromptTokens)
+		assert.Equal(t, int32(150), usage.CandidatesTokens)
+	})
+
+	t.Run("addFromResponse tracks all token types", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{}
+
+		usage.addFromResponse(&genai.GenerateContentResponse{
+			UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+				PromptTokenCount:        100,
+				CandidatesTokenCount:    50,
+				CachedContentTokenCount: 25,
+				ThoughtsTokenCount:      10,
+				ToolUsePromptTokenCount: 5,
+			},
+		})
+
+		assert.Equal(t, int32(100), usage.PromptTokens)
+		assert.Equal(t, int32(50), usage.CandidatesTokens)
+		assert.Equal(t, int32(25), usage.CachedTokens)
+		assert.Equal(t, int32(10), usage.ThoughtsTokens)
+		assert.Equal(t, int32(5), usage.ToolUseTokens)
+	})
+
+	t.Run("total returns sum of prompt, candidates, and thoughts", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{
+			PromptTokens:     1000,
+			CandidatesTokens: 500,
+			ThoughtsTokens:   200,
+			CachedTokens:     100, // Not included in total (separate metric).
+		}
+
+		assert.Equal(t, int32(1700), usage.total())
+	})
+
+	t.Run("cost calculation", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name             string
+			modelName        string
+			promptTokens     int32
+			candidatesTokens int32
+			thoughtsTokens   int32
+			cachedTokens     int32
+			expectedCost     float64
+		}{
+			{
+				name:             "zero tokens",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     0,
+				candidatesTokens: 0,
+				expectedCost:     0.0,
+			},
+			{
+				name:             "1M input tokens only",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     1_000_000,
+				candidatesTokens: 0,
+				expectedCost:     2.00, // $2.00 per 1M input
+			},
+			{
+				name:             "1M output tokens only",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     0,
+				candidatesTokens: 1_000_000,
+				expectedCost:     12.00, // $12.00 per 1M output
+			},
+			{
+				name:             "mixed tokens",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     500_000, // 0.5M input = $1.00
+				candidatesTokens: 100_000, // 0.1M output = $1.20
+				expectedCost:     2.20,
+			},
+			{
+				name:             "typical review",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     10_000, // 10K input = $0.02
+				candidatesTokens: 1_000,  // 1K output = $0.012
+				expectedCost:     0.032,
+			},
+			{
+				name:             "flash model pricing",
+				modelName:        "gemini-1.5-flash",
+				promptTokens:     1_000_000, // 1M input = $0.075
+				candidatesTokens: 1_000_000, // 1M output = $0.30
+				expectedCost:     0.375,
+			},
+			{
+				name:             "unknown model returns -1",
+				modelName:        "unknown-model",
+				promptTokens:     1_000_000,
+				candidatesTokens: 1_000_000,
+				expectedCost:     -1,
+			},
+			{
+				name:             "thoughts tokens included in output cost",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     0,
+				candidatesTokens: 500_000, // 0.5M output = $6.00
+				thoughtsTokens:   500_000, // 0.5M thoughts = $6.00
+				expectedCost:     12.00,   // Total output cost
+			},
+			{
+				name:             "cached tokens at 10% of input price",
+				modelName:        "gemini-3-pro-preview",
+				promptTokens:     0,
+				candidatesTokens: 0,
+				cachedTokens:     1_000_000, // 1M cached = $2.00 * 0.1 = $0.20
+				expectedCost:     0.20,
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+				usage := &tokenUsage{
+					PromptTokens:     tt.promptTokens,
+					CandidatesTokens: tt.candidatesTokens,
+					ThoughtsTokens:   tt.thoughtsTokens,
+					CachedTokens:     tt.cachedTokens,
+				}
+
+				cost := usage.cost(tt.modelName)
+				assert.InDelta(t, tt.expectedCost, cost, 0.0001,
+					"cost should be approximately $%.4f", tt.expectedCost)
+			})
+		}
+	})
+}
