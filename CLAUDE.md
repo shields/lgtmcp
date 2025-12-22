@@ -126,6 +126,16 @@ Tools (golangci-lint v2.4.0, gofumpt v0.8.0) are managed separately in `tools/` 
   2. Run `make test` to ensure all tests pass
   3. Use `mcp__lgtmcp__review_only` to review your changes
 
+### GitHub Workflows
+
+CI workflows in `.github/workflows/`:
+
+- **lint.yaml** - Runs golangci-lint on push/PR to main
+- **test.yaml** - Runs tests with race detection and coverage on push/PR to main
+- **codeql.yaml** - CodeQL security scanning for Go (push/PR to main)
+
+All workflows use pinned action versions with SHA hashes for reproducibility.
+
 ## Testing Coverage
 
 - **Overall**: 77.4% (well above 70% threshold)
