@@ -129,8 +129,7 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 					_, _ = diffOutput.WriteString("new file mode 100644\n")
 					_, _ = diffOutput.WriteString("--- /dev/null\n")
 					_, _ = diffOutput.WriteString(fmt.Sprintf("+++ b/%s\n", file))
-					lines := strings.Split(content, "\n")
-					for _, line := range lines {
+					for line := range strings.SplitSeq(content, "\n") {
 						_, _ = diffOutput.WriteString(fmt.Sprintf("+%s\n", line))
 					}
 				}
@@ -155,8 +154,7 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 
 		if untrackedFiles != "" {
 			var untrackedDiff bytes.Buffer
-			files := strings.Split(strings.TrimSpace(untrackedFiles), "\n")
-			for _, file := range files {
+			for file := range strings.SplitSeq(strings.TrimSpace(untrackedFiles), "\n") {
 				if file != "" {
 					content, err := g.GetFileContent(ctx, file)
 					if err == nil && content != "" {
@@ -164,8 +162,7 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 						_, _ = untrackedDiff.WriteString("new file mode 100644\n")
 						_, _ = untrackedDiff.WriteString("--- /dev/null\n")
 						_, _ = untrackedDiff.WriteString(fmt.Sprintf("+++ b/%s\n", file))
-						lines := strings.Split(content, "\n")
-						for _, line := range lines {
+						for line := range strings.SplitSeq(content, "\n") {
 							_, _ = untrackedDiff.WriteString(fmt.Sprintf("+%s\n", line))
 						}
 					}

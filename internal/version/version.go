@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
+	"strings"
 )
 
 // Version is set via ldflags during build.
@@ -58,29 +59,30 @@ func String() string {
 
 // DetailedString returns a detailed version string including build info.
 func DetailedString() string {
-	info := fmt.Sprintf("lgtmcp version %s\n", Version)
-	info += fmt.Sprintf("  Go:       %s\n", runtime.Version())
-	info += fmt.Sprintf("  OS/Arch:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
+	var b strings.Builder
+	_, _ = fmt.Fprintf(&b, "lgtmcp version %s\n", Version)
+	_, _ = fmt.Fprintf(&b, "  Go:       %s\n", runtime.Version())
+	_, _ = fmt.Fprintf(&b, "  OS/Arch:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
 	// Add module and VCS information if available
 	if buildInfo, ok := debug.ReadBuildInfo(); ok {
 		if buildInfo.Main.Version != "" && buildInfo.Main.Version != "(devel)" {
-			info += fmt.Sprintf("  Module:   %s\n", buildInfo.Main.Version)
+			_, _ = fmt.Fprintf(&b, "  Module:   %s\n", buildInfo.Main.Version)
 		}
 
 		for _, setting := range buildInfo.Settings {
 			switch setting.Key {
 			case "vcs.revision":
 				if setting.Value != "" {
-					info += fmt.Sprintf("  Commit:   %s\n", setting.Value)
+					_, _ = fmt.Fprintf(&b, "  Commit:   %s\n", setting.Value)
 				}
 			case "vcs.time":
 				if setting.Value != "" {
-					info += fmt.Sprintf("  VCS Time: %s\n", setting.Value)
+					_, _ = fmt.Fprintf(&b, "  VCS Time: %s\n", setting.Value)
 				}
 			case "vcs.modified":
 				if setting.Value == "true" {
-					info += "  Modified: true\n"
+					_, _ = b.WriteString("  Modified: true\n")
 				}
 			default:
 				// Ignore other build settings
@@ -88,5 +90,5 @@ func DetailedString() string {
 		}
 	}
 
-	return info
+	return b.String()
 }

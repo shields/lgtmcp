@@ -109,8 +109,7 @@ func ExtractChangedFiles(diff string) []string {
 	var files []string
 	seen := make(map[string]bool)
 
-	lines := strings.Split(diff, "\n")
-	for _, line := range lines {
+	for line := range strings.SplitSeq(diff, "\n") {
 		// Look for diff headers like "diff --git a/file.txt b/file.txt".
 		if strings.HasPrefix(line, "diff --git ") {
 			parts := strings.Fields(line)

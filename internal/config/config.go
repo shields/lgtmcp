@@ -95,10 +95,10 @@ type GeminiConfig struct {
 type Config struct {
 	Gemini   GeminiConfig   `json:"gemini"`
 	Google   GoogleConfig   `json:"google"`
-	Git      GitConfig      `json:"git,omitempty"`
-	Gitleaks GitleaksConfig `json:"gitleaks,omitempty"`
+	Git      GitConfig      `json:"git,omitzero"`
+	Gitleaks GitleaksConfig `json:"gitleaks,omitzero"`
 	Logging  LoggingConfig  `json:"logging"`
-	Prompts  PromptsConfig  `json:"prompts,omitempty"`
+	Prompts  PromptsConfig  `json:"prompts,omitzero"`
 }
 
 // Load loads the configuration from the YAML file.

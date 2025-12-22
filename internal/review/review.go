@@ -238,19 +238,14 @@ func isRetryableError(err error) bool {
 	// Check if it's a genai.APIError.
 	var apiErr *genai.APIError
 	if errors.As(err, &apiErr) {
-		// Check HTTP status code.
+		// Check HTTP status code for retryable errors.
 		switch apiErr.Code {
-		case http.StatusRequestTimeout: // 408.
-			return true
-		case http.StatusTooManyRequests: // 429.
-			return true
-		case http.StatusInternalServerError: // 500.
-			return true
-		case http.StatusBadGateway: // 502.
-			return true
-		case http.StatusServiceUnavailable: // 503.
-			return true
-		case http.StatusGatewayTimeout: // 504.
+		case http.StatusRequestTimeout, // 408
+			http.StatusTooManyRequests,     // 429
+			http.StatusInternalServerError, // 500
+			http.StatusBadGateway,          // 502
+			http.StatusServiceUnavailable,  // 503
+			http.StatusGatewayTimeout:      // 504
 			return true
 		case http.StatusNotImplemented: // 501 - NOT retryable.
 			return false
