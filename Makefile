@@ -139,8 +139,8 @@ clean:
 # Install binary
 install: build
 	@echo "==> Installing $(BINARY_NAME) to $(INSTALL_PATH)..."
-	mkdir -p $(INSTALL_PATH)
-	cp $(BINARY_PATH) $(INSTALL_PATH)/$(BINARY_NAME)
+	install -d "$(INSTALL_PATH)"
+	install "$(BINARY_PATH)" "$(INSTALL_PATH)/$(BINARY_NAME)"
 
 # Run the application
 run: build
