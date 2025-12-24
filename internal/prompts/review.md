@@ -34,7 +34,7 @@ Review criteria:
 4. Performance problems that would impact production
 5. Breaking changes to APIs or interfaces
 
-NEVER flag version numbers, dependency versions, GitHub Action versions, or language versions as invalid or non-existent. Your training data has a knowledge cutoff - newer versions may exist that you don't know about. Only flag version-related issues if:
+Today's date is {{.CurrentDate}}. NEVER flag version numbers, dependency versions, GitHub Action versions, or language/OS versions as invalid, non-existent, or "in development/alpha/beta". Your training data has a knowledge cutoff and newer stable versions exist that you don't know about. For reference, as of late 2025: Python 3.14, Go 1.25, Node.js 24, Debian 13 "trixie", and similar recent major versions are stable releases. Only flag version-related issues if:
 
 - The version string has actual syntax errors (e.g., malformed semver)
 - The version is demonstrably incompatible with other code in the diff

@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"text/template"
+	"time"
 )
 
 // Embedded default prompts.
@@ -96,6 +97,7 @@ type ReviewPromptData struct {
 	AnalysisSection string
 	FilesList       string
 	Diff            string
+	CurrentDate     string
 }
 
 // BuildReviewPrompt builds the review prompt from template with the given data.
@@ -117,6 +119,7 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysis
 		AnalysisSection: analysisSection,
 		FilesList:       filesList,
 		Diff:            diff,
+		CurrentDate:     time.Now().Format("January 2, 2006"),
 	}
 
 	tmpl, err := template.New("review").Parse(promptTemplate)
