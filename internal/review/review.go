@@ -77,11 +77,27 @@ func isQuotaExhaustedError(err error) bool {
 	return strings.Contains(err.Error(), quotaFailureType)
 }
 
+// TokenUsage contains token usage statistics from a review.
+type TokenUsage struct {
+	PromptTokens     int32 `json:"prompt_tokens"`
+	CandidatesTokens int32 `json:"candidates_tokens"`
+	TotalTokens      int32 `json:"total_tokens"`
+	CachedTokens     int32 `json:"cached_tokens,omitempty"`
+	ThoughtsTokens   int32 `json:"thoughts_tokens,omitempty"`
+}
+
 // Result represents the result of a code review.
 type Result struct {
-	Comments string `json:"comments"`
-	LGTM     bool   `json:"lgtm"`
+	Comments   string      `json:"comments"`
+	LGTM       bool        `json:"lgtm"`
+	TokenUsage *TokenUsage `json:"token_usage,omitempty"`
+	DurationMS int64       `json:"duration_ms,omitempty"`
+	CostUSD    float64     `json:"cost_usd,omitempty"`
+	Model      string      `json:"model,omitempty"`
 }
+
+// FileFetchCallback is called when a file is fetched during review.
+type FileFetchCallback func(path string)
 
 // GeminiClient abstracts the Gemini API operations for testing.
 type GeminiClient interface {
@@ -127,6 +143,21 @@ type RealGeminiChat struct {
 // SendMessage sends a message to the chat session.
 func (c *RealGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error) {
 	return c.chat.SendMessage(ctx, part)
+}
+
+// Options contains optional parameters for a review.
+type Options struct {
+	FileFetchCallback FileFetchCallback
+}
+
+// Option is a functional option for ReviewDiff.
+type Option func(*Options)
+
+// WithFileFetchCallback sets a callback to be invoked when files are fetched.
+func WithFileFetchCallback(callback FileFetchCallback) Option {
+	return func(opts *Options) {
+		opts.FileFetchCallback = callback
+	}
 }
 
 // Reviewer handles code review using Gemini.
@@ -486,25 +517,40 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 // ReviewDiff performs a code review on the provided diff.
 // If the primary model's quota is exhausted, it falls back to the fallback model.
 func (r *Reviewer) ReviewDiff(
-	ctx context.Context, diff string, changedFiles []string, repoPath string,
+	ctx context.Context, diff string, changedFiles []string, repoPath string, opts ...Option,
 ) (*Result, error) {
-	result, err := r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.modelName)
+	startTime := time.Now()
+
+	options := &Options{}
+	for _, opt := range opts {
+		opt(options)
+	}
+
+	result, err := r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.modelName, options)
 
 	// On quota exhaustion, try fallback model once.
 	if errors.Is(err, ErrQuotaExhausted) && r.fallbackModel != config.FallbackModelNone && r.fallbackModel != r.modelName {
 		r.logger.Warn("Primary model quota exhausted, falling back",
 			"primary_model", r.modelName,
 			"fallback_model", r.fallbackModel)
-		return r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.fallbackModel)
+		result, err = r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.fallbackModel, options)
+	}
+
+	// Update duration to reflect total wall-clock time including any fallback attempt.
+	if result != nil {
+		result.DurationMS = time.Since(startTime).Milliseconds()
 	}
 
 	return result, err
 }
 
 // reviewDiffWithModel performs a code review using the specified model.
+//
+//nolint:maintidx // Complex multi-phase review process; refactoring would hurt readability.
 func (r *Reviewer) reviewDiffWithModel(
-	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string,
+	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string, opts *Options,
 ) (*Result, error) {
+	startTime := time.Now()
 	// Validate inputs.
 	if diff == "" {
 		return nil, ErrEmptyDiff
@@ -601,9 +647,15 @@ func (r *Reviewer) reviewDiffWithModel(
 		for _, part := range candidate.Content.Parts {
 			if part.FunctionCall != nil {
 				hasToolCalls = true
+				requestedFile, ok := part.FunctionCall.Args["filepath"].(string)
 				r.logger.Debug("Model requested file",
 					"function", part.FunctionCall.Name,
-					"filepath", part.FunctionCall.Args["filepath"])
+					"filepath", requestedFile)
+
+				// Invoke file fetch callback if provided.
+				if opts != nil && opts.FileFetchCallback != nil && ok && requestedFile != "" {
+					opts.FileFetchCallback(requestedFile)
+				}
 
 				// Send the function response back with retry logic.
 				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath)
@@ -698,6 +750,20 @@ func (r *Reviewer) reviewDiffWithModel(
 			var result Result
 			if err := json.Unmarshal([]byte(part.Text), &result); err != nil {
 				return nil, fmt.Errorf("failed to parse review response: %w", err)
+			}
+
+			// Add usage statistics to result.
+			result.DurationMS = time.Since(startTime).Milliseconds()
+			result.Model = modelName
+			result.TokenUsage = &TokenUsage{
+				PromptTokens:     usage.PromptTokens,
+				CandidatesTokens: usage.CandidatesTokens,
+				TotalTokens:      usage.total(),
+				CachedTokens:     usage.CachedTokens,
+				ThoughtsTokens:   usage.ThoughtsTokens,
+			}
+			if cost := usage.cost(modelName); cost >= 0 {
+				result.CostUSD = cost
 			}
 
 			return &result, nil

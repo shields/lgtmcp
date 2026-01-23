@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -29,6 +30,7 @@ import (
 	"github.com/shields/lgtmcp/internal/config"
 	"github.com/shields/lgtmcp/internal/git"
 	"github.com/shields/lgtmcp/internal/logging"
+	"github.com/shields/lgtmcp/internal/progress"
 	"github.com/shields/lgtmcp/internal/review"
 	"github.com/shields/lgtmcp/internal/security"
 )
@@ -164,10 +166,81 @@ type reviewContext struct {
 	changedFiles []string
 }
 
+// createProgressReporter creates a progress reporter based on whether the request includes a progress token.
+//
+//nolint:funcorder // Helper method
+func (s *Server) createProgressReporter(request mcp.CallToolRequest) progress.Reporter {
+	if request.Params.Meta != nil && request.Params.Meta.ProgressToken != nil {
+		return progress.NewMCPReporter(s.mcpServer, request.Params.Meta.ProgressToken)
+	}
+	return progress.NewNoOpReporter()
+}
+
+// formatReviewResponse formats the review result with usage statistics.
+// If commitHash is provided, it adds a commit success message before the stats footer.
+func formatReviewResponse(result *review.Result, commitHash string) string {
+	var status string
+	if result.LGTM {
+		status = "Review Result: APPROVED (LGTM)"
+	} else {
+		status = "Review Result: NOT APPROVED"
+	}
+
+	var sb strings.Builder
+	_, _ = sb.WriteString(status)
+	_, _ = sb.WriteString("\n\n")
+	_, _ = sb.WriteString(result.Comments)
+
+	// Add commit success message if provided.
+	if commitHash != "" {
+		_, _ = sb.WriteString("\n\nChanges committed successfully!\nCommit: ")
+		_, _ = sb.WriteString(commitHash)
+	}
+
+	// Add usage statistics footer if available.
+	if result.TokenUsage != nil || result.DurationMS > 0 || result.CostUSD > 0 {
+		_, _ = sb.WriteString("\n\n---\n")
+
+		var parts []string
+
+		// Duration.
+		if result.DurationMS > 0 {
+			seconds := float64(result.DurationMS) / 1000.0
+			parts = append(parts, fmt.Sprintf("Duration: %.1fs", seconds))
+		}
+
+		// Token usage.
+		if result.TokenUsage != nil {
+			tokenPart := fmt.Sprintf("Tokens: %d (in: %d, out: %d)",
+				result.TokenUsage.TotalTokens,
+				result.TokenUsage.PromptTokens,
+				result.TokenUsage.CandidatesTokens)
+			parts = append(parts, tokenPart)
+		}
+
+		// Cost.
+		if result.CostUSD > 0 {
+			var costStr string
+			if result.CostUSD < 0.01 {
+				costStr = fmt.Sprintf("Cost: $%.4f", result.CostUSD)
+			} else {
+				costStr = fmt.Sprintf("Cost: $%.3f", result.CostUSD)
+			}
+			parts = append(parts, costStr)
+		}
+
+		_, _ = sb.WriteString(strings.Join(parts, " | "))
+	}
+
+	return sb.String()
+}
+
 // prepareReview handles common review preparation logic: getting diff, security scan, etc.
 //
 //nolint:funcorder // Helper method
-func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewContext, *mcp.CallToolResult, error) {
+func (s *Server) prepareReview(
+	ctx context.Context, directory string, reporter progress.Reporter, totalSteps float64,
+) (*reviewContext, *mcp.CallToolResult, error) {
 	// Create a git client for this repository.
 	var gitConfig *config.GitConfig
 	if s.config != nil {
@@ -177,6 +250,9 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid git repository: %w", err)
 	}
+
+	// Report progress: getting git diff.
+	reporter.Report(ctx, 1, totalSteps, "Getting git diff...")
 
 	// Get the diff of staged and unstaged changes.
 	start := time.Now()
@@ -213,6 +289,9 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 			},
 		}, nil
 	}
+
+	// Report progress: security scan.
+	reporter.Report(ctx, 2, totalSteps, "Running security scan...")
 
 	// Security scan on the changed files using secure git client.
 	getFileContent := func(path string) (string, error) {
@@ -257,14 +336,25 @@ func (s *Server) prepareReview(ctx context.Context, directory string) (*reviewCo
 // performReview executes the review with Gemini.
 //
 //nolint:funcorder // Helper method
-func (s *Server) performReview(ctx context.Context, rc *reviewContext) (*review.Result, error) {
+func (s *Server) performReview(
+	ctx context.Context, rc *reviewContext, reporter progress.Reporter, totalSteps float64,
+) (*review.Result, error) {
 	start := time.Now()
 	s.logger.Info("Starting Gemini review",
 		"repo", filepath.Base(rc.absPath),
 		"changed_files", len(rc.changedFiles),
 		"diff_size", len(rc.diff))
 
-	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath)
+	// Report progress: analyzing code context and fetching files.
+	reporter.Report(ctx, 3, totalSteps, "Analyzing code context...")
+
+	// Create file fetch callback that reports progress during file fetching.
+	fileFetchCallback := func(path string) {
+		reporter.Report(ctx, 3, totalSteps, "Fetching file: "+path)
+	}
+
+	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath,
+		review.WithFileFetchCallback(fileFetchCallback))
 
 	duration := time.Since(start)
 	if err != nil {
@@ -272,6 +362,8 @@ func (s *Server) performReview(ctx context.Context, rc *reviewContext) (*review.
 			"duration_ms", duration.Milliseconds(),
 			"error", err)
 	} else {
+		// Report progress: review generation complete.
+		reporter.Report(ctx, 4, totalSteps, "Review complete")
 		s.logger.Info("Gemini review completed",
 			"duration_ms", duration.Milliseconds(),
 			"approved", reviewResult.LGTM)
@@ -292,6 +384,9 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 	s.logger.Info("Review request started",
 		"request_id", requestID,
 		"tool", "review_only")
+
+	// Create progress reporter based on whether client requested progress.
+	reporter := s.createProgressReporter(request)
 
 	// Parse arguments.
 	args, ok := request.Params.Arguments.(map[string]any)
@@ -317,9 +412,12 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 		"request_id", requestID,
 		"repo", filepath.Base(directory))
 
+	// review_only has 4 total steps (no staging/committing).
+	const totalSteps = 4.0
+
 	// Prepare for review (get diff, security scan, etc.)
 	prepStart := time.Now()
-	reviewCtx, earlyReturn, err := s.prepareReview(ctx, directory)
+	reviewCtx, earlyReturn, err := s.prepareReview(ctx, directory, reporter, totalSteps)
 	prepDuration := time.Since(prepStart)
 
 	s.logger.Info("Review preparation completed",
@@ -344,7 +442,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 	s.logger.Info("Starting review analysis",
 		"request_id", requestID)
 
-	reviewResult, err := s.performReview(ctx, reviewCtx)
+	reviewResult, err := s.performReview(ctx, reviewCtx, reporter, totalSteps)
 	if err != nil {
 		elapsed := time.Since(start)
 		s.logger.Error("Review failed",
@@ -361,17 +459,12 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 		"approved", reviewResult.LGTM,
 		"total_duration_ms", elapsed.Milliseconds())
 
-	if reviewResult.LGTM {
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.NewTextContent("Review Result: APPROVED (LGTM)\n\n" + reviewResult.Comments),
-			},
-		}, nil
-	}
+	// Format the response with usage statistics.
+	responseText := formatReviewResponse(reviewResult, "")
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			mcp.NewTextContent("Review Result: NOT APPROVED\n\n" + reviewResult.Comments),
+			mcp.NewTextContent(responseText),
 		},
 	}, nil
 }
@@ -390,6 +483,9 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		"request_id", requestID,
 		"tool", "review_and_commit",
 		"arguments", "map[...]")
+
+	// Create progress reporter based on whether client requested progress.
+	reporter := s.createProgressReporter(request)
 
 	// Parse arguments.
 	args, ok := request.Params.Arguments.(map[string]any)
@@ -418,9 +514,12 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		return nil, ErrCommitMessageNotString
 	}
 
+	// review_and_commit has 6 total steps (includes staging/committing).
+	const totalSteps = 6.0
+
 	// Prepare for review (get diff, security scan, etc.)
 	prepStart := time.Now()
-	reviewCtx, earlyReturn, err := s.prepareReview(ctx, directory)
+	reviewCtx, earlyReturn, err := s.prepareReview(ctx, directory, reporter, totalSteps)
 	prepDuration := time.Since(prepStart)
 
 	s.logger.Info("Review preparation completed",
@@ -445,7 +544,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	s.logger.Info("Starting review analysis",
 		"request_id", requestID)
 
-	reviewResult, err := s.performReview(ctx, reviewCtx)
+	reviewResult, err := s.performReview(ctx, reviewCtx, reporter, totalSteps)
 	if err != nil {
 		elapsed := time.Since(start)
 		s.logger.Error("Review failed",
@@ -455,22 +554,24 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		return nil, fmt.Errorf("review failed: %w", err)
 	}
 
-	// If not approved, return review comments.
+	// If not approved, return review comments with usage stats.
 	if !reviewResult.LGTM {
 		elapsed := time.Since(start)
 		s.logger.Info("Review rejected changes",
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds())
 
+		responseText := formatReviewResponse(reviewResult, "")
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
-				mcp.NewTextContent("Review Result: NOT APPROVED\n\n" + reviewResult.Comments),
+				mcp.NewTextContent(responseText),
 			},
 		}, nil
 	}
 
 	// Changes are approved - proceed to commit.
-	approvalMsg := "Review Result: APPROVED (LGTM)\n\n" + reviewResult.Comments
+	// Report progress: staging changes.
+	reporter.Report(ctx, 5, 6, "Staging changes...")
 
 	// Stage all changes.
 	stageStart := time.Now()
@@ -486,6 +587,9 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	s.logger.Info("Changes staged",
 		"request_id", requestID,
 		"duration_ms", stageDuration.Milliseconds())
+
+	// Report progress: committing changes.
+	reporter.Report(ctx, 6, 6, "Committing changes...")
 
 	// Commit the changes.
 	commitStart := time.Now()
@@ -507,9 +611,12 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		"commit_duration_ms", commitDuration.Milliseconds(),
 		"total_duration_ms", elapsed.Milliseconds())
 
+	// Format response with usage stats and commit message.
+	responseText := formatReviewResponse(reviewResult, commitHash)
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			mcp.NewTextContent(fmt.Sprintf("%s\n\nChanges committed successfully!\nCommit: %s", approvalMsg, commitHash)),
+			mcp.NewTextContent(responseText),
 		},
 	}, nil
 }
