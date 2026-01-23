@@ -19,11 +19,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/shields/lgtmcp/internal/config"
 	"github.com/shields/lgtmcp/internal/logging"
+	"github.com/shields/lgtmcp/internal/review"
 	"github.com/shields/lgtmcp/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -739,5 +741,130 @@ func TestHandleReviewOnlyWithDiffError(t *testing.T) {
 		require.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid git repository")
+	})
+}
+
+func TestFormatReviewResponse(t *testing.T) {
+	t.Parallel()
+
+	t.Run("approved without usage stats", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "Code looks good!",
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Review Result: APPROVED (LGTM)")
+		assert.Contains(t, response, "Code looks good!")
+		assert.NotContains(t, response, "---")
+	})
+
+	t.Run("not approved without usage stats", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     false,
+			Comments: "Found issues",
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Review Result: NOT APPROVED")
+		assert.Contains(t, response, "Found issues")
+		assert.NotContains(t, response, "---")
+	})
+
+	t.Run("with duration only", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:       true,
+			Comments:   "LGTM",
+			DurationMS: 12345,
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Review Result: APPROVED (LGTM)")
+		assert.Contains(t, response, "---")
+		assert.Contains(t, response, "Duration: 12.3s")
+	})
+
+	t.Run("with token usage", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "Good code",
+			TokenUsage: &review.TokenUsage{
+				PromptTokens:     10000,
+				CandidatesTokens: 2000,
+				TotalTokens:      12000,
+			},
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Tokens: 12000 (in: 10000, out: 2000)")
+	})
+
+	t.Run("with cost in dollars", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "Approved",
+			CostUSD:  0.042,
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Cost: $0.042")
+	})
+
+	t.Run("with sub-cent cost", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "Approved",
+			CostUSD:  0.0023,
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Cost: $0.0023")
+	})
+
+	t.Run("with all usage stats", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:       true,
+			Comments:   "All good",
+			DurationMS: 15000,
+			TokenUsage: &review.TokenUsage{
+				PromptTokens:     12000,
+				CandidatesTokens: 3000,
+				TotalTokens:      15000,
+			},
+			CostUSD: 0.05,
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Review Result: APPROVED (LGTM)")
+		assert.Contains(t, response, "---")
+		assert.Contains(t, response, "Duration: 15.0s")
+		assert.Contains(t, response, "Tokens: 15000 (in: 12000, out: 3000)")
+		assert.Contains(t, response, "Cost: $0.050")
+		assert.Contains(t, response, " | ")
+	})
+
+	t.Run("with commit hash", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:       true,
+			Comments:   "LGTM",
+			DurationMS: 5000,
+		}
+
+		response := formatReviewResponse(result, "abc123def")
+		assert.Contains(t, response, "Review Result: APPROVED (LGTM)")
+		assert.Contains(t, response, "Changes committed successfully!")
+		assert.Contains(t, response, "Commit: abc123def")
+		// Commit message should appear before the footer.
+		commitIdx := strings.Index(response, "Changes committed")
+		footerIdx := strings.Index(response, "---")
+		assert.Greater(t, footerIdx, commitIdx, "Commit message should appear before the stats footer")
 	})
 }
