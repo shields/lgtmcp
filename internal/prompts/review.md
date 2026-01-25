@@ -39,6 +39,8 @@ Today's date is {{.CurrentDate}}. NEVER flag version numbers, dependency version
 - The version string has actual syntax errors (e.g., malformed semver)
 - The version is demonstrably incompatible with other code in the diff
 
+Do not warn about missing imports. Assume the code has already been run through static checkers and compiled successfully.
+
 Changed files:
 
 - {{.FilesList}}
