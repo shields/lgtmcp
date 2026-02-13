@@ -160,10 +160,11 @@ func generateRequestID() (string, error) {
 
 // reviewContext holds the context needed for performing a review.
 type reviewContext struct {
-	gitClient    *git.Git
-	diff         string
-	absPath      string
-	changedFiles []string
+	gitClient         *git.Git
+	diff              string
+	absPath           string
+	changedFiles      []string
+	agentInstructions string
 }
 
 // createProgressReporter creates a progress reporter based on whether the request includes a progress token.
@@ -325,11 +326,26 @@ func (s *Server) prepareReview(
 	// Extract list of changed files from the diff for Gemini's file retrieval.
 	changedFiles := security.ExtractChangedFiles(diff)
 
+	// Discover AGENTS.md files relevant to the changed files.
+	var agentInstructions string
+	agentFiles, err := gitClient.FindAgentFiles(changedFiles)
+	if err != nil {
+		s.logger.Warn("Failed to discover AGENTS.md files", "error", err)
+	} else if len(agentFiles) > 0 {
+		agentInstructions = git.FormatAgentInstructions(agentFiles)
+		paths := make([]string, len(agentFiles))
+		for i, f := range agentFiles {
+			paths[i] = f.Path
+		}
+		s.logger.Info("Discovered AGENTS.md files", "files", paths)
+	}
+
 	return &reviewContext{
-		gitClient:    gitClient,
-		diff:         diff,
-		changedFiles: changedFiles,
-		absPath:      directory,
+		gitClient:         gitClient,
+		diff:              diff,
+		changedFiles:      changedFiles,
+		absPath:           directory,
+		agentInstructions: agentInstructions,
 	}, nil, nil
 }
 
@@ -354,7 +370,8 @@ func (s *Server) performReview(
 	}
 
 	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath,
-		review.WithFileFetchCallback(fileFetchCallback))
+		review.WithFileFetchCallback(fileFetchCallback),
+		review.WithAgentInstructions(rc.agentInstructions))
 
 	duration := time.Since(start)
 	if err != nil {

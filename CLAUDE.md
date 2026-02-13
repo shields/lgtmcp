@@ -59,7 +59,7 @@ LGTMCP is a Model Context Protocol server that reviews code changes using Google
 
 - **MCP Server** (`pkg/mcp/`) - Protocol implementation using mark3labs/mcp-go
 - **Review Engine** (`internal/review/`) - Gemini 3 Pro integration with file retrieval
-- **Git Operations** (`internal/git/`) - Diff generation and commit management
+- **Git Operations** (`internal/git/`) - Diff generation, commit management, AGENTS.md discovery
 - **Security** (`internal/security/`) - Gitleaks v8 for secret detection
 - **Prompts** (`internal/prompts/`) - Customizable review prompts with embedded defaults
 - **Progress** (`internal/progress/`) - MCP progress notification support
@@ -158,6 +158,15 @@ All workflows use pinned action versions with SHA hashes for reproducibility.
 - [x] **Token and cost logging** - Log API usage token counts and estimated cost in USD
 - [x] **Progress notifications** - MCP progress notifications during review operations
 - [x] **Usage stats in response** - Duration, token counts, and cost shown in review response footer
+- [x] **AGENTS.md discovery** - Automatically discover and inject AGENTS.md instructions into review prompts
+
+## AGENTS.md Support
+
+Repositories can include `AGENTS.md` files with project-specific review guidelines. LGTMCP automatically discovers these files by walking from each changed file's directory up to the repo root. The instructions are injected into both the context-gathering and review prompts.
+
+- Files are deduplicated and sorted root-first (shallowest depth first)
+- Symlinks pointing outside the repository are skipped
+- Discovery errors are non-fatal (logged as warnings)
 
 ## Security Features
 
