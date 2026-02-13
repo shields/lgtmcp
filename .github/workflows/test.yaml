@@ -36,5 +36,10 @@ jobs:
           go-version-file: "go.mod"
           cache: true
 
+      # Verify the full build pipeline (tools, deps, build, install) succeeds;
+      # catches incomplete go.sum updates from Renovate.
+      - name: Build and install
+        run: make install INSTALL_PATH="${{ runner.temp }}/bin"
+
       - name: Run tests
         run: go test -v -race -coverprofile=coverage.out ./...
