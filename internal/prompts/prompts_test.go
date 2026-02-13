@@ -87,7 +87,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		changedFiles := []string{"main.go", "test.go"}
 		analysisText := "The code looks good overall"
 
-		prompt, err := m.BuildReviewPrompt(diff, changedFiles, analysisText)
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, analysisText, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, diff)
 		assert.Contains(t, prompt, "main.go")
@@ -102,7 +102,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		diff := testDiffGitHeader
 		changedFiles := []string{"main.go"}
 
-		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "")
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "", "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, diff)
 		assert.Contains(t, prompt, "main.go")
@@ -118,7 +118,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		require.NoError(t, err)
 
 		m := New(customPromptPath, "")
-		prompt, err := m.BuildReviewPrompt("test diff", []string{"file1.go"}, "")
+		prompt, err := m.BuildReviewPrompt("test diff", []string{"file1.go"}, "", "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Custom: test diff")
 		assert.Contains(t, prompt, "Files: file1.go")
@@ -133,7 +133,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		require.NoError(t, err)
 
 		m := New(customPromptPath, "")
-		_, err = m.BuildReviewPrompt("test", []string{"file.go"}, "")
+		_, err = m.BuildReviewPrompt("test", []string{"file.go"}, "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse review prompt template")
 	})
@@ -148,7 +148,7 @@ func TestManager_BuildContextGatheringPrompt(t *testing.T) {
 		diff := testDiffGitHeader
 		changedFiles := []string{"main.go", "lib.go"}
 
-		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles)
+		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, diff)
 		assert.Contains(t, prompt, "main.go")
@@ -165,10 +165,66 @@ func TestManager_BuildContextGatheringPrompt(t *testing.T) {
 		require.NoError(t, err)
 
 		m := New("", customPromptPath)
-		prompt, err := m.BuildContextGatheringPrompt("test diff", []string{"file1.go", "file2.go"})
+		prompt, err := m.BuildContextGatheringPrompt("test diff", []string{"file1.go", "file2.go"}, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Analyze: test diff")
 		assert.Contains(t, prompt, "file1.go")
+	})
+}
+
+func TestManager_BuildReviewPromptWithAgentInstructions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with agent instructions", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		diff := testDiffGitHeader
+		changedFiles := []string{"main.go"}
+		agentInstructions := "## Agent Instructions\n\nAlways check for tests."
+
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "", agentInstructions)
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "Agent Instructions")
+		assert.Contains(t, prompt, "Always check for tests")
+	})
+
+	t.Run("without agent instructions", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		diff := testDiffGitHeader
+		changedFiles := []string{"main.go"}
+
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "", "")
+		require.NoError(t, err)
+		assert.NotContains(t, prompt, "Agent Instructions")
+	})
+}
+
+func TestManager_BuildContextGatheringPromptWithAgentInstructions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with agent instructions", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		diff := testDiffGitHeader
+		changedFiles := []string{"main.go"}
+		agentInstructions := "## Agent Instructions\n\nCheck security carefully."
+
+		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, agentInstructions)
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "Agent Instructions")
+		assert.Contains(t, prompt, "Check security carefully")
+	})
+
+	t.Run("without agent instructions", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		diff := testDiffGitHeader
+		changedFiles := []string{"main.go"}
+
+		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, "")
+		require.NoError(t, err)
+		assert.NotContains(t, prompt, "Agent Instructions")
 	})
 }
 
@@ -179,10 +235,12 @@ func TestPromptData(t *testing.T) {
 		t.Parallel()
 		data := ReviewPromptData{
 			AnalysisSection: "analysis",
+			AgentsSection:   "agents",
 			FilesList:       "files",
 			Diff:            "diff",
 		}
 		assert.Equal(t, "analysis", data.AnalysisSection)
+		assert.Equal(t, "agents", data.AgentsSection)
 		assert.Equal(t, "files", data.FilesList)
 		assert.Equal(t, "diff", data.Diff)
 	})
@@ -190,9 +248,11 @@ func TestPromptData(t *testing.T) {
 	t.Run("ContextGatheringPromptData fields", func(t *testing.T) {
 		t.Parallel()
 		data := ContextGatheringPromptData{
-			FilesList: "files",
-			Diff:      "diff",
+			AgentsSection: "agents",
+			FilesList:     "files",
+			Diff:          "diff",
 		}
+		assert.Equal(t, "agents", data.AgentsSection)
 		assert.Equal(t, "files", data.FilesList)
 		assert.Equal(t, "diff", data.Diff)
 	})
@@ -206,6 +266,7 @@ func TestEmbeddedPrompts(t *testing.T) {
 		assert.NotEmpty(t, defaultReviewPrompt)
 		assert.Contains(t, defaultReviewPrompt, "{{.Diff}}")
 		assert.Contains(t, defaultReviewPrompt, "{{.FilesList}}")
+		assert.Contains(t, defaultReviewPrompt, ".AgentsSection")
 	})
 
 	t.Run("default context gathering prompt is embedded", func(t *testing.T) {
@@ -213,5 +274,6 @@ func TestEmbeddedPrompts(t *testing.T) {
 		assert.NotEmpty(t, defaultContextGatheringPrompt)
 		assert.Contains(t, defaultContextGatheringPrompt, "{{.Diff}}")
 		assert.Contains(t, defaultContextGatheringPrompt, "{{.FilesList}}")
+		assert.Contains(t, defaultContextGatheringPrompt, ".AgentsSection")
 	})
 }

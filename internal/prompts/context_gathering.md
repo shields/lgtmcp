@@ -17,6 +17,10 @@ limitations under the License.
 # Context Gathering Prompt
 
 You are analyzing code changes for a thorough review. Please examine this git diff and use the get_file_content tool to retrieve any additional context you need to understand the changes completely.
+{{- if .AgentsSection}}
+
+{{.AgentsSection}}
+{{- end}}
 
 Changed files:
 
