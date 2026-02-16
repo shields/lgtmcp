@@ -812,7 +812,7 @@ func TestFormatReviewResponse(t *testing.T) {
 		}
 
 		response := formatReviewResponse(result, "")
-		assert.Contains(t, response, "Cost: $0.042")
+		assert.Contains(t, response, "Cost: $0.04")
 	})
 
 	t.Run("with sub-cent cost", func(t *testing.T) {
@@ -846,7 +846,7 @@ func TestFormatReviewResponse(t *testing.T) {
 		assert.Contains(t, response, "---")
 		assert.Contains(t, response, "Duration: 15.0s")
 		assert.Contains(t, response, "Tokens: 15000 (in: 12000, out: 3000)")
-		assert.Contains(t, response, "Cost: $0.050")
+		assert.Contains(t, response, "Cost: $0.05")
 		assert.Contains(t, response, " | ")
 	})
 

@@ -225,7 +225,7 @@ func formatReviewResponse(result *review.Result, commitHash string) string {
 			if result.CostUSD < 0.01 {
 				costStr = fmt.Sprintf("Cost: $%.4f", result.CostUSD)
 			} else {
-				costStr = fmt.Sprintf("Cost: $%.3f", result.CostUSD)
+				costStr = fmt.Sprintf("Cost: $%.2f", result.CostUSD)
 			}
 			parts = append(parts, costStr)
 		}
