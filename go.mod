@@ -1,4 +1,4 @@
-module github.com/shields/lgtmcp
+module msrl.dev/lgtmcp
 
 go 1.25.4
 

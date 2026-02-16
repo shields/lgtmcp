@@ -19,7 +19,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shields/lgtmcp/internal/version"
+	"msrl.dev/lgtmcp/internal/version"
 )
 
 func TestString(t *testing.T) { //nolint:paralleltest // Modifies global Version variable

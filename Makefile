@@ -33,7 +33,7 @@ GOLINT=bin/golangci-lint
 
 # Build flags
 VERSION?=dev
-LDFLAGS=-ldflags "-s -w -X 'github.com/shields/lgtmcp/internal/version.Version=$(VERSION)'"
+LDFLAGS=-ldflags "-s -w -X 'msrl.dev/lgtmcp/internal/version.Version=$(VERSION)'"
 
 # Default target
 all: deps fmt lint test build

@@ -23,12 +23,12 @@ import (
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/shields/lgtmcp/internal/config"
-	"github.com/shields/lgtmcp/internal/logging"
-	"github.com/shields/lgtmcp/internal/review"
-	"github.com/shields/lgtmcp/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/logging"
+	"msrl.dev/lgtmcp/internal/review"
+	"msrl.dev/lgtmcp/internal/security"
 )
 
 var fakeSecrets = security.FakeSecrets{}
