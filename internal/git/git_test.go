@@ -23,9 +23,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shields/lgtmcp/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"msrl.dev/lgtmcp/internal/config"
 )
 
 func TestNew(t *testing.T) {

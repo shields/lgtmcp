@@ -27,12 +27,12 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/shields/lgtmcp/internal/config"
-	"github.com/shields/lgtmcp/internal/git"
-	"github.com/shields/lgtmcp/internal/logging"
-	"github.com/shields/lgtmcp/internal/progress"
-	"github.com/shields/lgtmcp/internal/review"
-	"github.com/shields/lgtmcp/internal/security"
+	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/git"
+	"msrl.dev/lgtmcp/internal/logging"
+	"msrl.dev/lgtmcp/internal/progress"
+	"msrl.dev/lgtmcp/internal/review"
+	"msrl.dev/lgtmcp/internal/security"
 )
 
 var (

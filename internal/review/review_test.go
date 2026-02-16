@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shields/lgtmcp/internal/config"
-	"github.com/shields/lgtmcp/internal/logging"
-	"github.com/shields/lgtmcp/internal/prompts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
+	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/logging"
+	"msrl.dev/lgtmcp/internal/prompts"
 )
 
 func newTestLogger() logging.Logger {

@@ -23,10 +23,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/shields/lgtmcp/internal/config"
-	"github.com/shields/lgtmcp/internal/logging"
-	"github.com/shields/lgtmcp/internal/version"
-	mcpserver "github.com/shields/lgtmcp/pkg/mcp"
+	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/logging"
+	"msrl.dev/lgtmcp/internal/version"
+	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
 func main() {

@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shields/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/config"
 )
 
 const (
