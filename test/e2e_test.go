@@ -27,9 +27,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/shields/lgtmcp/internal/config"
-	"github.com/shields/lgtmcp/internal/security"
-	mcpserver "github.com/shields/lgtmcp/pkg/mcp"
+	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/security"
+	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
 var fakeSecrets = security.FakeSecrets{}

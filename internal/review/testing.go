@@ -18,9 +18,9 @@ import (
 	"context"
 	"os"
 
-	"github.com/shields/lgtmcp/internal/logging"
-	"github.com/shields/lgtmcp/internal/prompts"
 	"google.golang.org/genai"
+	"msrl.dev/lgtmcp/internal/logging"
+	"msrl.dev/lgtmcp/internal/prompts"
 )
 
 // IsTestMode returns true if we're running in test mode (no external API calls).

@@ -30,10 +30,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shields/lgtmcp/internal/config"
-	"github.com/shields/lgtmcp/internal/logging"
-	"github.com/shields/lgtmcp/internal/prompts"
 	"google.golang.org/genai"
+	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/logging"
+	"msrl.dev/lgtmcp/internal/prompts"
 )
 
 var (

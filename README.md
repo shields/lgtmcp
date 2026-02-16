@@ -34,7 +34,7 @@ automatically (if approved) or provides detailed feedback for improvements.
 ### Build from source
 
 ```bash
-git clone https://github.com/shields/lgtmcp.git
+git clone https://msrl.dev/lgtmcp.git
 cd lgtmcp
 make build
 ```
