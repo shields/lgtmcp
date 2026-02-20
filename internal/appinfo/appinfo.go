@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package version provides version information for the application.
-package version
+// Package appinfo provides version information for the application.
+package appinfo
 
 import (
 	"fmt"

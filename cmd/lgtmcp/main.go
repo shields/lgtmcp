@@ -23,9 +23,9 @@ import (
 	"os/signal"
 	"syscall"
 
+	"msrl.dev/lgtmcp/internal/appinfo"
 	"msrl.dev/lgtmcp/internal/config"
 	"msrl.dev/lgtmcp/internal/logging"
-	"msrl.dev/lgtmcp/internal/version"
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
@@ -40,7 +40,7 @@ func run() int {
 
 	// Handle version flag.
 	if *versionFlag {
-		_, _ = fmt.Fprintln(os.Stdout, version.String()) //nolint:errcheck // Version output to stdout is not critical
+		_, _ = fmt.Fprintln(os.Stdout, appinfo.String()) //nolint:errcheck // Version output to stdout is not critical
 		return 0
 	}
 
