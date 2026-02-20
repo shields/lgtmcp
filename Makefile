@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: all build test coverage test-integration clean lint fmt deps tools install run help
+.PHONY: all build test coverage test-integration clean lint fmt deps go-tools tools install run help
 
 # Variables
 BINARY_NAME=lgtmcp
@@ -54,14 +54,15 @@ help:
 	@echo "  install       - Install the binary to ~/bin (or INSTALL_PATH)"
 	@echo "  run           - Run the application"
 
-# Install tools locally
-tools:
-	@echo "==> Installing tools..."
+# Install Go tools locally
+go-tools:
 	@mkdir -p bin
 	@GOBIN=$(PWD)/bin $(GOCMD) -C tools install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	@GOBIN=$(PWD)/bin $(GOCMD) -C tools install mvdan.cc/gofumpt
+
+# Install all tools (Go + npm)
+tools: go-tools
 	@npm ci --prefix tools
-	@echo "Tools installed to bin/"
 
 # Download dependencies
 deps: tools
@@ -113,12 +114,12 @@ test-integration:
 test-all: test test-integration coverage
 
 # Run linter
-lint: tools
+lint: go-tools
 	@echo "==> Running golangci-lint..."
 	$(GOLINT) run ./...
 
 # Run linter with auto-fix
-lint-fix: tools
+lint-fix: go-tools
 	@echo "==> Running golangci-lint with auto-fix..."
 	$(GOLINT) run --fix ./...
 
