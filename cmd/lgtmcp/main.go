@@ -29,18 +29,16 @@ import (
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
+var versionFlag = flag.Bool("version", false, "Show version information")
+
 func main() {
+	flag.Parse()
 	os.Exit(run())
 }
 
 func run() int {
-	// Parse command-line flags.
-	versionFlag := flag.Bool("version", false, "Show version information")
-	flag.Parse() //nolint:revive // deep-exit is expected in main
-
-	// Handle version flag.
 	if *versionFlag {
-		_, _ = fmt.Fprintln(os.Stdout, appinfo.String()) //nolint:errcheck // Version output to stdout is not critical
+		_, _ = fmt.Fprintln(os.Stdout, appinfo.String()) //nolint:errcheck // stdout write failure is not actionable
 		return 0
 	}
 
