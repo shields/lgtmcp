@@ -32,7 +32,7 @@ func TestLoad(t *testing.T) {
 google:
   api_key: "test-api-key"
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
 logging:
   level: "debug"
 `
@@ -50,7 +50,7 @@ logging:
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
 		assert.Equal(t, "test-api-key", cfg.Google.APIKey)
-		assert.Equal(t, "gemini-3-pro-preview", cfg.Gemini.Model)
+		assert.Equal(t, "gemini-3.1-pro-preview", cfg.Gemini.Model)
 		assert.Equal(t, "debug", cfg.Logging.Level)
 	})
 
@@ -90,7 +90,7 @@ logging:
 		configPath := filepath.Join(lgtmcpDir, "config.yaml")
 		configContent := `
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
 logging:
   level: "info"
 `
@@ -121,8 +121,8 @@ google:
 		cfg, err := Load()
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
-		assert.Equal(t, "gemini-3-pro-preview", cfg.Gemini.Model) // Default.
-		assert.Equal(t, "info", cfg.Logging.Level)                // Default.
+		assert.Equal(t, "gemini-3.1-pro-preview", cfg.Gemini.Model) // Default.
+		assert.Equal(t, "info", cfg.Logging.Level)                  // Default.
 	})
 
 	t.Run("api key is required", func(t *testing.T) {
@@ -135,7 +135,7 @@ google:
 google:
   # No API key provided
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
@@ -157,7 +157,7 @@ gemini:
 google:
   use_adc: true
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
 logging:
   level: "info"
 `
@@ -170,7 +170,7 @@ logging:
 		assert.NotNil(t, cfg)
 		assert.Empty(t, cfg.Google.APIKey)
 		assert.True(t, cfg.Google.UseADC)
-		assert.Equal(t, "gemini-3-pro-preview", cfg.Gemini.Model)
+		assert.Equal(t, "gemini-3.1-pro-preview", cfg.Gemini.Model)
 	})
 
 	t.Run("api key takes precedence over ADC", func(t *testing.T) {
@@ -184,7 +184,7 @@ google:
   api_key: "test-api-key"
   use_adc: true
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 
@@ -208,7 +208,7 @@ gemini:
 google:
   use_adc: false
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
 `
 		require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0o600))
 

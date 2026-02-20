@@ -188,6 +188,7 @@ type modelPricing struct {
 // pricingByModel maps model names to their pricing (≤200K context).
 // Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
 var pricingByModel = map[string]modelPricing{
+	"gemini-3.1-pro-preview": {InputPrice: 2.00, OutputPrice: 12.00},
 	"gemini-3-pro-preview":   {InputPrice: 2.00, OutputPrice: 12.00},
 	"gemini-2.5-pro":         {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},

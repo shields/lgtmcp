@@ -37,8 +37,8 @@ google:
 # Model configuration
 gemini:
   # Model to use for code review
-  # Default: gemini-3-pro-preview
-  model: "gemini-3-pro-preview"
+  # Default: gemini-3.1-pro-preview
+  model: "gemini-3.1-pro-preview"
 
   # Fallback model to use when primary model quota is exhausted
   # Only triggered on QuotaFailure errors (daily limit exceeded),

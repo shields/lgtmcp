@@ -557,7 +557,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses default model when not specified", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		// Cfg already has default model set to gemini-3-pro-preview.
+		// Cfg already has default model set to gemini-3.1-pro-preview.
 
 		reviewer, err := New(cfg, newTestLogger())
 		require.NoError(t, err)
@@ -757,7 +757,7 @@ func TestReviewDiff_ErrorCases(t *testing.T) {
 					}
 				},
 			},
-			modelName:     "gemini-3-pro-preview",
+			modelName:     "gemini-3.1-pro-preview",
 			temperature:   0.2,
 			promptManager: prompts.New("", ""),
 			logger:        newTestLogger(),
@@ -1390,35 +1390,35 @@ func TestTokenUsage(t *testing.T) {
 		}{
 			{
 				name:             "zero tokens",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     0,
 				candidatesTokens: 0,
 				expectedCost:     0.0,
 			},
 			{
 				name:             "1M input tokens only",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     1_000_000,
 				candidatesTokens: 0,
 				expectedCost:     2.00, // $2.00 per 1M input
 			},
 			{
 				name:             "1M output tokens only",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     0,
 				candidatesTokens: 1_000_000,
 				expectedCost:     12.00, // $12.00 per 1M output
 			},
 			{
 				name:             "mixed tokens",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     500_000, // 0.5M input = $1.00
 				candidatesTokens: 100_000, // 0.1M output = $1.20
 				expectedCost:     2.20,
 			},
 			{
 				name:             "typical review",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     10_000, // 10K input = $0.02
 				candidatesTokens: 1_000,  // 1K output = $0.012
 				expectedCost:     0.032,
@@ -1439,7 +1439,7 @@ func TestTokenUsage(t *testing.T) {
 			},
 			{
 				name:             "thoughts tokens included in output cost",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     0,
 				candidatesTokens: 500_000, // 0.5M output = $6.00
 				thoughtsTokens:   500_000, // 0.5M thoughts = $6.00
@@ -1447,7 +1447,7 @@ func TestTokenUsage(t *testing.T) {
 			},
 			{
 				name:             "cached tokens at 10% of input price",
-				modelName:        "gemini-3-pro-preview",
+				modelName:        "gemini-3.1-pro-preview",
 				promptTokens:     0,
 				candidatesTokens: 0,
 				cachedTokens:     1_000_000, // 1M cached = $2.00 * 0.1 = $0.20
