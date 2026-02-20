@@ -125,12 +125,12 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 				uniqueFiles[file] = true
 				content, contentErr := g.GetFileContent(ctx, file)
 				if contentErr == nil && content != "" {
-					_, _ = diffOutput.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", file, file))
+					_, _ = fmt.Fprintf(&diffOutput, "diff --git a/%s b/%s\n", file, file)
 					_, _ = diffOutput.WriteString("new file mode 100644\n")
 					_, _ = diffOutput.WriteString("--- /dev/null\n")
-					_, _ = diffOutput.WriteString(fmt.Sprintf("+++ b/%s\n", file))
+					_, _ = fmt.Fprintf(&diffOutput, "+++ b/%s\n", file)
 					for line := range strings.SplitSeq(content, "\n") {
-						_, _ = diffOutput.WriteString(fmt.Sprintf("+%s\n", line))
+						_, _ = fmt.Fprintf(&diffOutput, "+%s\n", line)
 					}
 				}
 			}
@@ -158,12 +158,12 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 				if file != "" {
 					content, err := g.GetFileContent(ctx, file)
 					if err == nil && content != "" {
-						_, _ = untrackedDiff.WriteString(fmt.Sprintf("diff --git a/%s b/%s\n", file, file))
+						_, _ = fmt.Fprintf(&untrackedDiff, "diff --git a/%s b/%s\n", file, file)
 						_, _ = untrackedDiff.WriteString("new file mode 100644\n")
 						_, _ = untrackedDiff.WriteString("--- /dev/null\n")
-						_, _ = untrackedDiff.WriteString(fmt.Sprintf("+++ b/%s\n", file))
+						_, _ = fmt.Fprintf(&untrackedDiff, "+++ b/%s\n", file)
 						for line := range strings.SplitSeq(content, "\n") {
-							_, _ = untrackedDiff.WriteString(fmt.Sprintf("+%s\n", line))
+							_, _ = fmt.Fprintf(&untrackedDiff, "+%s\n", line)
 						}
 					}
 				}
@@ -302,7 +302,7 @@ func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error)
 	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // args are constructed internally, not from user input
 	cmd.Dir = g.repoPath
 
 	var stdout, stderr bytes.Buffer
