@@ -12,21 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package version_test
+package appinfo_test
 
 import (
 	"runtime"
 	"strings"
 	"testing"
 
-	"msrl.dev/lgtmcp/internal/version"
+	"msrl.dev/lgtmcp/internal/appinfo"
 )
 
 func TestString(t *testing.T) { //nolint:paralleltest // Modifies global Version variable
 	// Save original version
-	originalVersion := version.Version
+	originalVersion := appinfo.Version
 	t.Cleanup(func() {
-		version.Version = originalVersion
+		appinfo.Version = originalVersion
 	})
 
 	tests := []struct {
@@ -54,8 +54,8 @@ func TestString(t *testing.T) { //nolint:paralleltest // Modifies global Version
 
 	for _, tt := range tests { //nolint:paralleltest // Cannot parallelize due to global state
 		t.Run(tt.name, func(t *testing.T) {
-			version.Version = tt.version
-			result := version.String()
+			appinfo.Version = tt.version
+			result := appinfo.String()
 
 			for _, expected := range tt.expectedContains {
 				if !strings.Contains(result, expected) {
@@ -73,9 +73,9 @@ func TestString(t *testing.T) { //nolint:paralleltest // Modifies global Version
 
 func TestDetailedString(t *testing.T) { //nolint:paralleltest // Modifies global Version variable
 	// Save original version
-	originalVersion := version.Version
+	originalVersion := appinfo.Version
 	t.Cleanup(func() {
-		version.Version = originalVersion
+		appinfo.Version = originalVersion
 	})
 
 	tests := []struct {
@@ -107,8 +107,8 @@ func TestDetailedString(t *testing.T) { //nolint:paralleltest // Modifies global
 
 	for _, tt := range tests { //nolint:paralleltest // Cannot parallelize due to global state
 		t.Run(tt.name, func(t *testing.T) {
-			version.Version = tt.version
-			result := version.DetailedString()
+			appinfo.Version = tt.version
+			result := appinfo.DetailedString()
 
 			for _, expected := range tt.expectedContains {
 				if !strings.Contains(result, expected) {
@@ -127,7 +127,7 @@ func TestDetailedString(t *testing.T) { //nolint:paralleltest // Modifies global
 
 func TestVersionVariable(t *testing.T) { //nolint:paralleltest // Reads global Version variable
 	// Default should be "dev"
-	if version.Version != "dev" {
-		t.Errorf("Version = %q, want %q", version.Version, "dev")
+	if appinfo.Version != "dev" {
+		t.Errorf("Version = %q, want %q", appinfo.Version, "dev")
 	}
 }
