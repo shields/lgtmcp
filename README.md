@@ -17,12 +17,12 @@ limitations under the License.
 # LGTMCP
 
 A Model Context Protocol (MCP) server that provides AI-powered code review using
-Google Gemini 3 Pro. LGTMCP reviews your code changes and either commits them
+Google Gemini 3.1 Pro. LGTMCP reviews your code changes and either commits them
 automatically (if approved) or provides detailed feedback for improvements.
 
 ## Features
 
-- **AI Code Review**: Leverages Google Gemini 3 Pro for intelligent code analysis
+- **AI Code Review**: Leverages Google Gemini 3.1 Pro for intelligent code analysis
 - **Automatic Commit**: Commits changes when code passes review (optional)
 - **Security Scanning**: Built-in secret detection using Gitleaks
 - **Gitignore Protection**: Prevents access to gitignored files during review
@@ -80,14 +80,14 @@ export PATH="$HOME/bin:$PATH"
    google:
      api_key: "your-gemini-api-key-here"
    gemini:
-     model: "gemini-3-pro-preview"
+     model: "gemini-3.1-pro-preview"
      fallback_model: "gemini-2.5-pro" # Default; set to "none" to disable
    logging:
      level: "info"
    ```
 
 The `fallback_model` is use when we run into quota exhaustion on the primary
-model. While Gemini 3 Pro is in preview, it has very low daily rate limits.
+model. While Gemini 3.1 Pro is in preview, it has very low daily rate limits.
 
 ### Claude Code configuration
 
@@ -141,7 +141,7 @@ review_and_commit("/path/to/repo", "Add new feature")
 
 1. **Security check**: Scans files for secrets using Gitleaks
 2. **Diff generation**: Creates diff of all staged and unstaged changes
-3. **AI review**: Sends diff to Gemini 3 Pro for analysis
+3. **AI review**: Sends diff to Gemini 3.1 Pro for analysis
    - Gemini can request file contents for context
    - Gitignored files are automatically blocked from access
 4. **Decision**:

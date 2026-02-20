@@ -37,7 +37,7 @@ func NewForTesting() *Reviewer {
 	}
 	return &Reviewer{
 		client:        newDefaultStubClient(),
-		modelName:     "gemini-3-pro-preview",
+		modelName:     "gemini-3.1-pro-preview",
 		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        logger,
@@ -144,7 +144,7 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 				}, nil
 			},
 		},
-		modelName:     "gemini-3-pro-preview",
+		modelName:     "gemini-3.1-pro-preview",
 		temperature:   0.2,
 		retryConfig:   nil, // No retry for testing by default.
 		promptManager: prompts.New("", ""),

@@ -24,7 +24,7 @@ limitations under the License.
 
 ## Overview
 
-LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3 Pro and either commits them (if approved) or returns review comments.
+LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.1 Pro and either commits them (if approved) or returns review comments.
 
 **Note**: The `mcp__lgtmcp__` tools may run a different version than this repository. Always test with actual code.
 
@@ -58,7 +58,7 @@ LGTMCP is a Model Context Protocol server that reviews code changes using Google
 ## Architecture
 
 - **MCP Server** (`pkg/mcp/`) - Protocol implementation using mark3labs/mcp-go
-- **Review Engine** (`internal/review/`) - Gemini 3 Pro integration with file retrieval
+- **Review Engine** (`internal/review/`) - Gemini 3.1 Pro integration with file retrieval
 - **Git Operations** (`internal/git/`) - Diff generation, commit management, AGENTS.md discovery
 - **Security** (`internal/security/`) - Gitleaks v8 for secret detection
 - **Prompts** (`internal/prompts/`) - Customizable review prompts with embedded defaults
@@ -73,7 +73,7 @@ google:
   api_key: "your-key" # Or use_adc: true for Application Default Credentials
 
 gemini:
-  model: "gemini-3-pro-preview"
+  model: "gemini-3.1-pro-preview"
   fallback_model: "gemini-2.5-pro" # Used when primary model quota is exhausted
   temperature: 0.2
 
@@ -180,7 +180,7 @@ Repositories can include `AGENTS.md` files with project-specific review guidelin
 - **Go**: Single binary, excellent performance, native git ops
 - **mark3labs/mcp-go**: Most mature MCP implementation
 - **Gitleaks v8**: MIT licensed, embedded library (no subprocess)
-- **Gemini 3 Pro Preview**: Advanced reasoning model for code understanding
+- **Gemini 3.1 Pro Preview**: Advanced reasoning model for code understanding
 
 ## Troubleshooting
 
