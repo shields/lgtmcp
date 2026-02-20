@@ -436,7 +436,7 @@ func createTempGitRepo(t *testing.T) string {
 
 func runGitCmd(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.Command("git", args...) //nolint:gosec // test helper with controlled args
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if err != nil {

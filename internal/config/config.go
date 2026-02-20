@@ -32,7 +32,7 @@ var ErrNoCredentials = errors.New(
 // GoogleConfig holds Google/GCP configuration.
 type GoogleConfig struct {
 	// APIKey is the Gemini API key (optional if using Application Default Credentials).
-	APIKey string `json:"api_key,omitempty"`
+	APIKey string `json:"api_key,omitempty"` //nolint:gosec // G117: field name is intentional
 	// UseADC indicates whether to use Application Default Credentials.
 	UseADC bool `json:"use_adc,omitempty"`
 }

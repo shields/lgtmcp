@@ -915,7 +915,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
 	// Use git check-ignore to check if the file is ignored
 	// This respects all .gitignore files in the repository hierarchy
-	cmd := exec.Command("git", "check-ignore", relativePath)
+	cmd := exec.Command("git", "check-ignore", relativePath) //nolint:gosec // relativePath is validated before use
 	cmd.Dir = repoPath
 
 	var stdout, stderr bytes.Buffer

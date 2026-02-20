@@ -137,7 +137,7 @@ func newDirectoryLogger(config Config) (Logger, error) {
 	}
 
 	// Ensure directory exists.
-	if err := os.MkdirAll(logDir, 0o750); err != nil {
+	if err := os.MkdirAll(logDir, 0o750); err != nil { //nolint:gosec // path is from XDG config, not user input
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 

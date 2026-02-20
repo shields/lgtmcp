@@ -158,22 +158,22 @@ func FormatFindings(findings []report.Finding) string {
 	}
 
 	var sb strings.Builder
-	_, _ = sb.WriteString(fmt.Sprintf("🚨 Found %d potential secret(s):\n\n", len(findings)))
+	_, _ = fmt.Fprintf(&sb, "🚨 Found %d potential secret(s):\n\n", len(findings))
 
 	for i, finding := range findings {
-		_, _ = sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, finding.Description))
-		_, _ = sb.WriteString(fmt.Sprintf("   File: %s\n", finding.File))
+		_, _ = fmt.Fprintf(&sb, "%d. %s\n", i+1, finding.Description)
+		_, _ = fmt.Fprintf(&sb, "   File: %s\n", finding.File)
 		if finding.StartLine > 0 {
-			_, _ = sb.WriteString(fmt.Sprintf("   Line: %d\n", finding.StartLine))
+			_, _ = fmt.Fprintf(&sb, "   Line: %d\n", finding.StartLine)
 		}
-		_, _ = sb.WriteString(fmt.Sprintf("   Rule: %s\n", finding.RuleID))
+		_, _ = fmt.Fprintf(&sb, "   Rule: %s\n", finding.RuleID)
 		if finding.Secret != "" {
 			// Redact most of the secret for safety.
 			redacted := redactSecret(finding.Secret)
-			_, _ = sb.WriteString(fmt.Sprintf("   Secret: %s\n", redacted))
+			_, _ = fmt.Fprintf(&sb, "   Secret: %s\n", redacted)
 		}
 		if finding.Commit != "" {
-			_, _ = sb.WriteString(fmt.Sprintf("   Commit: %s\n", finding.Commit))
+			_, _ = fmt.Fprintf(&sb, "   Commit: %s\n", finding.Commit)
 		}
 		_, _ = sb.WriteString("\n")
 	}
