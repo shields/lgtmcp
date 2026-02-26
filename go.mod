@@ -6,7 +6,7 @@ require (
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/stretchr/testify v1.11.1
 	github.com/zricethezav/gitleaks/v8 v8.30.0
-	google.golang.org/genai v1.47.0
+	google.golang.org/genai v1.48.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
