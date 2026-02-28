@@ -20,6 +20,10 @@ A Model Context Protocol (MCP) server that provides AI-powered code review using
 Google Gemini 3.1 Pro. LGTMCP reviews your code changes and either commits them
 automatically (if approved) or provides detailed feedback for improvements.
 
+In my usage, the median review takes 1.9 minutes and costs $0.20, with an
+acceptance rate around 45%. You should decide whether that is slow and
+expensive or fast and cheap.
+
 ## Features
 
 - **AI Code Review**: Leverages Google Gemini 3.1 Pro for intelligent code analysis
