@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -108,13 +108,13 @@ func (g *Git) FindAgentFiles(changedFiles []string) ([]AgentFile, error) {
 	for p := range found {
 		paths = append(paths, p)
 	}
-	sort.Slice(paths, func(i, j int) bool {
-		di := strings.Count(paths[i], string(filepath.Separator))
-		dj := strings.Count(paths[j], string(filepath.Separator))
-		if di != dj {
-			return di < dj
+	slices.SortFunc(paths, func(a, b string) int {
+		da := strings.Count(a, string(filepath.Separator))
+		db := strings.Count(b, string(filepath.Separator))
+		if da != db {
+			return da - db
 		}
-		return paths[i] < paths[j]
+		return strings.Compare(a, b)
 	})
 
 	result := make([]AgentFile, len(paths))
