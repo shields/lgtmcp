@@ -5,7 +5,7 @@ go 1.25.4
 require (
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/stretchr/testify v1.11.1
-	github.com/zricethezav/gitleaks/v8 v8.30.0
+	github.com/zricethezav/gitleaks/v8 v8.30.1
 	google.golang.org/genai v1.50.0
 	sigs.k8s.io/yaml v1.6.0
 )
