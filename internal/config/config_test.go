@@ -62,7 +62,10 @@ logging:
 		cfg, err := Load()
 		require.Error(t, err)
 		assert.Nil(t, cfg)
-		assert.Contains(t, err.Error(), "failed to read config file")
+
+		var notFound *NotFoundError
+		require.ErrorAs(t, err, &notFound)
+		assert.Contains(t, notFound.Path, "config.yaml")
 	})
 
 	t.Run("invalid yaml", func(t *testing.T) {
@@ -79,7 +82,7 @@ logging:
 		cfg, err := Load()
 		require.Error(t, err)
 		assert.Nil(t, cfg)
-		assert.Contains(t, err.Error(), "failed to parse config file")
+		assert.Contains(t, err.Error(), "cannot parse")
 	})
 
 	t.Run("missing api key", func(t *testing.T) {
@@ -101,7 +104,7 @@ logging:
 		cfg, err := Load()
 		require.Error(t, err)
 		assert.Nil(t, cfg)
-		assert.Contains(t, err.Error(), "google.api_key must be set")
+		assert.Equal(t, ErrNoCredentials, err)
 	})
 
 	t.Run("defaults are applied", func(t *testing.T) {

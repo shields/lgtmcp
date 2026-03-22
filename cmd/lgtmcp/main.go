@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -52,7 +53,16 @@ func run() int {
 	// Load configuration.
 	cfg, err := config.Load()
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Error loading config from %s: %v\n", config.GetConfigPath(), err)
+		var notFound *config.NotFoundError
+		if errors.As(err, &notFound) {
+			_, _ = fmt.Fprintf(os.Stderr, "lgtmcp: %v\n\n"+
+				"Create it with at minimum:\n\n"+
+				"  google:\n"+
+				"    api_key: \"your-google-api-key\"\n\n"+
+				"See config.example.yaml for all options.\n", err)
+		} else {
+			_, _ = fmt.Fprintf(os.Stderr, "lgtmcp: %v\n", err)
+		}
 
 		return 1
 	}

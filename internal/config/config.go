@@ -26,8 +26,17 @@ import (
 
 // ErrNoCredentials indicates that no authentication method is configured.
 var ErrNoCredentials = errors.New(
-	"no authentication method configured: either google.api_key must be set or google.use_adc must be true",
+	"google.api_key or google.use_adc must be set",
 )
+
+// NotFoundError indicates the config file was not found.
+type NotFoundError struct {
+	Path string
+}
+
+func (e *NotFoundError) Error() string {
+	return "config file not found: " + e.Path
+}
 
 // GoogleConfig holds Google/GCP configuration.
 type GoogleConfig struct {
@@ -106,18 +115,20 @@ type Config struct {
 }
 
 // Load loads the configuration from the YAML file.
-// Load loads the configuration from the YAML file.
 func Load() (*Config, error) {
 	configPath := GetConfigPath()
 
 	data, err := os.ReadFile(configPath) //nolint:gosec // Path comes from GetConfigPath which is safe
 	if err != nil {
-		return nil, fmt.Errorf("failed to read config file at %s: %w", configPath, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, &NotFoundError{Path: configPath}
+		}
+		return nil, fmt.Errorf("cannot read %s: %w", configPath, err)
 	}
 
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse config file: %w", err)
+		return nil, fmt.Errorf("cannot parse %s: %w", configPath, err)
 	}
 
 	// Set defaults.
