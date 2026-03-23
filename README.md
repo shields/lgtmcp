@@ -30,6 +30,7 @@ expensive or fast and cheap.
 - **Automatic Commit**: Commits changes when code passes review (optional)
 - **Security Scanning**: Built-in secret detection using Gitleaks
 - **Gitignore Protection**: Prevents access to gitignored files during review
+- **Project Guidelines**: Discovers `AGENTS.md` and `REVIEW.md` for project-specific review rules
 - **MCP Integration**: Works seamlessly with Claude Desktop and other MCP clients
 - **Review-Only Mode**: Option to get feedback without automatic commits
 
@@ -151,6 +152,13 @@ review_and_commit("/path/to/repo", "Add new feature")
 4. **Decision**:
    - If approved (LGTM): Returns approval message (`review_only`) or commits changes (`review_and_commit`)
    - If not approved: Returns detailed feedback
+
+### Project-Specific Review Guidelines
+
+Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-specific
+review guidelines. LGTMCP automatically discovers these files by walking from each
+changed file's directory up to the repo root, and injects their contents into the
+review prompt. Files are deduplicated and sorted root-first (shallowest depth first).
 
 ## Configuration
 

@@ -8,20 +8,34 @@ import (
 	"strings"
 )
 
-// AgentFile represents an AGENTS.md file found in the repository.
-type AgentFile struct {
+// InstructionFile represents an AGENTS.md or REVIEW.md file found in the repository.
+type InstructionFile struct {
 	Path    string // Relative path from repo root (e.g., "AGENTS.md" or "src/AGENTS.md")
 	Content string
 }
 
-// maxAgentFileSize is the maximum size of an AGENTS.md file (50KB).
-const maxAgentFileSize = 50 * 1024
+// maxInstructionFileSize is the maximum size of an instruction file (50KB).
+const maxInstructionFileSize = 50 * 1024
 
 // FindAgentFiles discovers AGENTS.md files relevant to the changed files.
 // For each changed file, it walks from the file's directory up to the repo root,
 // collecting unique AGENTS.md files. Results are sorted root-first (fewest path
 // separators), then alphabetically. Files larger than 50KB are skipped.
-func (g *Git) FindAgentFiles(changedFiles []string) ([]AgentFile, error) {
+func (g *Git) FindAgentFiles(changedFiles []string) ([]InstructionFile, error) {
+	return g.findFiles("AGENTS.md", changedFiles)
+}
+
+// FindReviewFiles discovers REVIEW.md files relevant to the changed files.
+// Behaves identically to FindAgentFiles but searches for REVIEW.md.
+func (g *Git) FindReviewFiles(changedFiles []string) ([]InstructionFile, error) {
+	return g.findFiles("REVIEW.md", changedFiles)
+}
+
+// findFiles discovers files with the given filename relevant to the changed files.
+// For each changed file, it walks from the file's directory up to the repo root,
+// collecting unique matches. Results are sorted root-first (fewest path
+// separators), then alphabetically. Files larger than 50KB are skipped.
+func (g *Git) findFiles(filename string, changedFiles []string) ([]InstructionFile, error) {
 	if len(changedFiles) == 0 {
 		return nil, nil
 	}
@@ -50,14 +64,13 @@ func (g *Git) FindAgentFiles(changedFiles []string) ([]AgentFile, error) {
 		}
 	}
 
-	// Check each directory for AGENTS.md and collect unique files by path.
+	// Check each directory for the target file and collect unique files by path.
 	found := make(map[string]string) // path -> content
 	for dir := range dirs {
-		relPath := filepath.Join(dir, "AGENTS.md")
+		relPath := filepath.Join(dir, filename)
 		fullPath := filepath.Join(g.repoPath, relPath)
 
-		info, err := os.Lstat(fullPath)
-		if err != nil {
+		if _, err := os.Lstat(fullPath); err != nil {
 			continue // File doesn't exist
 		}
 
@@ -77,15 +90,9 @@ func (g *Git) FindAgentFiles(changedFiles []string) ([]AgentFile, error) {
 			continue
 		}
 
-		// Skip files that are too large (symlink info.Size is unreliable).
-		if resolvedInfo.Size() > maxAgentFileSize {
+		if resolvedInfo.Size() > maxInstructionFileSize {
 			continue
 		}
-
-		// Lstat reported a symlink but the file itself isn't—still need
-		// to skip non-regular entries detected by the initial Lstat when
-		// EvalSymlinks didn't change anything (e.g., directories named AGENTS.md).
-		_ = info // info was used for Lstat; resolved check above handles all cases.
 
 		if _, exists := found[relPath]; exists {
 			continue
@@ -117,24 +124,36 @@ func (g *Git) FindAgentFiles(changedFiles []string) ([]AgentFile, error) {
 		return strings.Compare(a, b)
 	})
 
-	result := make([]AgentFile, len(paths))
+	result := make([]InstructionFile, len(paths))
 	for i, p := range paths {
-		result[i] = AgentFile{Path: p, Content: found[p]}
+		result[i] = InstructionFile{Path: p, Content: found[p]}
 	}
 	return result, nil
 }
 
 // FormatAgentInstructions formats discovered AGENTS.md files into a prompt section.
 // Returns an empty string if no files are provided.
-func FormatAgentInstructions(files []AgentFile) string {
+func FormatAgentInstructions(files []InstructionFile) string {
+	return formatInstructions(files,
+		"Repository Agent Instructions",
+		"The following AGENTS.md files were found in the repository and contain project-specific review guidelines:")
+}
+
+// FormatReviewInstructions formats discovered REVIEW.md files into a prompt section.
+// Returns an empty string if no files are provided.
+func FormatReviewInstructions(files []InstructionFile) string {
+	return formatInstructions(files,
+		"Repository Review Instructions",
+		"The following REVIEW.md files were found in the repository and contain project-specific review guidelines:")
+}
+
+func formatInstructions(files []InstructionFile, heading, description string) string {
 	if len(files) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	_, _ = sb.WriteString("## Repository Agent Instructions\n\n")
-	_, _ = sb.WriteString("The following AGENTS.md files were found in the repository ")
-	_, _ = sb.WriteString("and contain project-specific review guidelines:\n\n")
+	_, _ = fmt.Fprintf(&sb, "## %s\n\n%s\n\n", heading, description)
 
 	for _, f := range files {
 		_, _ = fmt.Fprintf(&sb, "### %s\n\n%s\n\n", f.Path, strings.TrimSpace(f.Content))

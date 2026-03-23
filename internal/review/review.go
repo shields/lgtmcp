@@ -148,7 +148,7 @@ func (c *RealGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*gen
 // Options contains optional parameters for a review.
 type Options struct {
 	FileFetchCallback FileFetchCallback
-	AgentInstructions string
+	Instructions      string
 }
 
 // Option is a functional option for ReviewDiff.
@@ -161,10 +161,10 @@ func WithFileFetchCallback(callback FileFetchCallback) Option {
 	}
 }
 
-// WithAgentInstructions sets the agent instructions from AGENTS.md files.
-func WithAgentInstructions(instructions string) Option {
+// WithInstructions sets project-specific instructions from AGENTS.md and REVIEW.md files.
+func WithInstructions(instructions string) Option {
 	return func(opts *Options) {
-		opts.AgentInstructions = instructions
+		opts.Instructions = instructions
 	}
 }
 
@@ -593,7 +593,7 @@ func (r *Reviewer) reviewDiffWithModel(
 	}()
 
 	// Phase 1: Let Gemini analyze the code with tool support for file retrieval.
-	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(diff, changedFiles, opts.AgentInstructions)
+	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(diff, changedFiles, opts.Instructions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build context gathering prompt: %w", err)
 	}
@@ -698,7 +698,7 @@ func (r *Reviewer) reviewDiffWithModel(
 	}
 
 	// Phase 2: Get structured review result without tools.
-	reviewPrompt, err := r.promptManager.BuildReviewPrompt(diff, changedFiles, analysisText, opts.AgentInstructions)
+	reviewPrompt, err := r.promptManager.BuildReviewPrompt(diff, changedFiles, analysisText, opts.Instructions)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build review prompt: %w", err)
 	}

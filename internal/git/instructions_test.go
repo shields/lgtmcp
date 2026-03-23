@@ -200,8 +200,8 @@ func TestFindAgentFiles(t *testing.T) {
 		t.Parallel()
 		tmpDir := createTempGitRepo(t)
 
-		// Create an AGENTS.md larger than maxAgentFileSize (50KB).
-		largeContent := strings.Repeat("x", maxAgentFileSize+1)
+		// Create an AGENTS.md larger than maxInstructionFileSize (50KB).
+		largeContent := strings.Repeat("x", maxInstructionFileSize+1)
 		createFile(t, tmpDir, "AGENTS.md", largeContent)
 		createFile(t, tmpDir, "main.go", "package main")
 
@@ -250,13 +250,13 @@ func TestFormatAgentInstructions(t *testing.T) {
 
 	t.Run("empty slice", func(t *testing.T) {
 		t.Parallel()
-		result := FormatAgentInstructions([]AgentFile{})
+		result := FormatAgentInstructions([]InstructionFile{})
 		assert.Empty(t, result)
 	})
 
 	t.Run("single file", func(t *testing.T) {
 		t.Parallel()
-		files := []AgentFile{
+		files := []InstructionFile{
 			{Path: "AGENTS.md", Content: "Review carefully"},
 		}
 		result := FormatAgentInstructions(files)
@@ -267,7 +267,7 @@ func TestFormatAgentInstructions(t *testing.T) {
 
 	t.Run("multiple files", func(t *testing.T) {
 		t.Parallel()
-		files := []AgentFile{
+		files := []InstructionFile{
 			{Path: "AGENTS.md", Content: "Root rules"},
 			{Path: "src/AGENTS.md", Content: "Src rules"},
 		}
@@ -280,11 +280,131 @@ func TestFormatAgentInstructions(t *testing.T) {
 
 	t.Run("trims whitespace from content", func(t *testing.T) {
 		t.Parallel()
-		files := []AgentFile{
+		files := []InstructionFile{
 			{Path: "AGENTS.md", Content: "\n  Instructions with whitespace  \n\n"},
 		}
 		result := FormatAgentInstructions(files)
 		assert.Contains(t, result, "Instructions with whitespace")
 		assert.NotContains(t, result, "\n  Instructions")
+	})
+}
+
+func TestFindReviewFiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no REVIEW.md files", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+
+		createFile(t, tmpDir, "main.go", "package main")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		files, err := g.FindReviewFiles([]string{"main.go"})
+		require.NoError(t, err)
+		assert.Nil(t, files)
+	})
+
+	t.Run("root REVIEW.md only", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+
+		createFile(t, tmpDir, "REVIEW.md", "Review guidelines")
+		createFile(t, tmpDir, "main.go", "package main")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		files, err := g.FindReviewFiles([]string{"main.go"})
+		require.NoError(t, err)
+		require.Len(t, files, 1)
+		assert.Equal(t, "REVIEW.md", files[0].Path)
+		assert.Equal(t, "Review guidelines", files[0].Content)
+	})
+
+	t.Run("nested REVIEW.md only", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+
+		createFile(t, tmpDir, "src/REVIEW.md", "Src review guidelines")
+		createFile(t, tmpDir, "src/main.go", "package main")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		files, err := g.FindReviewFiles([]string{"src/main.go"})
+		require.NoError(t, err)
+		require.Len(t, files, 1)
+		assert.Equal(t, filepath.Join("src", "REVIEW.md"), files[0].Path)
+		assert.Equal(t, "Src review guidelines", files[0].Content)
+	})
+
+	t.Run("coexists with AGENTS.md independently", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+
+		createFile(t, tmpDir, "AGENTS.md", "Agent instructions")
+		createFile(t, tmpDir, "REVIEW.md", "Review guidelines")
+		createFile(t, tmpDir, "main.go", "package main")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		agentFiles, err := g.FindAgentFiles([]string{"main.go"})
+		require.NoError(t, err)
+		require.Len(t, agentFiles, 1)
+		assert.Equal(t, "AGENTS.md", agentFiles[0].Path)
+
+		reviewFiles, err := g.FindReviewFiles([]string{"main.go"})
+		require.NoError(t, err)
+		require.Len(t, reviewFiles, 1)
+		assert.Equal(t, "REVIEW.md", reviewFiles[0].Path)
+	})
+
+	t.Run("empty changed files", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		files, err := g.FindReviewFiles([]string{})
+		require.NoError(t, err)
+		assert.Nil(t, files)
+	})
+}
+
+func TestFormatReviewInstructions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty input", func(t *testing.T) {
+		t.Parallel()
+		result := FormatReviewInstructions(nil)
+		assert.Empty(t, result)
+	})
+
+	t.Run("single file", func(t *testing.T) {
+		t.Parallel()
+		files := []InstructionFile{
+			{Path: "REVIEW.md", Content: "Check for tests"},
+		}
+		result := FormatReviewInstructions(files)
+		assert.Contains(t, result, "Repository Review Instructions")
+		assert.Contains(t, result, "### REVIEW.md")
+		assert.Contains(t, result, "Check for tests")
+	})
+
+	t.Run("multiple files", func(t *testing.T) {
+		t.Parallel()
+		files := []InstructionFile{
+			{Path: "REVIEW.md", Content: "Root review rules"},
+			{Path: "src/REVIEW.md", Content: "Src review rules"},
+		}
+		result := FormatReviewInstructions(files)
+		assert.Contains(t, result, "### REVIEW.md")
+		assert.Contains(t, result, "Root review rules")
+		assert.Contains(t, result, "### src/REVIEW.md")
+		assert.Contains(t, result, "Src review rules")
 	})
 }

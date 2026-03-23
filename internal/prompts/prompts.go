@@ -94,17 +94,17 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 
 // ReviewPromptData contains the data for the review prompt template.
 type ReviewPromptData struct {
-	AnalysisSection string
-	AgentsSection   string
-	FilesList       string
-	Diff            string
-	CurrentDate     string
+	AnalysisSection     string
+	InstructionsSection string
+	FilesList           string
+	Diff                string
+	CurrentDate         string
 }
 
 // BuildReviewPrompt builds the review prompt from template with the given data.
 //
 //nolint:lll // Long function signature
-func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysisText, agentInstructions string) (string, error) {
+func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysisText, instructions string) (string, error) {
 	promptTemplate, err := m.LoadPrompt(ReviewPrompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to load review prompt: %w", err)
@@ -119,11 +119,11 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysis
 	}
 
 	data := ReviewPromptData{
-		AnalysisSection: analysisSection,
-		AgentsSection:   agentInstructions,
-		FilesList:       filesList,
-		Diff:            diff,
-		CurrentDate:     time.Now().Format("January 2, 2006"),
+		AnalysisSection:     analysisSection,
+		InstructionsSection: instructions,
+		FilesList:           filesList,
+		Diff:                diff,
+		CurrentDate:         time.Now().Format("January 2, 2006"),
 	}
 
 	tmpl, err := template.New("review").Parse(promptTemplate)
@@ -141,15 +141,13 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysis
 
 // ContextGatheringPromptData contains the data for the context gathering prompt template.
 type ContextGatheringPromptData struct {
-	AgentsSection string
-	FilesList     string
-	Diff          string
+	InstructionsSection string
+	FilesList           string
+	Diff                string
 }
 
 // BuildContextGatheringPrompt builds the context gathering prompt from template with the given data.
-//
-//nolint:lll // Long function signature
-func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles []string, agentInstructions string) (string, error) {
+func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles []string, instructions string) (string, error) {
 	promptTemplate, err := m.LoadPrompt(ContextGatheringPrompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to load context gathering prompt: %w", err)
@@ -158,7 +156,7 @@ func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles []string
 	filesList := strings.Join(changedFiles, "\n- ")
 
 	data := ContextGatheringPromptData{
-		AgentsSection: agentInstructions,
+		InstructionsSection: instructions,
 		FilesList:     filesList,
 		Diff:          diff,
 	}
