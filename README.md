@@ -24,6 +24,8 @@ In my usage, the median review takes 1.9 minutes and costs $0.20, with an
 acceptance rate around 45%. You should decide whether that is slow and
 expensive or fast and cheap.
 
+[![LGTMCP MCP server](https://glama.ai/mcp/servers/shields/lgtmcp/badges/card.svg)](https://glama.ai/mcp/servers/shields/lgtmcp)
+
 ## Features
 
 - **AI Code Review**: Leverages Google Gemini 3.1 Pro for intelligent code analysis
