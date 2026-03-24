@@ -157,8 +157,8 @@ func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles []string
 
 	data := ContextGatheringPromptData{
 		InstructionsSection: instructions,
-		FilesList:     filesList,
-		Diff:          diff,
+		FilesList:           filesList,
+		Diff:                diff,
 	}
 
 	tmpl, err := template.New("context").Parse(promptTemplate)

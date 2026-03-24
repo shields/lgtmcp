@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: all build test coverage test-integration clean lint fmt deps go-tools tools install run help
+.PHONY: all build test coverage test-integration clean lint fmt deps tools install run help
 
 # Variables
 BINARY_NAME=lgtmcp
@@ -27,9 +27,6 @@ GOCMD=go
 GOBUILD=$(GOCMD) build
 GOTEST=$(GOCMD) test
 GOMOD=$(GOCMD) mod
-GOINSTALL=$(GOCMD) install
-GOFUMPT=bin/gofumpt
-GOLINT=bin/golangci-lint
 
 # Build flags
 VERSION?=dev
@@ -54,14 +51,8 @@ help:
 	@echo "  install       - Install the binary to ~/bin (or INSTALL_PATH)"
 	@echo "  run           - Run the application"
 
-# Install Go tools locally
-go-tools:
-	@mkdir -p bin
-	@GOBIN=$(PWD)/bin $(GOCMD) -C tools install github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-	@GOBIN=$(PWD)/bin $(GOCMD) -C tools install mvdan.cc/gofumpt
-
-# Install all tools (Go + npm)
-tools: go-tools
+# Install npm tools (prettier)
+tools:
 	@npm ci --prefix tools
 
 # Download dependencies
@@ -114,19 +105,19 @@ test-integration:
 test-all: test test-integration coverage
 
 # Run linter
-lint: go-tools
+lint:
 	@echo "==> Running golangci-lint..."
-	$(GOLINT) run ./...
+	$(GOCMD) tool golangci-lint run ./...
 
 # Run linter with auto-fix
-lint-fix: go-tools
+lint-fix:
 	@echo "==> Running golangci-lint with auto-fix..."
-	$(GOLINT) run --fix ./...
+	$(GOCMD) tool golangci-lint run --fix ./...
 
 # Format code
 fmt: tools
 	@echo "==> Formatting Go code..."
-	$(GOFUMPT) -w .
+	$(GOCMD) tool gofumpt -w .
 	@echo "==> Formatting Markdown, JSON, YAML files..."
 	@git ls-files -z '*.md' '*.json' '*.json5' '*.yaml' '*.yml' | xargs -0 -r npx --prefix tools prettier --write
 

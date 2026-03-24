@@ -114,11 +114,7 @@ Example: `lgtmcp --version` outputs `lgtmcp version 1.0.0 (ef22d19, darwin/arm64
 
 ### Tool Management
 
-Tools (golangci-lint v2.4.0, gofumpt v0.8.0) are managed separately in `tools/` directory:
-
-- `tools/go.mod` - Isolated tool dependencies
-- `tools/tools.go` - Tool imports for version pinning
-- Makefile uses `go -C tools` for tool installation
+Go tools (golangci-lint, gofumpt) are managed via the `tool` directive in `go.mod` and invoked with `go tool`. Prettier is managed via npm in `tools/package.json`.
 
 ### Key Commands
 
