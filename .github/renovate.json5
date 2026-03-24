@@ -4,6 +4,11 @@
   ignorePaths: [],
   abandonmentThreshold: "2 years",
   platformAutomerge: true,
+  postUpgradeTasks: {
+    commands: ["go mod tidy -C tools"],
+    fileFilters: ["tools/go.sum"],
+    executionMode: "update",
+  },
   packageRules: [
     {
       description: "Automerge non-major updates",
