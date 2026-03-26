@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -326,13 +327,31 @@ func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error)
 }
 
 func isGitRepo(path string) bool {
-	gitDir := filepath.Join(path, ".git")
-	info, err := os.Stat(gitDir)
+	gitPath := filepath.Join(path, ".git")
+	info, err := os.Stat(gitPath)
 	if err != nil {
 		return false
 	}
+	if info.IsDir() {
+		return true
+	}
+	if !info.Mode().IsRegular() {
+		return false
+	}
+	// Worktrees use a .git file starting with "gitdir: "
+	return hasGitdirPrefix(gitPath)
+}
 
-	return info.IsDir()
+func hasGitdirPrefix(path string) bool {
+	f, err := os.Open(path) //nolint:gosec // path is constructed internally, not from user input
+	if err != nil {
+		return false
+	}
+	defer f.Close() //nolint:errcheck // read-only file, close error is inconsequential
+	const prefix = "gitdir: "
+	buf := make([]byte, len(prefix))
+	_, err = io.ReadFull(f, buf)
+	return err == nil && string(buf) == prefix
 }
 
 // CheckGitRepo verifies that the given path is a valid git repository.

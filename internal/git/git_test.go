@@ -46,9 +46,18 @@ func TestNew(t *testing.T) {
 		require.ErrorIs(t, err, ErrNotGitRepo)
 		assert.Nil(t, g)
 	})
+
+	t.Run("worktree repository", func(t *testing.T) {
+		t.Parallel()
+		worktreeDir := createTempWorktree(t)
+		g, err := New(worktreeDir, nil)
+		require.NoError(t, err)
+		assert.NotNil(t, g)
+		assert.Equal(t, worktreeDir, g.repoPath)
+	})
 }
 
-func TestGetDiff(t *testing.T) {
+func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test function
 	t.Parallel()
 	t.Run("no changes after commit", func(t *testing.T) {
 		t.Parallel()
@@ -302,6 +311,21 @@ func TestGetDiff(t *testing.T) {
 		_, err = g.GetDiff(ctx)
 		require.Error(t, err)
 	})
+
+	t.Run("worktree with changes", func(t *testing.T) {
+		t.Parallel()
+		worktreeDir := createTempWorktree(t)
+
+		g, err := New(worktreeDir, nil)
+		require.NoError(t, err)
+
+		createFile(t, worktreeDir, "worktree-file.txt", "worktree content")
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "worktree-file.txt")
+		assert.Contains(t, diff, "+worktree content")
+	})
 }
 
 func TestStageAll(t *testing.T) {
@@ -512,6 +536,20 @@ func TestGetFileContent(t *testing.T) {
 		assert.Contains(t, err.Error(), "outside repo", "Error should indicate path is outside repo")
 		assert.Empty(t, content, "Should not return any content from outside repo")
 	})
+
+	t.Run("worktree file retrieval", func(t *testing.T) {
+		t.Parallel()
+		worktreeDir := createTempWorktree(t)
+
+		g, err := New(worktreeDir, nil)
+		require.NoError(t, err)
+
+		createFile(t, worktreeDir, "wt-file.txt", "worktree data")
+
+		content, err := g.GetFileContent(t.Context(), "wt-file.txt")
+		require.NoError(t, err)
+		assert.Equal(t, "worktree data", content)
+	})
 }
 
 func TestGetRepoPath(t *testing.T) {
@@ -546,11 +584,17 @@ func TestCheckGitRepo(t *testing.T) {
 		assert.False(t, CheckGitRepo("/nonexistent/path"))
 	})
 
-	t.Run(".git is file not directory", func(t *testing.T) {
+	t.Run(".git file without gitdir prefix", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		createFile(t, tmpDir, ".git", "not a directory")
 		assert.False(t, CheckGitRepo(tmpDir))
+	})
+
+	t.Run("valid git worktree", func(t *testing.T) {
+		t.Parallel()
+		worktreeDir := createTempWorktree(t)
+		assert.True(t, CheckGitRepo(worktreeDir))
 	})
 }
 
@@ -615,6 +659,22 @@ func runGitCmd(t *testing.T, dir string, args ...string) string {
 	}
 
 	return strings.TrimSpace(string(output))
+}
+
+// createTempWorktree creates a main repo with an initial commit and adds a
+// worktree. It returns the worktree path. The main repo and worktree are
+// cleaned up automatically by t.TempDir.
+func createTempWorktree(t *testing.T) string {
+	t.Helper()
+	mainRepo := createTempGitRepo(t)
+	createFile(t, mainRepo, "init.txt", "init")
+	runGitCmd(t, mainRepo, "add", ".")
+	runGitCmd(t, mainRepo, "commit", "-m", "initial")
+
+	worktreeDir := t.TempDir()
+	runGitCmd(t, mainRepo, "worktree", "add", worktreeDir, "-b", "worktree-branch")
+
+	return worktreeDir
 }
 
 // cleanupTempDir is a helper function for test cleanup that handles RemoveAll errors.
