@@ -360,6 +360,27 @@ func TestStageAll(t *testing.T) {
 		err = g.StageAll(t.Context())
 		require.NoError(t, err)
 	})
+
+	t.Run("stage deleted file", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+		defer cleanupTempDir(t, tmpDir)
+
+		createFile(t, tmpDir, "to-delete.txt", "will be deleted")
+		runGitCmd(t, tmpDir, "add", "to-delete.txt")
+		runGitCmd(t, tmpDir, "commit", "-m", "add file")
+
+		require.NoError(t, os.Remove(filepath.Join(tmpDir, "to-delete.txt")))
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageAll(t.Context())
+		require.NoError(t, err)
+
+		status := runGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "D  to-delete.txt")
+	})
 }
 
 func TestCommit(t *testing.T) {
@@ -409,6 +430,24 @@ func TestCommit(t *testing.T) {
 		sha, err := g.Commit(t.Context(), "test commit")
 		require.Error(t, err)
 		assert.Empty(t, sha)
+	})
+
+	t.Run("commit preserves author from config", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := createTempGitRepo(t)
+		defer cleanupTempDir(t, tmpDir)
+
+		createFile(t, tmpDir, "file.txt", "content")
+		runGitCmd(t, tmpDir, "add", "file.txt")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		_, err = g.Commit(t.Context(), "author test")
+		require.NoError(t, err)
+
+		author := runGitCmd(t, tmpDir, "log", "-1", "--format=%an <%ae>")
+		assert.Equal(t, "Test User <test@example.com>", author)
 	})
 }
 
