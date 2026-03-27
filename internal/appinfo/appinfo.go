@@ -23,7 +23,10 @@ import (
 )
 
 // Version is set via ldflags during build.
-var Version = "dev"
+var (
+	Version         = "dev"
+	readBuildInfoFn = debug.ReadBuildInfo
+)
 
 // String returns a formatted version string.
 func String() string {
@@ -31,7 +34,7 @@ func String() string {
 	modified := false
 
 	// Get commit from build info if available
-	if info, ok := debug.ReadBuildInfo(); ok {
+	if info, ok := readBuildInfoFn(); ok {
 		for _, setting := range info.Settings {
 			switch setting.Key {
 			case "vcs.revision":
@@ -65,7 +68,7 @@ func DetailedString() string {
 	_, _ = fmt.Fprintf(&b, "  OS/Arch:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
 	// Add module and VCS information if available
-	if buildInfo, ok := debug.ReadBuildInfo(); ok {
+	if buildInfo, ok := readBuildInfoFn(); ok {
 		if buildInfo.Main.Version != "" && buildInfo.Main.Version != "(devel)" {
 			_, _ = fmt.Fprintf(&b, "  Module:   %s\n", buildInfo.Main.Version)
 		}

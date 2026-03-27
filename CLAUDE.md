@@ -22,6 +22,10 @@ limitations under the License.
 2. After completing any task, run `make lint`, `make test`, then use `mcp__lgtmcp__review_only` to review changes.
 3. Do not use conventional commit prefixes (feat:, fix:, docs:, etc.) in commit messages.
 
+## File Headers
+
+All new files must include the project copyright and Apache 2.0 license header, matching the style of existing files.
+
 ## Overview
 
 LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.1 Pro and either commits them (if approved) or returns review comments.
@@ -93,7 +97,7 @@ prompts:
 
 ```bash
 make test    # Run tests
-make coverage # Run tests with coverage (77.4%)
+make coverage # Run tests with coverage
 make build   # Build binary (VERSION=x.y.z for custom version)
 make lint    # Run golangci-lint
 make fmt     # Format code with gofumpt
@@ -135,18 +139,6 @@ CI workflows in `.github/workflows/`:
 - **codeql.yaml** - CodeQL security scanning for Go (push/PR to main)
 
 All workflows use pinned action versions with SHA hashes for reproducibility.
-
-## Testing Coverage
-
-- **Overall**: 75.8% (well above 70% threshold)
-- **internal/git**: 86.1%
-- **internal/security**: 97.4%
-- **pkg/mcp**: 76.1%
-- **internal/review**: 77.7%
-- **internal/config**: 71.4%
-- **internal/prompts**: 88.1%
-- **internal/logging**: 71.4%
-- **internal/progress**: 40.0%
 
 ## TODO
 

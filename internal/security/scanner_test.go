@@ -17,6 +17,7 @@ package security
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -552,6 +553,20 @@ func TestNewEdgeCases(t *testing.T) {
 		assert.NotNil(t, scanner)
 		assert.NotNil(t, scanner.detector)
 	})
+}
+
+func TestExtractChangedFiles_MalformedHeader(t *testing.T) {
+	t.Parallel()
+	diff := "diff --git a/file.txt\nsome content"
+	files := ExtractChangedFiles(diff)
+	assert.Empty(t, files)
+}
+
+func TestFakeSecrets_AWSAccessKey(t *testing.T) {
+	t.Parallel()
+	key := fakeSecrets.AWSAccessKey()
+	assert.NotEmpty(t, key)
+	assert.True(t, strings.HasPrefix(key, "AKIA"), "AWS access key should start with AKIA")
 }
 
 func TestHasFindings(t *testing.T) {

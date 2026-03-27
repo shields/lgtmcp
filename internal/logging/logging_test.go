@@ -15,8 +15,10 @@
 package logging
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -406,6 +408,158 @@ func TestWith(t *testing.T) {
 		assert.Contains(t, msg, "user=alice")
 		assert.Contains(t, msg, "status=success")
 	})
+}
+
+func TestNopLogger_AllMethods(t *testing.T) {
+	t.Parallel()
+	logger := &nopLogger{}
+	logger.Debug("debug")
+	logger.Info("info")
+	logger.Warn("warn")
+	logger.Error("error")
+	child := logger.With("key", "value")
+	assert.NotNil(t, child)
+	assert.Equal(t, logger, child)
+	assert.NoError(t, logger.Close())
+}
+
+func TestMCPLogger_DebugLevel(t *testing.T) {
+	t.Parallel()
+	sender := &mockMCPSender{}
+	logger, err := New(Config{
+		Output:    "mcp",
+		Level:     "debug",
+		MCPSender: sender,
+	})
+	require.NoError(t, err)
+	defer logger.Close() //nolint:errcheck // Test cleanup
+
+	logger.Debug("debug message")
+	require.Len(t, sender.messages, 1)
+	assert.Contains(t, sender.messages[0], "debug message")
+}
+
+func TestMCPLogger_LevelFiltering(t *testing.T) {
+	t.Parallel()
+	sender := &mockMCPSender{}
+	logger, err := New(Config{
+		Output:    "mcp",
+		Level:     "error",
+		MCPSender: sender,
+	})
+	require.NoError(t, err)
+	defer logger.Close() //nolint:errcheck // Test cleanup
+
+	logger.Debug("filtered debug")
+	logger.Info("filtered info")
+	logger.Warn("filtered warn")
+	assert.Empty(t, sender.messages)
+
+	logger.Error("passed error")
+	require.Len(t, sender.messages, 1)
+	assert.Contains(t, sender.messages[0], "passed error")
+}
+
+func TestStandardLogger_ChildClose(t *testing.T) {
+	t.Parallel()
+	config := Config{
+		Output: "buffer",
+		Level:  "info",
+	}
+	logger, err := New(config)
+	require.NoError(t, err)
+	defer logger.Close() //nolint:errcheck // Test cleanup
+
+	child := logger.With("key", "value")
+	assert.NoError(t, child.Close())
+}
+
+func TestFormatMessage_EmptyArgs(t *testing.T) {
+	t.Parallel()
+	result := formatMessage("hello world")
+	assert.Equal(t, "hello world", result)
+}
+
+func TestDirectoryLogger_MkdirAllError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	// Create a file that blocks directory creation.
+	blocker := filepath.Join(tmpDir, "blocker")
+	require.NoError(t, os.WriteFile(blocker, []byte("x"), 0o600))
+
+	_, err := New(Config{
+		Output:    "directory",
+		Directory: filepath.Join(blocker, "subdir"),
+		Level:     "info",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create log directory")
+}
+
+func TestDirectoryLogger_OpenFileError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	logDir := filepath.Join(tmpDir, "logs")
+	require.NoError(t, os.MkdirAll(logDir, 0o750))
+
+	// Create lgtmcp.log as a directory so OpenFile fails.
+	logFile := filepath.Join(logDir, "lgtmcp.log")
+	require.NoError(t, os.MkdirAll(logFile, 0o750))
+
+	_, err := New(Config{
+		Output:    "directory",
+		Directory: logDir,
+		Level:     "info",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to open log file")
+}
+
+func TestDirectoryLogger_DefaultPath(t *testing.T) {
+	// Don't parallelize — modifies HOME env.
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+	t.Setenv("USERPROFILE", tmpHome)
+
+	// Clear XDG vars so the production code uses its defaults.
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("LOCALAPPDATA", "")
+
+	logger, err := New(Config{
+		Output: "directory",
+		Level:  "info",
+	})
+	require.NoError(t, err)
+	defer logger.Close() //nolint:errcheck // Test cleanup
+
+	var logFile string
+	switch runtime.GOOS {
+	case "darwin":
+		logFile = filepath.Join(tmpHome, "Library", "Logs", "lgtmcp", "lgtmcp.log")
+	case "windows":
+		logFile = filepath.Join(tmpHome, "AppData", "Local", "lgtmcp", "logs", "lgtmcp.log")
+	default:
+		logFile = filepath.Join(tmpHome, ".local", "share", "lgtmcp", "logs", "lgtmcp.log")
+	}
+	assert.FileExists(t, logFile)
+}
+
+func TestMCPLogger_ErrorLevelFiltering(t *testing.T) {
+	t.Parallel()
+	sender := &mockMCPSender{}
+	// Create logger above error level so Error is also filtered.
+	m := &mcpLogger{
+		sender: sender,
+		level:  slog.LevelError + 1,
+	}
+	m.Error("should be filtered")
+	assert.Empty(t, sender.messages)
+}
+
+func TestFormatMessage_SingleUnpairedArg(t *testing.T) {
+	t.Parallel()
+	result := formatMessage("msg", "lonely")
+	assert.Equal(t, "msg", result)
 }
 
 // Mock MCP sender for testing.

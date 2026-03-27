@@ -57,6 +57,7 @@ type Server struct {
 	scanner   *security.Scanner
 	logger    logging.Logger
 	config    *config.Config
+	serveFunc func(*server.MCPServer, ...server.StdioOption) error
 }
 
 // New creates a new MCP server instance.
@@ -84,12 +85,30 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 		scanner:   scanner,
 		logger:    logger,
 		config:    cfg,
+		serveFunc: server.ServeStdio,
 	}
 
 	// Register the review_and_commit tool.
 	s.registerTools()
 
 	return s, nil
+}
+
+// newForTesting creates a Server with injected dependencies for testing.
+//
+//nolint:lll // Test constructor with many parameters
+func newForTesting(cfg *config.Config, logger logging.Logger, reviewer *review.Reviewer, scanner *security.Scanner) *Server {
+	mcpServer := server.NewMCPServer("lgtmcp", Version)
+	s := &Server{
+		mcpServer: mcpServer,
+		reviewer:  reviewer,
+		scanner:   scanner,
+		logger:    logger,
+		config:    cfg,
+		serveFunc: server.ServeStdio,
+	}
+	s.registerTools()
+	return s
 }
 
 // registerTools registers all MCP tools.
@@ -651,5 +670,5 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 func (s *Server) Run(_ context.Context) error {
 	s.logger.Info("Starting LGTMCP server", "version", Version)
 
-	return server.ServeStdio(s.mcpServer)
+	return s.serveFunc(s.mcpServer) //nolint:wrapcheck // ServeStdio errors are top-level
 }

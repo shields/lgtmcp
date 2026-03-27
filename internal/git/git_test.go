@@ -18,7 +18,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,13 +25,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/testutil"
 )
 
 func TestNew(t *testing.T) {
 	t.Parallel()
 	t.Run("valid git repository", func(t *testing.T) {
 		t.Parallel()
-		dir := createTempGitRepo(t)
+		dir := testutil.CreateTempGitRepo(t)
 		g, err := New(dir, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, g)
@@ -61,13 +61,12 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 	t.Parallel()
 	t.Run("no changes after commit", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit.
-		createFile(t, tmpDir, "initial.txt", "content")
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.CreateFile(t, tmpDir, "initial.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -79,11 +78,10 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("initial commit with files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "file1.txt", "content1")
-		createFile(t, tmpDir, "file2.txt", "content2")
+		testutil.CreateFile(t, tmpDir, "file1.txt", "content1")
+		testutil.CreateFile(t, tmpDir, "file2.txt", "content2")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -99,14 +97,13 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("modified files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "file1.txt", "initial")
-		runGitCmd(t, tmpDir, "add", "file1.txt")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.CreateFile(t, tmpDir, "file1.txt", "initial")
+		testutil.RunGitCmd(t, tmpDir, "add", "file1.txt")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
 
-		createFile(t, tmpDir, "file1.txt", "modified")
+		testutil.CreateFile(t, tmpDir, "file1.txt", "modified")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -120,16 +117,15 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("untracked files with existing commits", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit.
-		createFile(t, tmpDir, "existing.txt", "existing content")
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing content")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
 
 		// Add untracked file.
-		createFile(t, tmpDir, "untracked.txt", "new content")
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "new content")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -143,26 +139,25 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("mixed changes - staged and unstaged", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit.
-		createFile(t, tmpDir, "existing.txt", "initial")
-		runGitCmd(t, tmpDir, "add", "existing.txt")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.CreateFile(t, tmpDir, "existing.txt", "initial")
+		testutil.RunGitCmd(t, tmpDir, "add", "existing.txt")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
 
 		// Modify existing file.
-		createFile(t, tmpDir, "existing.txt", "modified")
+		testutil.CreateFile(t, tmpDir, "existing.txt", "modified")
 
 		// Add new staged file.
-		createFile(t, tmpDir, "staged.txt", "staged content")
-		runGitCmd(t, tmpDir, "add", "staged.txt")
+		testutil.CreateFile(t, tmpDir, "staged.txt", "staged content")
+		testutil.RunGitCmd(t, tmpDir, "add", "staged.txt")
 
 		// Modify staged file after staging (creates unstaged changes).
-		createFile(t, tmpDir, "staged.txt", "staged content modified")
+		testutil.CreateFile(t, tmpDir, "staged.txt", "staged content modified")
 
 		// Add untracked file.
-		createFile(t, tmpDir, "untracked.txt", "untracked content")
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "untracked content")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -186,8 +181,7 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("custom context lines", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create a file with multiple lines
 		file := filepath.Join(tmpDir, "multiline.txt")
@@ -198,8 +192,8 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o600))
 
 		// Commit the file
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "Initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "Initial commit")
 
 		// Modify a line in the middle
 		lines[15] = "MODIFIED LINE 16"
@@ -236,8 +230,7 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("default context lines", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Test with nil config (should default to 20)
 		g, err := New(tmpDir, nil)
@@ -256,8 +249,7 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("zero context lines", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create a file with multiple lines
 		file := filepath.Join(tmpDir, "multiline.txt")
@@ -268,8 +260,8 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		require.NoError(t, os.WriteFile(file, []byte(strings.Join(lines, "\n")), 0o600))
 
 		// Commit the file
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "Initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "Initial commit")
 
 		// Modify a line in the middle
 		lines[15] = "MODIFIED LINE 16"
@@ -299,8 +291,7 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 
 	t.Run("context cancellation", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -319,7 +310,7 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		g, err := New(worktreeDir, nil)
 		require.NoError(t, err)
 
-		createFile(t, worktreeDir, "worktree-file.txt", "worktree content")
+		testutil.CreateFile(t, worktreeDir, "worktree-file.txt", "worktree content")
 
 		diff, err := g.GetDiff(t.Context())
 		require.NoError(t, err)
@@ -332,11 +323,10 @@ func TestStageAll(t *testing.T) {
 	t.Parallel()
 	t.Run("stage all changes", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "file1.txt", "content1")
-		createFile(t, tmpDir, "file2.txt", "content2")
+		testutil.CreateFile(t, tmpDir, "file1.txt", "content1")
+		testutil.CreateFile(t, tmpDir, "file2.txt", "content2")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -344,15 +334,14 @@ func TestStageAll(t *testing.T) {
 		err = g.StageAll(t.Context())
 		require.NoError(t, err)
 
-		status := runGitCmd(t, tmpDir, "status", "--porcelain")
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
 		assert.Contains(t, status, "A  file1.txt")
 		assert.Contains(t, status, "A  file2.txt")
 	})
 
 	t.Run("no changes to stage", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -363,12 +352,11 @@ func TestStageAll(t *testing.T) {
 
 	t.Run("stage deleted file", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "to-delete.txt", "will be deleted")
-		runGitCmd(t, tmpDir, "add", "to-delete.txt")
-		runGitCmd(t, tmpDir, "commit", "-m", "add file")
+		testutil.CreateFile(t, tmpDir, "to-delete.txt", "will be deleted")
+		testutil.RunGitCmd(t, tmpDir, "add", "to-delete.txt")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "add file")
 
 		require.NoError(t, os.Remove(filepath.Join(tmpDir, "to-delete.txt")))
 
@@ -378,7 +366,7 @@ func TestStageAll(t *testing.T) {
 		err = g.StageAll(t.Context())
 		require.NoError(t, err)
 
-		status := runGitCmd(t, tmpDir, "status", "--porcelain")
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
 		assert.Contains(t, status, "D  to-delete.txt")
 	})
 }
@@ -387,11 +375,10 @@ func TestCommit(t *testing.T) {
 	t.Parallel()
 	t.Run("successful commit", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "file.txt", "content")
-		runGitCmd(t, tmpDir, "add", "file.txt")
+		testutil.CreateFile(t, tmpDir, "file.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -401,14 +388,13 @@ func TestCommit(t *testing.T) {
 		assert.NotEmpty(t, sha)
 		assert.Len(t, sha, 40)
 
-		log := runGitCmd(t, tmpDir, "log", "--oneline", "-1")
+		log := testutil.RunGitCmd(t, tmpDir, "log", "--oneline", "-1")
 		assert.Contains(t, log, "test commit")
 	})
 
 	t.Run("empty commit message", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -421,8 +407,7 @@ func TestCommit(t *testing.T) {
 
 	t.Run("nothing to commit", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -434,11 +419,10 @@ func TestCommit(t *testing.T) {
 
 	t.Run("commit preserves author from config", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "file.txt", "content")
-		runGitCmd(t, tmpDir, "add", "file.txt")
+		testutil.CreateFile(t, tmpDir, "file.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -446,7 +430,7 @@ func TestCommit(t *testing.T) {
 		_, err = g.Commit(t.Context(), "author test")
 		require.NoError(t, err)
 
-		author := runGitCmd(t, tmpDir, "log", "-1", "--format=%an <%ae>")
+		author := testutil.RunGitCmd(t, tmpDir, "log", "-1", "--format=%an <%ae>")
 		assert.Equal(t, "Test User <test@example.com>", author)
 	})
 }
@@ -455,10 +439,9 @@ func TestGetFileContent(t *testing.T) {
 	t.Parallel()
 	t.Run("read existing file", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "test.txt", "file content")
+		testutil.CreateFile(t, tmpDir, "test.txt", "file content")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -470,11 +453,10 @@ func TestGetFileContent(t *testing.T) {
 
 	t.Run("read file in subdirectory", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "subdir"), 0o750))
-		createFile(t, tmpDir, "subdir/file.txt", "nested content")
+		testutil.CreateFile(t, tmpDir, "subdir/file.txt", "nested content")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -486,8 +468,7 @@ func TestGetFileContent(t *testing.T) {
 
 	t.Run("file not found", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -500,8 +481,7 @@ func TestGetFileContent(t *testing.T) {
 
 	t.Run("absolute path rejected", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -513,8 +493,7 @@ func TestGetFileContent(t *testing.T) {
 
 	t.Run("path traversal rejected", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -526,8 +505,7 @@ func TestGetFileContent(t *testing.T) {
 
 	t.Run("symlink outside repo rejected", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(tmpDir, "link")))
 
@@ -583,7 +561,7 @@ func TestGetFileContent(t *testing.T) {
 		g, err := New(worktreeDir, nil)
 		require.NoError(t, err)
 
-		createFile(t, worktreeDir, "wt-file.txt", "worktree data")
+		testutil.CreateFile(t, worktreeDir, "wt-file.txt", "worktree data")
 
 		content, err := g.GetFileContent(t.Context(), "wt-file.txt")
 		require.NoError(t, err)
@@ -593,8 +571,7 @@ func TestGetFileContent(t *testing.T) {
 
 func TestGetRepoPath(t *testing.T) {
 	t.Parallel()
-	tmpDir := createTempGitRepo(t)
-	defer cleanupTempDir(t, tmpDir)
+	tmpDir := testutil.CreateTempGitRepo(t)
 
 	g, err := New(tmpDir, nil)
 	require.NoError(t, err)
@@ -606,8 +583,7 @@ func TestCheckGitRepo(t *testing.T) {
 	t.Parallel()
 	t.Run("valid git repo", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		assert.True(t, CheckGitRepo(tmpDir))
 	})
@@ -626,7 +602,7 @@ func TestCheckGitRepo(t *testing.T) {
 	t.Run(".git file without gitdir prefix", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
-		createFile(t, tmpDir, ".git", "not a directory")
+		testutil.CreateFile(t, tmpDir, ".git", "not a directory")
 		assert.False(t, CheckGitRepo(tmpDir))
 	})
 
@@ -641,8 +617,7 @@ func TestRunGitCommand(t *testing.T) {
 	t.Parallel()
 	t.Run("command timeout", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -657,8 +632,7 @@ func TestRunGitCommand(t *testing.T) {
 
 	t.Run("invalid command", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanupTempDir(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -668,36 +642,107 @@ func TestRunGitCommand(t *testing.T) {
 	})
 }
 
-func createTempGitRepo(t *testing.T) string {
-	t.Helper()
-	tmpDir := t.TempDir()
-	runGitCmd(t, tmpDir, "init")
-	runGitCmd(t, tmpDir, "config", "user.email", "test@example.com")
-	runGitCmd(t, tmpDir, "config", "user.name", "Test User")
-
-	return tmpDir
-}
-
-func createFile(t *testing.T, dir, name, content string) {
-	t.Helper()
-	fullPath := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(fullPath), 0o750); err != nil {
-		t.Fatalf("Failed to create directories: %v", err)
-	}
-	err := os.WriteFile(fullPath, []byte(content), 0o600)
+func TestStageAll_Error(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	g, err := New(tmpDir, nil)
 	require.NoError(t, err)
+
+	// Remove .git to make git commands fail.
+	require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, ".git")))
+
+	err = g.StageAll(t.Context())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to stage all changes")
 }
 
-func runGitCmd(t *testing.T, dir string, args ...string) string {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // test helper with controlled args
-	cmd.Dir = dir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git command failed: %v\nOutput: %s", err, output)
-	}
+func TestCommit_StatusError(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, tmpDir, "file.txt", "content")
+	testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
 
-	return strings.TrimSpace(string(output))
+	// Remove .git so git status fails.
+	require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, ".git")))
+
+	_, err = g.Commit(t.Context(), "test")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get status")
+}
+
+func TestCommit_CommitCommandError(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, tmpDir, "file.txt", "content")
+	testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	// Create a change to commit.
+	testutil.CreateFile(t, tmpDir, "file.txt", "modified")
+	testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	// Corrupt the index so commit fails.
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, ".git", "index"), []byte("corrupt"), 0o600))
+
+	_, err = g.Commit(t.Context(), "test")
+	require.Error(t, err)
+}
+
+func TestGetFileContent_NotRegularFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	// Create a directory where a file is expected.
+	require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "adir"), 0o750))
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	_, err = g.GetFileContent(t.Context(), "adir")
+	require.ErrorIs(t, err, ErrNotRegularFile)
+}
+
+
+
+func TestHasGitdirPrefix_ShortFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	// Create .git file shorter than "gitdir: " (8 bytes).
+	testutil.CreateFile(t, tmpDir, ".git", "short")
+
+	assert.False(t, CheckGitRepo(tmpDir))
+}
+
+func TestGetDiff_DiffCommandError(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, tmpDir, "file.txt", "content")
+	testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+	testutil.CreateFile(t, tmpDir, "file.txt", "modified")
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	// Remove .git/HEAD to make git diff HEAD fail.
+	require.NoError(t, os.Remove(filepath.Join(tmpDir, ".git", "HEAD")))
+
+	_, err = g.GetDiff(t.Context())
+	require.Error(t, err)
+}
+
+func TestGetDiff_InitialCommitNoFiles(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	_, err = g.GetDiff(t.Context())
+	require.ErrorIs(t, err, ErrNoChanges)
 }
 
 // createTempWorktree creates a main repo with an initial commit and adds a
@@ -705,21 +750,13 @@ func runGitCmd(t *testing.T, dir string, args ...string) string {
 // cleaned up automatically by t.TempDir.
 func createTempWorktree(t *testing.T) string {
 	t.Helper()
-	mainRepo := createTempGitRepo(t)
-	createFile(t, mainRepo, "init.txt", "init")
-	runGitCmd(t, mainRepo, "add", ".")
-	runGitCmd(t, mainRepo, "commit", "-m", "initial")
+	mainRepo := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, mainRepo, "init.txt", "init")
+	testutil.RunGitCmd(t, mainRepo, "add", ".")
+	testutil.RunGitCmd(t, mainRepo, "commit", "-m", "initial")
 
 	worktreeDir := t.TempDir()
-	runGitCmd(t, mainRepo, "worktree", "add", worktreeDir, "-b", "worktree-branch")
+	testutil.RunGitCmd(t, mainRepo, "worktree", "add", worktreeDir, "-b", "worktree-branch")
 
 	return worktreeDir
-}
-
-// cleanupTempDir is a helper function for test cleanup that handles RemoveAll errors.
-func cleanupTempDir(t *testing.T, tmpDir string) {
-	t.Helper()
-	if err := os.RemoveAll(tmpDir); err != nil {
-		t.Logf("Warning: failed to cleanup temp dir %s: %v", tmpDir, err)
-	}
 }

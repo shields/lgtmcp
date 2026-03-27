@@ -17,6 +17,7 @@ package progress
 import (
 	"testing"
 
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -67,5 +68,28 @@ func TestMCPReporter(t *testing.T) {
 		t.Parallel()
 		var reporter Reporter = NewMCPReporter(nil, "test-token")
 		assert.NotNil(t, reporter)
+	})
+
+	t.Run("report with total and message", func(t *testing.T) {
+		t.Parallel()
+		srv := server.NewMCPServer("test", "0.1")
+		reporter := NewMCPReporter(srv, "test-token")
+
+		// Exercises all branches: server != nil, token != nil, total > 0, message != "".
+		// SendNotificationToClient fails silently (no connected client).
+		assert.NotPanics(t, func() {
+			reporter.Report(t.Context(), 3, 10, "processing files")
+		})
+	})
+
+	t.Run("report with zero total and empty message", func(t *testing.T) {
+		t.Parallel()
+		srv := server.NewMCPServer("test", "0.1")
+		reporter := NewMCPReporter(srv, "test-token")
+
+		// Covers the false branches of total > 0 and message != "".
+		assert.NotPanics(t, func() {
+			reporter.Report(t.Context(), 1, 0, "")
+		})
 	})
 }

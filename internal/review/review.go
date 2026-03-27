@@ -111,40 +111,6 @@ type GeminiChat interface {
 	SendMessage(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error)
 }
 
-// RealGeminiClient implements GeminiClient using the actual genai.Client.
-type RealGeminiClient struct {
-	client *genai.Client
-}
-
-// CreateChat creates a new chat session.
-func (c *RealGeminiClient) CreateChat(
-	ctx context.Context, modelName string, genConfig *genai.GenerateContentConfig,
-) (GeminiChat, error) {
-	chat, err := c.client.Chats.Create(ctx, modelName, genConfig, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	return &RealGeminiChat{chat: chat}, nil
-}
-
-// GenerateContent generates content using the Models API.
-func (c *RealGeminiClient) GenerateContent(
-	ctx context.Context, modelName string, contents []*genai.Content, genConfig *genai.GenerateContentConfig,
-) (*genai.GenerateContentResponse, error) {
-	return c.client.Models.GenerateContent(ctx, modelName, contents, genConfig)
-}
-
-// RealGeminiChat implements GeminiChat using the actual chat session.
-type RealGeminiChat struct {
-	chat *genai.Chat
-}
-
-// SendMessage sends a message to the chat session.
-func (c *RealGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error) {
-	return c.chat.SendMessage(ctx, part)
-}
-
 // Options contains optional parameters for a review.
 type Options struct {
 	FileFetchCallback FileFetchCallback
@@ -240,8 +206,6 @@ func (t *tokenUsage) cost(modelName string) float64 {
 	return inputCost + outputCost
 }
 
-// New creates a new Reviewer instance.
-// New creates a new Reviewer with the Gemini API client.
 // New creates a new Reviewer with the Gemini API client.
 func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 	ctx := context.Background()

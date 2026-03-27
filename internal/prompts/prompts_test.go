@@ -258,6 +258,70 @@ func TestPromptData(t *testing.T) {
 	})
 }
 
+func TestBuildReviewPrompt_LoadPromptError(t *testing.T) {
+	t.Parallel()
+	m := New("/nonexistent/review.md", "")
+	_, err := m.BuildReviewPrompt("diff", []string{"file.go"}, "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load review prompt")
+}
+
+func TestBuildContextGatheringPrompt_LoadPromptError(t *testing.T) {
+	t.Parallel()
+	m := New("", "/nonexistent/context.md")
+	_, err := m.BuildContextGatheringPrompt("diff", []string{"file.go"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to load context gathering prompt")
+}
+
+func TestBuildContextGatheringPrompt_TemplateParseError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	customPromptPath := filepath.Join(tmpDir, "broken.md")
+	err := os.WriteFile(customPromptPath, []byte("{{.Broken"), 0o600)
+	require.NoError(t, err)
+
+	m := New("", customPromptPath)
+	_, err = m.BuildContextGatheringPrompt("diff", []string{"file.go"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to parse context gathering prompt template")
+}
+
+func TestBuildContextGatheringPrompt_TemplateExecutionError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	customPromptPath := filepath.Join(tmpDir, "bad_exec.md")
+	// A template function that references a method that doesn't exist on the data struct.
+	err := os.WriteFile(customPromptPath, []byte("{{.Diff.Missing}}"), 0o600)
+	require.NoError(t, err)
+
+	m := New("", customPromptPath)
+	_, err = m.BuildContextGatheringPrompt("diff", []string{"file.go"}, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute context gathering prompt template")
+}
+
+func TestLoadPrompt_CustomContextGatheringPath_NotFound(t *testing.T) {
+	t.Parallel()
+	m := New("", "/nonexistent/path.md")
+	_, err := m.LoadPrompt(ContextGatheringPrompt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to read prompt file")
+}
+
+func TestBuildReviewPrompt_TemplateExecutionError(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	customPromptPath := filepath.Join(tmpDir, "bad_exec.md")
+	err := os.WriteFile(customPromptPath, []byte("{{.Diff.Missing}}"), 0o600)
+	require.NoError(t, err)
+
+	m := New(customPromptPath, "")
+	_, err = m.BuildReviewPrompt("diff", []string{"file.go"}, "", "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to execute review prompt template")
+}
+
 func TestEmbeddedPrompts(t *testing.T) {
 	t.Parallel()
 

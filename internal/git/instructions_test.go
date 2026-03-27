@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"msrl.dev/lgtmcp/internal/testutil"
 )
 
 func TestFindAgentFiles(t *testing.T) {
@@ -15,9 +16,9 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("no AGENTS.md files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -29,10 +30,10 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("root AGENTS.md only", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Root instructions")
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Root instructions")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -46,10 +47,10 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("nested AGENTS.md only", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "src/AGENTS.md", "Src instructions")
-		createFile(t, tmpDir, "src/main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "src/AGENTS.md", "Src instructions")
+		testutil.CreateFile(t, tmpDir, "src/main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -63,11 +64,11 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("root and nested AGENTS.md", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Root instructions")
-		createFile(t, tmpDir, "src/AGENTS.md", "Src instructions")
-		createFile(t, tmpDir, "src/main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Root instructions")
+		testutil.CreateFile(t, tmpDir, "src/AGENTS.md", "Src instructions")
+		testutil.CreateFile(t, tmpDir, "src/main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -84,11 +85,11 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("multiple changed files dedup ancestors", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Root instructions")
-		createFile(t, tmpDir, "src/a.go", "package src")
-		createFile(t, tmpDir, "src/b.go", "package src")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Root instructions")
+		testutil.CreateFile(t, tmpDir, "src/a.go", "package src")
+		testutil.CreateFile(t, tmpDir, "src/b.go", "package src")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -101,10 +102,10 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("deep nesting walks up to root", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Root instructions")
-		createFile(t, tmpDir, "a/b/c/d/file.go", "package d")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Root instructions")
+		testutil.CreateFile(t, tmpDir, "a/b/c/d/file.go", "package d")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -117,10 +118,10 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("root-level changed file", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Root instructions")
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Root instructions")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -133,11 +134,11 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("symlink outside repo is skipped", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create an AGENTS.md outside the repo.
 		outsideDir := t.TempDir()
-		createFile(t, outsideDir, "AGENTS.md", "Evil instructions")
+		testutil.CreateFile(t, outsideDir, "AGENTS.md", "Evil instructions")
 
 		// Create a symlink to it.
 		err := os.Symlink(
@@ -146,7 +147,7 @@ func TestFindAgentFiles(t *testing.T) {
 		)
 		require.NoError(t, err)
 
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -158,11 +159,11 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("directory named AGENTS.md is skipped", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create a directory named AGENTS.md.
 		require.NoError(t, os.MkdirAll(filepath.Join(tmpDir, "AGENTS.md"), 0o750))
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -174,7 +175,7 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("empty changed files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -186,7 +187,7 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("nil changed files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -198,12 +199,12 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("oversized AGENTS.md is skipped", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create an AGENTS.md larger than maxInstructionFileSize (50KB).
 		largeContent := strings.Repeat("x", maxInstructionFileSize+1)
-		createFile(t, tmpDir, "AGENTS.md", largeContent)
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", largeContent)
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -215,14 +216,14 @@ func TestFindAgentFiles(t *testing.T) {
 
 	t.Run("depth sorting with multiple directories", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Root")
-		createFile(t, tmpDir, "a/AGENTS.md", "Level 1 a")
-		createFile(t, tmpDir, "b/AGENTS.md", "Level 1 b")
-		createFile(t, tmpDir, "a/sub/AGENTS.md", "Level 2")
-		createFile(t, tmpDir, "a/sub/file.go", "package sub")
-		createFile(t, tmpDir, "b/file.go", "package b")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Root")
+		testutil.CreateFile(t, tmpDir, "a/AGENTS.md", "Level 1 a")
+		testutil.CreateFile(t, tmpDir, "b/AGENTS.md", "Level 1 b")
+		testutil.CreateFile(t, tmpDir, "a/sub/AGENTS.md", "Level 2")
+		testutil.CreateFile(t, tmpDir, "a/sub/file.go", "package sub")
+		testutil.CreateFile(t, tmpDir, "b/file.go", "package b")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -294,9 +295,9 @@ func TestFindReviewFiles(t *testing.T) {
 
 	t.Run("no REVIEW.md files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -308,10 +309,10 @@ func TestFindReviewFiles(t *testing.T) {
 
 	t.Run("root REVIEW.md only", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "REVIEW.md", "Review guidelines")
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "REVIEW.md", "Review guidelines")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -325,10 +326,10 @@ func TestFindReviewFiles(t *testing.T) {
 
 	t.Run("nested REVIEW.md only", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "src/REVIEW.md", "Src review guidelines")
-		createFile(t, tmpDir, "src/main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "src/REVIEW.md", "Src review guidelines")
+		testutil.CreateFile(t, tmpDir, "src/main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -342,11 +343,11 @@ func TestFindReviewFiles(t *testing.T) {
 
 	t.Run("coexists with AGENTS.md independently", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
-		createFile(t, tmpDir, "AGENTS.md", "Agent instructions")
-		createFile(t, tmpDir, "REVIEW.md", "Review guidelines")
-		createFile(t, tmpDir, "main.go", "package main")
+		testutil.CreateFile(t, tmpDir, "AGENTS.md", "Agent instructions")
+		testutil.CreateFile(t, tmpDir, "REVIEW.md", "Review guidelines")
+		testutil.CreateFile(t, tmpDir, "main.go", "package main")
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
@@ -364,7 +365,7 @@ func TestFindReviewFiles(t *testing.T) {
 
 	t.Run("empty changed files", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)

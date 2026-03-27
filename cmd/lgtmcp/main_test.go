@@ -15,13 +15,64 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestMain(t *testing.T) {
-	t.Parallel()
-	// Test main function is difficult due to os.Exit() calls.
-	// The run() function contains the main logic but requires
-	// a full configuration and would block on server.Run().
-	// Integration tests cover the full application flow.
+func setVersionFlag(t *testing.T, value bool) {
+	t.Helper()
+	old := *versionFlag
+	*versionFlag = value
+	t.Cleanup(func() { *versionFlag = old })
+}
+
+//nolint:paralleltest // Modifies global versionFlag
+func TestRun_VersionFlag(t *testing.T) {
+	setVersionFlag(t, true)
+
+	code := run()
+	assert.Equal(t, 0, code)
+}
+
+func TestRun_ConfigNotFound(t *testing.T) {
+	setVersionFlag(t, false)
+
+	tmpDir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	code := run()
+	assert.Equal(t, 1, code)
+}
+
+func TestRun_ConfigParseError(t *testing.T) {
+	setVersionFlag(t, false)
+
+	tmpDir := t.TempDir()
+	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+	require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"), []byte(":\n\t-:\t:"), 0o600))
+
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	code := run()
+	assert.Equal(t, 1, code)
+}
+
+func TestRun_ConfigNoCredentials(t *testing.T) {
+	setVersionFlag(t, false)
+
+	tmpDir := t.TempDir()
+	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+	require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"),
+		[]byte("gemini:\n  model: test\n"), 0o600))
+
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	code := run()
+	assert.Equal(t, 1, code)
 }

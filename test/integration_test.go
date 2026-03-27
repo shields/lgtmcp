@@ -19,9 +19,7 @@ package test
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,24 +27,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"msrl.dev/lgtmcp/internal/config"
 	"msrl.dev/lgtmcp/internal/git"
-	"msrl.dev/lgtmcp/internal/logging"
 	"msrl.dev/lgtmcp/internal/review"
 	"msrl.dev/lgtmcp/internal/security"
+	"msrl.dev/lgtmcp/internal/testutil"
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
 var fakeSecrets = security.FakeSecrets{}
-
-func newTestLogger() logging.Logger {
-	logger, err := logging.New(logging.Config{
-		Output: "none", // Disable logging in tests by default.
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	return logger
-}
 
 // TestGitIntegration tests the complete git workflow.
 func TestGitIntegration(t *testing.T) {
@@ -54,8 +41,7 @@ func TestGitIntegration(t *testing.T) {
 
 	t.Run("complete git workflow", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		t.Cleanup(func() { cleanup(t, tmpDir) })
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
@@ -70,8 +56,8 @@ func main() {
 	fmt.Println("Hello, World!")
 }`
 		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// Modify file to create a diff.
 		modifiedContent := `package main
@@ -111,8 +97,7 @@ func main() {
 	t.Run("git operations with real repository", func(t *testing.T) {
 		t.Parallel()
 		// Create a fresh git repo for this test.
-		tmpDir := createTempGitRepo(t)
-		t.Cleanup(func() { cleanup(t, tmpDir) })
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
@@ -276,7 +261,7 @@ func main() { println("Hello, World!") }`), 0o600))
 func TestMCPServerIntegration(t *testing.T) {
 	t.Parallel()
 	cfg := config.NewTestConfig()
-	server, err := mcpserver.New(cfg, newTestLogger())
+	server, err := mcpserver.New(cfg, testutil.NewTestLogger())
 	if err != nil {
 		t.Skipf("Cannot create MCP server: %v", err)
 	}
@@ -289,8 +274,7 @@ func TestMCPServerIntegration(t *testing.T) {
 
 	t.Run("handle tools with real repository", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := createTempGitRepo(t)
-		defer cleanup(t, tmpDir)
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create a test file with changes.
 		testFile := filepath.Join(tmpDir, "main.go")
@@ -317,8 +301,7 @@ func TestEndToEndWorkflow(t *testing.T) {
 	t.Run("complete workflow", func(t *testing.T) {
 		t.Parallel()
 		// Create a fresh git repo for this test.
-		tmpDir := createTempGitRepo(t)
-		t.Cleanup(func() { cleanup(t, tmpDir) })
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// 1. Create git repository with initial content.
 		testFile := filepath.Join(tmpDir, "main.go")
@@ -330,8 +313,8 @@ func main() {
 	fmt.Println("Hello")
 }`
 		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// 2. Make changes.
 		modifiedContent := `package main
@@ -381,8 +364,7 @@ func main() {
 	t.Run("workflow with secrets detection", func(t *testing.T) {
 		t.Parallel()
 		// Create a fresh git repo for this test.
-		tmpDir := createTempGitRepo(t)
-		t.Cleanup(func() { cleanup(t, tmpDir) })
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create a file with secrets.
 		secretFile := filepath.Join(tmpDir, "config.env")
@@ -421,34 +403,4 @@ DATABASE_URL=postgres://localhost/mydb`
 			t.Log("No secrets detected by scanner (this may be expected depending on gitleaks rules)")
 		}
 	})
-}
-
-// Helper functions.
-func createTempGitRepo(t *testing.T) string {
-	t.Helper()
-	tmpDir := t.TempDir()
-	runGitCmd(t, tmpDir, "init")
-	runGitCmd(t, tmpDir, "config", "user.email", "test@example.com")
-	runGitCmd(t, tmpDir, "config", "user.name", "Test User")
-
-	return tmpDir
-}
-
-func runGitCmd(t *testing.T, dir string, args ...string) {
-	t.Helper()
-	cmd := exec.Command("git", args...) //nolint:gosec // test helper with controlled args
-	cmd.Dir = dir
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("git command failed: %v\nOutput: %s", err, output)
-	}
-
-	_ = strings.TrimSpace(string(output))
-}
-
-func cleanup(t *testing.T, dir string) {
-	t.Helper()
-	if err := os.RemoveAll(dir); err != nil {
-		t.Logf("Warning: failed to cleanup %s: %v", dir, err)
-	}
 }
