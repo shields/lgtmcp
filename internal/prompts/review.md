@@ -43,7 +43,13 @@ Today's date is {{.CurrentDate}}. NEVER flag version numbers, dependency version
 - The version string has actual syntax errors (e.g., malformed semver)
 - The version is demonstrably incompatible with other code in the diff
 
-This code has already been linted, built, and tested. Do not flag lint issues, missing imports, formatting, or other mechanical problems. Focus your review on higher-level issues: design, correctness, security, and maintainability.
+This code has already been compiled, all tests pass, and lint is clean. Do not flag:
+
+- Lint issues, missing imports, formatting, or other mechanical problems
+- Standard library functions or APIs as "nonexistent" — if the code compiles, the APIs exist. Your training data may predate the language version in use.
+- Test failures or compilation errors — the code has already passed both
+
+Focus your review on higher-level issues: design, correctness, security, and maintainability.
 
 Changed files:
 
