@@ -17,7 +17,7 @@
 # Variables
 BINARY_NAME=lgtmcp
 BINARY_PATH=bin/$(BINARY_NAME)
-MAIN_PATH=./cmd/lgtmcp
+MAIN_PATH=.
 COVERAGE_FILE=coverage.out
 COVERAGE_HTML=coverage.html
 INSTALL_PATH?=$(HOME)/bin
