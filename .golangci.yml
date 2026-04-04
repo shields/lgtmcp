@@ -45,6 +45,7 @@ linters:
     - testpackage # Tests in same package are fine
     - noctx # Not all functions need context
     - noinlineerr # Inline errors are often clearer
+    - maintidx # Flags table-driven tests as too complex
 
   settings:
     dupl:

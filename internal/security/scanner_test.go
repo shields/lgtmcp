@@ -27,6 +27,11 @@ import (
 
 var fakeSecrets = FakeSecrets{}
 
+const (
+	testMainGo      = "main.go"
+	testGoSumHash   = "cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps=" // gitleaks:allow
+)
+
 func TestNew(t *testing.T) {
 	t.Parallel()
 	t.Run("default config", func(t *testing.T) {
@@ -204,9 +209,8 @@ index 0000000..2222222 100644
 		getFileContent := func(path string) (string, error) {
 			switch path {
 			case "go.sum":
-				// This looks like an API key but it's actually a checksum.
-				return "cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps=", nil // gitleaks:allow
-			case "main.go":
+				return testGoSumHash, nil
+			case testMainGo:
 				return `token := "` + fakeSecrets.GitHubPAT() + `"`, nil
 			default:
 				return "", os.ErrNotExist
@@ -218,8 +222,87 @@ index 0000000..2222222 100644
 		// Should find the GitHub token in main.go but not the checksum in go.sum.
 		assert.Len(t, findings, 2) // GitHub PAT triggers both github-pat and generic-api-key rules.
 		for _, finding := range findings {
-			assert.Equal(t, "main.go", finding.File)
+			assert.Equal(t, testMainGo, finding.File)
 			assert.NotEqual(t, "go.sum", finding.File)
+		}
+	})
+
+	t.Run("skip nested go.sum file", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/submodule/go.sum b/submodule/go.sum
+index 0000000..1111111 100644
+--- a/submodule/go.sum
++++ b/submodule/go.sum
+@@ -1 +1 @@
+-old checksum
++cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps= # gitleaks:allow
+diff --git a/main.go b/main.go
+index 0000000..2222222 100644
+--- a/main.go
++++ b/main.go
+@@ -1 +1 @@
+-old code
++token := "` + fakeSecrets.GitHubPAT() + `"`
+
+		getFileContent := func(path string) (string, error) {
+			switch path {
+			case "submodule/go.sum":
+				return testGoSumHash, nil
+			case testMainGo:
+				return `token := "` + fakeSecrets.GitHubPAT() + `"`, nil
+			default:
+				return "", os.ErrNotExist
+			}
+		}
+
+		findings, err := scanner.ScanDiff(t.Context(), diff, getFileContent)
+		require.NoError(t, err)
+		assert.Len(t, findings, 2)
+		for _, finding := range findings {
+			assert.Equal(t, testMainGo, finding.File)
+		}
+	})
+
+	t.Run("skip go.work.sum file", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/go.work.sum b/go.work.sum
+index 0000000..1111111 100644
+--- a/go.work.sum
++++ b/go.work.sum
+@@ -1 +1 @@
+-old checksum
++cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps= # gitleaks:allow
+diff --git a/sub/go.work.sum b/sub/go.work.sum
+index 0000000..1111111 100644
+--- a/sub/go.work.sum
++++ b/sub/go.work.sum
+@@ -1 +1 @@
+-old checksum
++cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps= # gitleaks:allow
+diff --git a/main.go b/main.go
+index 0000000..2222222 100644
+--- a/main.go
++++ b/main.go
+@@ -1 +1 @@
+-old code
++token := "` + fakeSecrets.GitHubPAT() + `"`
+
+		getFileContent := func(path string) (string, error) {
+			switch path {
+			case "go.work.sum", "sub/go.work.sum":
+				return testGoSumHash, nil
+			case testMainGo:
+				return `token := "` + fakeSecrets.GitHubPAT() + `"`, nil
+			default:
+				return "", os.ErrNotExist
+			}
+		}
+
+		findings, err := scanner.ScanDiff(t.Context(), diff, getFileContent)
+		require.NoError(t, err)
+		assert.Len(t, findings, 2)
+		for _, finding := range findings {
+			assert.Equal(t, testMainGo, finding.File)
 		}
 	})
 

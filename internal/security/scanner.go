@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdpath "path"
 	"strings"
 	"sync"
 
@@ -82,9 +83,11 @@ func (s *Scanner) ScanDiff(
 
 	var allFindings []report.Finding
 	for _, file := range changedFiles {
-		// Skip go.sum as it contains checksums/hashes that sometimes
-		// trigger false positives for API key detection.
-		if file == "go.sum" {
+		// Skip go.sum and go.work.sum files as they may contain
+		// checksums/hashes that trigger false positives for API key
+		// detection. Use path.Base (not filepath.Base) since git diffs
+		// always use forward slashes.
+		if base := stdpath.Base(file); base == "go.sum" || base == "go.work.sum" {
 			continue
 		}
 
