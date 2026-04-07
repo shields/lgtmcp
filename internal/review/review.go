@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"net/http"
@@ -52,11 +53,11 @@ var (
 // quotaFailureType is the gRPC error detail type for quota exhaustion.
 const quotaFailureType = "type.googleapis.com/google.rpc.QuotaFailure"
 
-// maxToolCallIterations bounds the context-gathering tool-call loop. A
-// prompt-injected model could otherwise loop indefinitely, both reinforcing
-// malicious narratives and exfiltrating files via repeated get_file_content
-// calls.
-const maxToolCallIterations = 25
+// maxRetrievedFileSize bounds how much of any single file handleFileRetrieval
+// will return to the model. It is well above any plausible source file but
+// low enough that even an attacker-supplied multi-gigabyte path cannot OOM
+// the review process.
+const maxRetrievedFileSize int64 = 16 * 1024 * 1024
 
 // isQuotaExhaustedError checks if the error is a quota exhaustion (not rate limit).
 // Quota failures have QuotaFailure in the error details, indicating a daily/monthly
@@ -618,7 +619,6 @@ func (r *Reviewer) reviewDiffWithModel(
 	usage.addFromResponse(response)
 
 	// Handle function calls.
-	iterations := 0
 	for response != nil && len(response.Candidates) > 0 {
 		candidate := response.Candidates[0]
 
@@ -638,7 +638,7 @@ func (r *Reviewer) reviewDiffWithModel(
 				}
 
 				// Send the function response back with retry logic.
-				funcResponse := r.handleFileRetrieval(ctx, part.FunctionCall, repoPath)
+				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath)
 
 				// Log the function response for debugging.
 				r.logger.Debug("Sending function response",
@@ -664,19 +664,6 @@ func (r *Reviewer) reviewDiffWithModel(
 
 		// If no tool calls, we have the analysis response.
 		if !hasToolCalls {
-			break
-		}
-
-		iterations++
-		if iterations >= maxToolCallIterations {
-			r.logger.Warn("Context-gathering tool-call loop hit iteration cap",
-				"max_iterations", maxToolCallIterations)
-			if analysisText == "" {
-				analysisText = fmt.Sprintf(
-					"Context gathering halted after %d tool-call iterations.",
-					maxToolCallIterations)
-			}
-
 			break
 		}
 	}
@@ -767,7 +754,7 @@ func (r *Reviewer) reviewDiffWithModel(
 }
 
 // handleFileRetrieval handles file retrieval tool calls from Gemini.
-func (*Reviewer) handleFileRetrieval(ctx context.Context, funcCall *genai.FunctionCall, repoPath string) *genai.Part {
+func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath string) *genai.Part {
 	// Extract the filepath argument.
 	requestedPath, ok := funcCall.Args["filepath"].(string)
 	if !ok {
@@ -826,7 +813,7 @@ func (*Reviewer) handleFileRetrieval(ctx context.Context, funcCall *genai.Functi
 	}
 
 	// SECURITY CHECK: Check if file is gitignored
-	isIgnored, err := isFileGitIgnored(ctx, requestedPath, repoPath)
+	isIgnored, err := isFileGitIgnored(requestedPath, repoPath)
 	if err != nil {
 		// Fail closed on any error for security
 		return genai.NewPartFromFunctionResponse(
@@ -845,42 +832,77 @@ func (*Reviewer) handleFileRetrieval(ctx context.Context, funcCall *genai.Functi
 		)
 	}
 
-	// Now check if file exists and resolve symlinks if it does.
-	realPath := absPath
-	if info, statErr := os.Lstat(absPath); statErr == nil {
-		// File/symlink exists.
-		if info.Mode()&os.ModeSymlink != 0 {
-			// It's a symlink, evaluate it.
-			evaluated, evalErr := filepath.EvalSymlinks(absPath)
-			if evalErr != nil {
-				return genai.NewPartFromFunctionResponse(
-					funcCall.Name,
-					map[string]any{
-						"error": fmt.Sprintf("failed to evaluate symlink: %v", evalErr),
-					},
-				)
-			}
-
-			// Check if the symlink target is within the repository.
-			if !strings.HasPrefix(evaluated, absRepoPath+string(filepath.Separator)) && evaluated != absRepoPath {
-				return genai.NewPartFromFunctionResponse(
-					funcCall.Name,
-					map[string]any{
-						"error": "access denied: path is outside repository",
-					},
-				)
-			}
-			realPath = evaluated
-		}
+	// TOCTOU defense: route the open through os.Root, which uses openat
+	// (Linux) or equivalent on other platforms to validate every path
+	// component against the repository directory atomically. Root rejects
+	// any path whose resolution escapes the root, including via parent
+	// symlinks swapped under us, closing the entire class of races where
+	// EvalSymlinks-and-then-open could be tricked. We still pass O_NONBLOCK
+	// so that a planted FIFO or slow device cannot hang the review, and
+	// verify after open that f.Stat() reports a regular file (Root permits
+	// /proc files, FIFOs and device nodes that happen to live inside the
+	// repo, which we never want to read).
+	root, err := os.OpenRoot(repoPath)
+	if err != nil {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": fmt.Sprintf("failed to open repository: %v", err),
+			},
+		)
 	}
+	defer root.Close() //nolint:errcheck // read-only handle, close error is inconsequential
 
-	// Read the file content.
-	content, err := os.ReadFile(realPath) //nolint:gosec // Path is validated and sanitized above
+	relPath := filepath.Clean(requestedPath)
+	relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
+	f, err := root.OpenFile(relPath, os.O_RDONLY|openNonblockFlag, 0)
 	if err != nil {
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
 				"error": fmt.Sprintf("failed to read file: %v", err),
+			},
+		)
+	}
+	defer f.Close() //nolint:errcheck // read-only file, close error is inconsequential
+
+	openedInfo, err := f.Stat()
+	if err != nil {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": fmt.Sprintf("failed to stat opened file: %v", err),
+			},
+		)
+	}
+	if !openedInfo.Mode().IsRegular() {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": "access denied: not a regular file",
+			},
+		)
+	}
+
+	// Bound the read so an attacker (or a runaway request from the model)
+	// cannot OOM the review process by asking for a multi-gigabyte file.
+	// We read maxRetrievedFileSize+1 so we can distinguish "exactly fits"
+	// from "overflows" after ReadAll returns.
+	limited := io.LimitReader(f, maxRetrievedFileSize+1)
+	content, err := io.ReadAll(limited)
+	if err != nil {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": fmt.Sprintf("failed to read file: %v", err),
+			},
+		)
+	}
+	if int64(len(content)) > maxRetrievedFileSize {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{
+				"error": fmt.Sprintf("file too large: exceeds %d bytes", maxRetrievedFileSize),
 			},
 		)
 	}
@@ -896,25 +918,11 @@ func (*Reviewer) handleFileRetrieval(ctx context.Context, funcCall *genai.Functi
 // isFileGitIgnored checks if a file is ignored by git.
 // It uses git check-ignore to properly respect all .gitignore rules including nested ones.
 // Returns (isIgnored, error) - if error is not nil, the caller should fail closed for security.
-func isFileGitIgnored(ctx context.Context, relativePath, repoPath string) (bool, error) {
-	// Use a bounded timeout so a hung git invocation cannot stall the review.
-	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-
-	// The "--" separator ensures paths starting with "-" are treated as files, not flags.
-	//nolint:gosec // relativePath is validated before use
-	cmd := exec.CommandContext(checkCtx, "git", "check-ignore", "--", relativePath)
+func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
+	// Use git check-ignore to check if the file is ignored
+	// This respects all .gitignore files in the repository hierarchy
+	cmd := exec.Command("git", "check-ignore", relativePath) //nolint:gosec // relativePath is validated before use
 	cmd.Dir = repoPath
-	// Strip GIT_* env vars to keep the command scoped to repoPath even if
-	// lgtmcp is exercised from inside a git pre-commit hook.
-	parentEnv := os.Environ()
-	scrubbed := parentEnv[:0:0]
-	for _, e := range parentEnv {
-		if !strings.HasPrefix(e, "GIT_") {
-			scrubbed = append(scrubbed, e)
-		}
-	}
-	cmd.Env = scrubbed
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

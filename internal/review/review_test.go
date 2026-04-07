@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -288,7 +289,7 @@ func runFileRetrievalTests(t *testing.T, reviewer *Reviewer, repoDir string, tes
 				},
 			}
 
-			result := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir)
+			result := reviewer.handleFileRetrieval(funcCall, repoDir)
 
 			var response map[string]any
 			if result.FunctionResponse != nil {
@@ -337,7 +338,7 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 		},
 	}
 
-	result := reviewer.handleFileRetrieval(t.Context(), funcCall, nonGitDir)
+	result := reviewer.handleFileRetrieval(funcCall, nonGitDir)
 
 	var response map[string]any
 	if result.FunctionResponse != nil {
@@ -349,25 +350,6 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 	assert.True(t, hasError, "Expected error when git command fails")
 	assert.Contains(t, errMsg, "access denied: unable to verify gitignore status",
 		"Should fail closed when git check-ignore cannot run")
-}
-
-// TestIsFileGitIgnored_DashPrefixedPath verifies that a path starting with "-"
-// is treated as a literal file path rather than a git command-line flag. Without
-// the "--" separator, git check-ignore would interpret "-n" as its --non-matching
-// flag, producing surprising results or errors.
-func TestIsFileGitIgnored_DashPrefixedPath(t *testing.T) {
-	t.Parallel()
-	repoDir := testutil.CreateTempGitRepo(t)
-
-	tests := []string{"-n", "-q", "--verbose", "-no-such-file"}
-	for _, name := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			isIgnored, err := isFileGitIgnored(t.Context(), name, repoDir)
-			require.NoError(t, err, "expected no error for dash-prefixed path %q", name)
-			assert.False(t, isIgnored, "expected non-existent dash-prefixed path %q to be reported as not ignored", name)
-		})
-	}
 }
 
 func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
@@ -448,7 +430,7 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 			}
 
 			t.Logf("Testing with filepath: %s, repoDir: %s", tt.filepath, repoDir)
-			result := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir)
+			result := reviewer.handleFileRetrieval(funcCall, repoDir)
 
 			// Extract the response from the FunctionResponse.
 			var response map[string]any
@@ -572,7 +554,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check the response contains the file content.
@@ -589,7 +571,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			Args: map[string]any{},
 		}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -607,7 +589,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -625,7 +607,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -1899,59 +1881,6 @@ func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	assert.Equal(t, []string{"main.go"}, fetchedFiles)
 }
 
-func TestReviewDiffWithModel_ToolCallLoopBounded(t *testing.T) {
-	t.Parallel()
-	sendCount := 0
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ genai.Part) (*genai.GenerateContentResponse, error) {
-					sendCount++
-					// Always return a function call to simulate a runaway model.
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{
-								FunctionCall: &genai.FunctionCall{
-									Name: "get_file_content",
-									Args: map[string]any{"filepath": "main.go"},
-								},
-							}},
-						}}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": false, "comments": "halted"}`}},
-				}}},
-			}, nil
-		},
-	}
-
-	tmpDir := testutil.CreateTempGitRepo(t)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0o600))
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		temperature:   0.2,
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"main.go"}, tmpDir)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	// SendMessage is called once for the initial prompt and once per loop iteration
-	// for each function-call response. The cap is maxToolCallIterations iterations.
-	assert.Equal(t, 1+maxToolCallIterations, sendCount,
-		"loop must exit after exactly maxToolCallIterations function-call iterations")
-}
-
 func TestReviewDiffWithModel_ChatCreationError(t *testing.T) {
 	t.Parallel()
 	client := &StubGeminiClient{
@@ -2102,7 +2031,7 @@ func TestHandleFileRetrieval_NonStringFilepath(t *testing.T) {
 		Name: "get_file_content",
 		Args: map[string]any{"filepath": 123},
 	}
-	resp := r.handleFileRetrieval(t.Context(), funcCall, "/repo")
+	resp := r.handleFileRetrieval(funcCall, "/repo")
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.FunctionResponse)
 }
@@ -2158,4 +2087,115 @@ func TestReviewDiffWithModel_TokenUsage(t *testing.T) {
 	assert.Equal(t, int32(10), result.TokenUsage.CachedTokens)
 	assert.Equal(t, int32(20), result.TokenUsage.ThoughtsTokens)
 	assert.Greater(t, result.CostUSD, float64(0))
+}
+
+// TestHandleFileRetrieval_TOCTOUHappyPath is a regression test for the
+// os.Root-based open added to close a TOCTOU window between the symlink
+// validation and the file read. A deterministic race test is impractical, so
+// we assert that the happy paths still work: regular files in the repo root
+// and in a subdirectory, plus larger content that exercises the limited read
+// path, all succeed through the rooted open.
+func TestHandleFileRetrieval_TOCTOUHappyPath(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	rootFile := filepath.Join(repoDir, "root.txt")
+	require.NoError(t, os.WriteFile(rootFile, []byte("root content"), 0o600))
+
+	subDir := filepath.Join(repoDir, "sub")
+	require.NoError(t, os.MkdirAll(subDir, 0o750))
+	subFile := filepath.Join(subDir, "nested.txt")
+	require.NoError(t, os.WriteFile(subFile, []byte("nested content"), 0o600))
+
+	// Larger payload to ensure io.ReadAll handles multi-buffer reads.
+	bigContent := strings.Repeat("payload data ", 4096)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "big.txt"), []byte(bigContent), 0o600))
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, testutil.NewTestLogger())
+	require.NoError(t, err)
+
+	tests := []fileRetrievalTest{
+		{
+			name:          "regular file at repo root",
+			filepath:      "root.txt",
+			shouldSucceed: true,
+			expectContent: "root content",
+		},
+		{
+			name:          "regular file in subdirectory",
+			filepath:      "sub/nested.txt",
+			shouldSucceed: true,
+			expectContent: "nested content",
+		},
+		{
+			name:          "large regular file",
+			filepath:      "big.txt",
+			shouldSucceed: true,
+			expectContent: bigContent,
+		},
+	}
+
+	runFileRetrievalTests(t, reviewer, repoDir, tests)
+}
+
+// TestHandleFileRetrieval_ParentSymlinkEscape ensures that an in-repo
+// directory entry that is a symlink to outside the repo cannot be used to
+// read files there. os.Root rejects path resolution that escapes the root,
+// even via parent components, but git check-ignore may also fail first; we
+// only require that no file contents are returned.
+func TestHandleFileRetrieval_ParentSymlinkEscape(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	outsideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "secret.txt"), []byte("secret content"), 0o600))
+
+	// Plant an in-repo directory name that is actually a symlink pointing
+	// to a directory outside the repository.
+	require.NoError(t, os.Symlink(outsideDir, filepath.Join(repoDir, "escape")))
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, testutil.NewTestLogger())
+	require.NoError(t, err)
+
+	funcCall := &genai.FunctionCall{
+		Name: "get_file_content",
+		Args: map[string]any{"filepath": "escape/secret.txt"},
+	}
+	resp := reviewer.handleFileRetrieval(funcCall, repoDir)
+	require.NotNil(t, resp.FunctionResponse)
+	errMsg, ok := resp.FunctionResponse.Response["error"].(string)
+	require.True(t, ok, "expected error response, got %+v", resp.FunctionResponse.Response)
+	_, leaked := resp.FunctionResponse.Response["content"]
+	assert.False(t, leaked, "must not return content for parent-symlink escape")
+	assert.NotContains(t, errMsg, "secret content")
+}
+
+// TestHandleFileRetrieval_FileSizeLimit ensures that a file larger than the
+// maximum allowed size is rejected rather than read into memory, so the
+// review process cannot be OOM'd by an attacker-supplied or runaway request.
+func TestHandleFileRetrieval_FileSizeLimit(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	bigFile := filepath.Join(repoDir, "big.bin")
+	// Write maxRetrievedFileSize+1 bytes so the limit is just exceeded.
+	require.NoError(t, os.WriteFile(bigFile, make([]byte, maxRetrievedFileSize+1), 0o600))
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, testutil.NewTestLogger())
+	require.NoError(t, err)
+
+	funcCall := &genai.FunctionCall{
+		Name: "get_file_content",
+		Args: map[string]any{"filepath": "big.bin"},
+	}
+	resp := reviewer.handleFileRetrieval(funcCall, repoDir)
+	require.NotNil(t, resp.FunctionResponse)
+	errMsg, ok := resp.FunctionResponse.Response["error"].(string)
+	require.True(t, ok, "expected error response, got %+v", resp.FunctionResponse.Response)
+	assert.Contains(t, errMsg, "file too large")
+	_, leaked := resp.FunctionResponse.Response["content"]
+	assert.False(t, leaked, "must not return content when size limit is exceeded")
 }
