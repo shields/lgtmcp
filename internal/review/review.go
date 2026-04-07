@@ -52,6 +52,12 @@ var (
 // quotaFailureType is the gRPC error detail type for quota exhaustion.
 const quotaFailureType = "type.googleapis.com/google.rpc.QuotaFailure"
 
+// maxToolCallIterations bounds the context-gathering tool-call loop. A
+// prompt-injected model could otherwise loop indefinitely, both reinforcing
+// malicious narratives and exfiltrating files via repeated get_file_content
+// calls.
+const maxToolCallIterations = 25
+
 // isQuotaExhaustedError checks if the error is a quota exhaustion (not rate limit).
 // Quota failures have QuotaFailure in the error details, indicating a daily/monthly
 // limit has been reached. This is distinct from rate limiting, which is temporary.
@@ -612,6 +618,7 @@ func (r *Reviewer) reviewDiffWithModel(
 	usage.addFromResponse(response)
 
 	// Handle function calls.
+	iterations := 0
 	for response != nil && len(response.Candidates) > 0 {
 		candidate := response.Candidates[0]
 
@@ -657,6 +664,19 @@ func (r *Reviewer) reviewDiffWithModel(
 
 		// If no tool calls, we have the analysis response.
 		if !hasToolCalls {
+			break
+		}
+
+		iterations++
+		if iterations >= maxToolCallIterations {
+			r.logger.Warn("Context-gathering tool-call loop hit iteration cap",
+				"max_iterations", maxToolCallIterations)
+			if analysisText == "" {
+				analysisText = fmt.Sprintf(
+					"Context gathering halted after %d tool-call iterations.",
+					maxToolCallIterations)
+			}
+
 			break
 		}
 	}
