@@ -706,8 +706,6 @@ func TestGetFileContent_NotRegularFile(t *testing.T) {
 	require.ErrorIs(t, err, ErrNotRegularFile)
 }
 
-
-
 func TestHasGitdirPrefix_ShortFile(t *testing.T) {
 	t.Parallel()
 	tmpDir := t.TempDir()
