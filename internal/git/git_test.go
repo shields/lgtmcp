@@ -371,6 +371,130 @@ func TestStageAll(t *testing.T) {
 	})
 }
 
+func TestStageFiles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("stages only listed files and skips extras", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		// The two files that "passed the security scan".
+		testutil.CreateFile(t, tmpDir, "scanned1.txt", "content1")
+		testutil.CreateFile(t, tmpDir, "scanned2.txt", "content2")
+
+		// An extra file that appears after the scan but before staging.
+		testutil.CreateFile(t, tmpDir, "extra-unscanned.txt", "leaked secret")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"scanned1.txt", "scanned2.txt"})
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "A  scanned1.txt")
+		assert.Contains(t, status, "A  scanned2.txt")
+		// The extra file must remain untracked, never staged.
+		assert.Contains(t, status, "?? extra-unscanned.txt")
+		assert.NotContains(t, status, "A  extra-unscanned.txt")
+	})
+
+	t.Run("empty file list is a no-op", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "data")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), nil)
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "?? untracked.txt")
+	})
+
+	t.Run("stages modifications and deletions for listed files", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "to-modify.txt", "original")
+		testutil.CreateFile(t, tmpDir, "to-delete.txt", "doomed")
+		testutil.CreateFile(t, tmpDir, "untouched.txt", "keep")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.CreateFile(t, tmpDir, "to-modify.txt", "changed")
+		require.NoError(t, os.Remove(filepath.Join(tmpDir, "to-delete.txt")))
+		// An extra file appearing after the original scan.
+		testutil.CreateFile(t, tmpDir, "sneaky.txt", "should not be staged")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"to-modify.txt", "to-delete.txt"})
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "M  to-modify.txt")
+		assert.Contains(t, status, "D  to-delete.txt")
+		assert.Contains(t, status, "?? sneaky.txt")
+		assert.NotContains(t, status, "A  sneaky.txt")
+	})
+
+	t.Run("rejects empty path", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"valid.txt", ""})
+		require.ErrorIs(t, err, ErrInvalidPath)
+	})
+
+	t.Run("literal pathspec prevents wildcard expansion", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		// A file literally named "*". Without GIT_LITERAL_PATHSPECS,
+		// this would glob to every file in the directory.
+		testutil.CreateFile(t, tmpDir, "star.txt", "the star")
+		testutil.CreateFile(t, tmpDir, "secret.txt", "leaked secret")
+		testutil.CreateFile(t, tmpDir, "*", "literal star file")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"*"})
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		// Only the literal "*" file should be staged.
+		assert.Contains(t, status, "A  *\n")
+		assert.Contains(t, status, "?? secret.txt")
+		assert.Contains(t, status, "?? star.txt")
+		assert.NotContains(t, status, "A  secret.txt")
+		assert.NotContains(t, status, "A  star.txt")
+	})
+
+	t.Run("stages files whose names begin with dash", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "-dashed.txt", "leading dash")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"-dashed.txt"})
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "-dashed.txt")
+		assert.NotContains(t, status, "??")
+	})
+}
+
 func TestCommit(t *testing.T) {
 	t.Parallel()
 	t.Run("successful commit", func(t *testing.T) {
@@ -654,6 +778,21 @@ func TestStageAll_Error(t *testing.T) {
 	err = g.StageAll(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to stage all changes")
+}
+
+func TestStageFiles_Error(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, tmpDir, "file.txt", "content")
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	// Remove .git to make git commands fail.
+	require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, ".git")))
+
+	err = g.StageFiles(t.Context(), []string{"file.txt"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to stage files")
 }
 
 func TestCommit_StatusError(t *testing.T) {

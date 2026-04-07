@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -141,8 +142,10 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 		// Normal case: diff between HEAD and working directory (including untracked files).
 		// This shows all changes regardless of staging status.
 		// Use the configured context lines (default 20).
+		// Force canonical a/ and b/ prefixes so downstream parsers stay correct
+		// even if the user has diff.mnemonicPrefix=true in their git config.
 		contextFlag := fmt.Sprintf("--unified=%d", g.diffContextLines)
-		diff, err = g.runGitCommand(ctx, "diff", contextFlag, "HEAD", "--", ".")
+		diff, err = g.runGitCommand(ctx, "diff", contextFlag, "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--", ".")
 		if err != nil {
 			return "", fmt.Errorf("failed to get diff against HEAD: %w", err)
 		}
@@ -190,6 +193,37 @@ func (g *Git) StageAll(ctx context.Context) error {
 	_, err := g.runGitCommand(ctx, "add", "-A")
 	if err != nil {
 		return fmt.Errorf("failed to stage all changes: %w", err)
+	}
+
+	return nil
+}
+
+// StageFiles stages only the specified files (additions, modifications, and
+// deletions). Limiting staging to a known list avoids picking up files that
+// appeared in the working directory after the security scan but before commit.
+func (g *Git) StageFiles(ctx context.Context, files []string) error {
+	if len(files) == 0 {
+		return nil
+	}
+
+	if slices.Contains(files, "") {
+		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
+	// Pass paths via stdin (NUL-separated) so we never hit ARG_MAX, and set
+	// GIT_LITERAL_PATHSPECS=1 so wildcard-named files like "*" are treated as
+	// literal paths instead of globs that could match unscanned content.
+	var stdin bytes.Buffer
+	for _, f := range files {
+		_, _ = stdin.WriteString(f)
+		_ = stdin.WriteByte(0)
+	}
+
+	if _, err := g.runGitCommandStdin(
+		ctx, &stdin, []string{"GIT_LITERAL_PATHSPECS=1"},
+		"add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
+	); err != nil {
+		return fmt.Errorf("failed to stage files: %w", err)
 	}
 
 	return nil
@@ -304,6 +338,12 @@ func (g *Git) GetRepoPath() string {
 }
 
 func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error) {
+	return g.runGitCommandStdin(ctx, nil, nil, args...)
+}
+
+func (g *Git) runGitCommandStdin(
+	ctx context.Context, stdin io.Reader, extraEnv []string, args ...string,
+) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
@@ -313,6 +353,12 @@ func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error)
 	// being redirected by an inherited GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_*
 	// (which happens when lgtmcp is exercised from inside a git pre-commit hook).
 	cmd.Env = scrubGitEnv(os.Environ())
+	if len(extraEnv) > 0 {
+		cmd.Env = append(cmd.Env, extraEnv...)
+	}
+	if stdin != nil {
+		cmd.Stdin = stdin
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
