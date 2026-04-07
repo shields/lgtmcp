@@ -1880,6 +1880,59 @@ func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	assert.Equal(t, []string{"main.go"}, fetchedFiles)
 }
 
+func TestReviewDiffWithModel_ToolCallLoopBounded(t *testing.T) {
+	t.Parallel()
+	sendCount := 0
+	client := &StubGeminiClient{
+		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
+			return &StubGeminiChat{
+				SendMessageFunc: func(_ context.Context, _ genai.Part) (*genai.GenerateContentResponse, error) {
+					sendCount++
+					// Always return a function call to simulate a runaway model.
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: &genai.Content{
+							Parts: []*genai.Part{{
+								FunctionCall: &genai.FunctionCall{
+									Name: "get_file_content",
+									Args: map[string]any{"filepath": "main.go"},
+								},
+							}},
+						}}},
+					}, nil
+				},
+			}, nil
+		},
+		GenerateContentFunc: func(
+			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{Content: &genai.Content{
+					Parts: []*genai.Part{{Text: `{"lgtm": false, "comments": "halted"}`}},
+				}}},
+			}, nil
+		},
+	}
+
+	tmpDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0o600))
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"main.go"}, tmpDir)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	// SendMessage is called once for the initial prompt and once per loop iteration
+	// for each function-call response. The cap is maxToolCallIterations iterations.
+	assert.Equal(t, 1+maxToolCallIterations, sendCount,
+		"loop must exit after exactly maxToolCallIterations function-call iterations")
+}
+
 func TestReviewDiffWithModel_ChatCreationError(t *testing.T) {
 	t.Parallel()
 	client := &StubGeminiClient{

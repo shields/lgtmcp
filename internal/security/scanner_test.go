@@ -28,8 +28,8 @@ import (
 var fakeSecrets = FakeSecrets{}
 
 const (
-	testMainGo      = "main.go"
-	testGoSumHash   = "cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps=" // gitleaks:allow
+	testMainGo    = "main.go"
+	testGoSumHash = "cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps=" // gitleaks:allow
 )
 
 func TestNew(t *testing.T) {
