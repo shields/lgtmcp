@@ -305,6 +305,10 @@ func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error)
 
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // args are constructed internally, not from user input
 	cmd.Dir = g.repoPath
+	// Strip GIT_* env vars so the command operates on g.repoPath rather than
+	// being redirected by an inherited GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_*
+	// (which happens when lgtmcp is exercised from inside a git pre-commit hook).
+	cmd.Env = scrubGitEnv(os.Environ())
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -324,6 +328,18 @@ func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error)
 	}
 
 	return stdout.String(), nil
+}
+
+// scrubGitEnv returns env with all GIT_* variables removed.
+func scrubGitEnv(env []string) []string {
+	out := env[:0:0]
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func isGitRepo(path string) bool {

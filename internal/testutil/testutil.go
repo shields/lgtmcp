@@ -48,15 +48,34 @@ func CreateFile(t *testing.T, dir, name, content string) {
 }
 
 // RunGitCmd runs a git command in the specified directory and returns its output.
+//
+// The environment is scrubbed of any GIT_* variables inherited from the caller
+// so that the command operates strictly on the directory passed in. Without
+// this, running tests under a git pre-commit hook (which sets GIT_DIR,
+// GIT_INDEX_FILE, GIT_AUTHOR_*, etc.) would silently make every test git
+// invocation operate on the surrounding repository — corrupting it.
 func RunGitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...) //nolint:gosec // Test helper with controlled args
 	cmd.Dir = dir
+	cmd.Env = scrubGitEnv(os.Environ())
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git command failed: %v\nOutput: %s", err, output)
 	}
 	return strings.TrimSpace(string(output))
+}
+
+// scrubGitEnv returns env with all GIT_* variables removed.
+func scrubGitEnv(env []string) []string {
+	out := env[:0:0]
+	for _, e := range env {
+		if strings.HasPrefix(e, "GIT_") {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // CreateTempGitRepo creates a temporary git repository with user config for commits.

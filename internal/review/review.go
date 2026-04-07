@@ -905,6 +905,16 @@ func isFileGitIgnored(ctx context.Context, relativePath, repoPath string) (bool,
 	//nolint:gosec // relativePath is validated before use
 	cmd := exec.CommandContext(checkCtx, "git", "check-ignore", "--", relativePath)
 	cmd.Dir = repoPath
+	// Strip GIT_* env vars to keep the command scoped to repoPath even if
+	// lgtmcp is exercised from inside a git pre-commit hook.
+	parentEnv := os.Environ()
+	scrubbed := parentEnv[:0:0]
+	for _, e := range parentEnv {
+		if !strings.HasPrefix(e, "GIT_") {
+			scrubbed = append(scrubbed, e)
+		}
+	}
+	cmd.Env = scrubbed
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
