@@ -251,42 +251,46 @@ func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, er
 	}
 
 	// Check if file exists (use Lstat to not follow symlinks).
-	info, err := os.Lstat(fullPath)
-	if err != nil {
-		if os.IsNotExist(err) {
+	if _, lstatErr := os.Lstat(fullPath); lstatErr != nil {
+		if os.IsNotExist(lstatErr) {
 			return "", fmt.Errorf("%w: %s", ErrFileNotFound, relativePath)
 		}
 
-		return "", fmt.Errorf("failed to stat file: %w", err)
+		return "", fmt.Errorf("failed to stat file: %w", lstatErr)
 	}
 
-	// If it's a symlink, verify it points within the repo.
-	if info.Mode()&os.ModeSymlink != 0 {
-		linkTarget, linkErr := os.Readlink(fullPath)
-		if linkErr != nil {
-			return "", fmt.Errorf("failed to read symlink: %w", linkErr)
-		}
+	// Resolve the full symlink chain to catch multi-hop symlinks and
+	// directory-level symlinks that might escape the repo. Compare against
+	// the canonicalized repo path so system-level symlinks (e.g. macOS
+	// /var -> /private/var) don't cause false negatives. This mirrors the
+	// pattern in instructions.go and intentionally uses HasPrefix with an
+	// explicit separator: a git repository cannot be the filesystem root
+	// (New() requires a .git entry under repoPath), so the "//" edge case
+	// does not arise in practice.
+	canonicalRepo, err := filepath.EvalSymlinks(g.repoPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve repo path: %w", err)
+	}
 
-		// Resolve the symlink target.
-		if !filepath.IsAbs(linkTarget) {
-			linkTarget = filepath.Join(filepath.Dir(fullPath), linkTarget)
-		}
+	resolved, err := filepath.EvalSymlinks(fullPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve path: %w", err)
+	}
 
-		absTarget, absErr := filepath.Abs(linkTarget)
-		if absErr != nil {
-			return "", fmt.Errorf("failed to resolve symlink target: %w", absErr)
-		}
+	if !strings.HasPrefix(resolved, canonicalRepo+string(filepath.Separator)) && resolved != canonicalRepo {
+		return "", fmt.Errorf("%w: %s", ErrPathOutsideRepo, relativePath)
+	}
 
-		if !strings.HasPrefix(absTarget, g.repoPath) {
-			return "", fmt.Errorf("%w: symlink points outside repo", ErrPathOutsideRepo)
-		}
-	} else if !info.Mode().IsRegular() {
-		// If it's not a symlink, it must be a regular file.
+	// After resolution, verify it's a regular file (not a directory, device, etc.).
+	resolvedInfo, err := os.Stat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat resolved file: %w", err)
+	}
+	if !resolvedInfo.Mode().IsRegular() {
 		return "", fmt.Errorf("%w: %s", ErrNotRegularFile, relativePath)
 	}
 
-	// Read the file content.
-	content, err := os.ReadFile(fullPath) //nolint:gosec // Path is validated and sanitized above
+	content, err := os.ReadFile(resolved)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
