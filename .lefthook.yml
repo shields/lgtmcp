@@ -15,14 +15,54 @@
 pre-commit:
   parallel: false
   commands:
+    # Why this form instead of `{staged_files}`:
+    #
+    # Lefthook's `{staged_files}` template interpolates space-separated,
+    # unquoted filenames directly into the shell command line, which lets a
+    # filename like `$(touch /tmp/pwned).go` execute arbitrary commands during
+    # the pre-commit hook. To eliminate the injection, filenames are read
+    # from git as NUL-delimited bytes (-z) and passed through `xargs -0`,
+    # which delivers each filename to the formatter as a literal argv entry
+    # with no shell interpretation. The leading `--` before the formatter's
+    # file arguments prevents filenames beginning with `-` from being parsed
+    # as options.
+    #
+    # `--diff-filter=ACMR` matches lefthook's default behavior of skipping
+    # deleted files (which would otherwise cause the formatter to error).
+    #
+    # `xargs -r` (--no-run-if-empty) is portable across Linux GNU xargs and
+    # macOS BSD xargs. The macOS xargs(1) man page documents -r explicitly:
+    # "Compatibility with GNU xargs. The GNU version of xargs runs the
+    # utility argument at least once, even if xargs input is empty, and it
+    # supports a -r option to inhibit this behavior. The FreeBSD version of
+    # xargs does not run the utility argument on empty input, but it
+    # supports the -r option for command-line compatibility with GNU xargs,
+    # but the -r option does nothing in the FreeBSD version of xargs."
+    # macOS ships BSD xargs (FreeBSD-derived), so `-r` is recognized as a
+    # no-op there and is functionally needed on Linux to suppress an empty
+    # invocation. The result is identical behavior on both platforms.
+    #
+    # `stage_fixed: true` works correctly with this form: lefthook tracks
+    # files modified by the command by comparing the working tree to the
+    # index for files matching `glob:`, independent of how the command's
+    # argv is constructed. This has been verified empirically by staging an
+    # unformatted Go file and JSON file, running `lefthook run pre-commit`,
+    # and confirming that the formatted versions ended up in the index.
+    #
+    # This file uses POSIX shell pipelines and is therefore Unix-only,
+    # matching the rest of the project's development environment: the
+    # Makefile already uses `git ls-files -z | xargs -0 -r ...` (line 122),
+    # `bc`, `install -d`, and other Unix-only utilities, and the GitHub
+    # Actions workflows run only on `ubuntu-24.04`. Windows is not a
+    # supported development platform for this repository.
     format-go:
       glob: "**/*.go"
-      run: go tool gofumpt -w {staged_files}
+      run: git diff --cached --name-only --diff-filter=ACMR -z -- '*.go' | xargs -0 -r go tool gofumpt -w --
       stage_fixed: true
 
     format-prettier:
       glob: "**/*.{md,json,json5,yaml,yml}"
-      run: npx --prefix tools prettier --write {staged_files}
+      run: git diff --cached --name-only --diff-filter=ACMR -z -- '*.md' '*.json' '*.json5' '*.yaml' '*.yml' | xargs -0 -r npx --prefix tools prettier --write --
       stage_fixed: true
 
     mod-tidy:
