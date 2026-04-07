@@ -89,9 +89,7 @@ func newDefaultStubClient() GeminiClient {
 }
 
 // WithStubResponse creates a Reviewer that returns a specific response.
-//
-//nolint:revive // lgtm is not a control flag, it's part of the response data
-func WithStubResponse(lgtm bool, comments string) *Reviewer {
+func WithStubResponse(lgtm bool, comments string) *Reviewer { //nolint:revive // lgtm is response data
 	lgtmStr := "false"
 	if lgtm {
 		lgtmStr = "true"

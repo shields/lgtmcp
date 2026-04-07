@@ -26,6 +26,17 @@ limitations under the License.
 
 All new files must include the project copyright and Apache 2.0 license header, matching the style of existing files.
 
+## Commit policy
+
+The sanctioned way to commit changes to this repo is via the `mcp__lgtmcp__review_and_commit` MCP tool, which performs a Gemini-reviewed commit and only writes the commit if the reviewer returns LGTM. Direct `git commit` invocations from the Bash tool are denied via `.claude/settings.json` to prevent unreviewed commits from slipping in.
+
+The Bash deny rule (`Bash(git commit:*)`) is best-effort defense-in-depth, not a hard sandbox. Be aware of these intentional gaps:
+
+- It does not (and cannot) block commits that go through the `mcp__lgtmcp__review_and_commit` tool. That tool runs inside the lgtmcp Go binary, outside the Bash deny scope, and committing is its entire purpose. This is by design.
+- The deny rule matches on the leading command name. It does not match indirect invocations such as `sh -c "git commit ..."` or `bash -c "git commit ..."`. This is a known limitation of the Claude Code permission grammar — the rule cannot reliably inspect arguments to a shell wrapper. Do not use shell indirection to bypass the policy; always go through the MCP tool.
+
+If you ever genuinely need a raw `git commit` (e.g., emergency recovery), make that explicit to the user and get approval first rather than working around the deny rule.
+
 ## Overview
 
 LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.1 Pro and either commits them (if approved) or returns review comments.
