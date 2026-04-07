@@ -24,6 +24,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	cfgpkg "msrl.dev/lgtmcp/internal/config"
 )
 
 // ErrMCPSenderRequired is returned when MCP logging is requested without a sender.
@@ -48,6 +50,11 @@ type Config struct {
 
 	// MCPSender is used to send logs to MCP client (when Output is "mcp").
 	MCPSender MCPLogSender `json:"-"`
+
+	// ConfigDir is the lgtmcp config directory used to validate Directory
+	// when it is set. When empty, [cfgpkg.ConfigDir] is used. Tests may set
+	// it to a temporary directory; production code should leave it empty.
+	ConfigDir string `json:"-"`
 }
 
 // MCPLogSender interface for sending logs to MCP client.
@@ -134,16 +141,28 @@ func newDirectoryLogger(config Config) (Logger, error) {
 			}
 			logDir = filepath.Join(dataHome, "lgtmcp", "logs")
 		}
+	} else {
+		// Reject traversal and absolute paths outside the lgtmcp config
+		// directory so that a compromised config cannot drop log files at
+		// arbitrary filesystem locations.
+		base := config.ConfigDir
+		if base == "" {
+			base = cfgpkg.Dir()
+		}
+		safeDir, err := cfgpkg.ValidatePathIn(logDir, base)
+		if err != nil {
+			return nil, fmt.Errorf("invalid log directory: %w", err)
+		}
+		logDir = safeDir
 	}
 
-	// Ensure directory exists.
-	if err := os.MkdirAll(logDir, 0o750); err != nil { //nolint:gosec // path is from XDG config, not user input
+	if err := os.MkdirAll(logDir, 0o750); err != nil { //nolint:gosec // Path validated above
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
 	// Create or open log file.
 	filename := filepath.Join(logDir, "lgtmcp.log")
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // Safe path construction
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600) //nolint:gosec // Path validated above
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
