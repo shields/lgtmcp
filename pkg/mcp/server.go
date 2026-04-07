@@ -618,9 +618,19 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	// Report progress: staging changes.
 	reporter.Report(ctx, 5, 6, "Staging changes...")
 
-	// Stage all changes.
+	// Stage only the files that were present in the diff and passed the
+	// security scan. Files created during the review window are intentionally
+	// excluded so unscanned content cannot slip into the commit.
+	//
+	// This narrows but does not eliminate the TOCTOU window: `git add` reads
+	// the working-tree contents of these files at stage time, so a concurrent
+	// modification to one of them between scan and stage would still go in.
+	// Fully closing that window requires capturing blobs at scan time and
+	// constructing the tree from them, which is a larger refactor tracked
+	// separately. This change still removes the most exploitable vector
+	// (creating an entirely new unscanned file during the review window).
 	stageStart := time.Now()
-	if stageErr := reviewCtx.gitClient.StageAll(ctx); stageErr != nil {
+	if stageErr := reviewCtx.gitClient.StageFiles(ctx, reviewCtx.changedFiles); stageErr != nil {
 		elapsed := time.Since(start)
 		s.logger.Error("Failed to stage changes",
 			"request_id", requestID,
