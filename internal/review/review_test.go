@@ -288,7 +288,7 @@ func runFileRetrievalTests(t *testing.T, reviewer *Reviewer, repoDir string, tes
 				},
 			}
 
-			result := reviewer.handleFileRetrieval(funcCall, repoDir)
+			result := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir)
 
 			var response map[string]any
 			if result.FunctionResponse != nil {
@@ -337,7 +337,7 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 		},
 	}
 
-	result := reviewer.handleFileRetrieval(funcCall, nonGitDir)
+	result := reviewer.handleFileRetrieval(t.Context(), funcCall, nonGitDir)
 
 	var response map[string]any
 	if result.FunctionResponse != nil {
@@ -349,6 +349,25 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 	assert.True(t, hasError, "Expected error when git command fails")
 	assert.Contains(t, errMsg, "access denied: unable to verify gitignore status",
 		"Should fail closed when git check-ignore cannot run")
+}
+
+// TestIsFileGitIgnored_DashPrefixedPath verifies that a path starting with "-"
+// is treated as a literal file path rather than a git command-line flag. Without
+// the "--" separator, git check-ignore would interpret "-n" as its --non-matching
+// flag, producing surprising results or errors.
+func TestIsFileGitIgnored_DashPrefixedPath(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	tests := []string{"-n", "-q", "--verbose", "-no-such-file"}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			isIgnored, err := isFileGitIgnored(t.Context(), name, repoDir)
+			require.NoError(t, err, "expected no error for dash-prefixed path %q", name)
+			assert.False(t, isIgnored, "expected non-existent dash-prefixed path %q to be reported as not ignored", name)
+		})
+	}
 }
 
 func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
@@ -429,7 +448,7 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 			}
 
 			t.Logf("Testing with filepath: %s, repoDir: %s", tt.filepath, repoDir)
-			result := reviewer.handleFileRetrieval(funcCall, repoDir)
+			result := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir)
 
 			// Extract the response from the FunctionResponse.
 			var response map[string]any
@@ -553,7 +572,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check the response contains the file content.
@@ -570,7 +589,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			Args: map[string]any{},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -588,7 +607,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -606,7 +625,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -2083,7 +2102,7 @@ func TestHandleFileRetrieval_NonStringFilepath(t *testing.T) {
 		Name: "get_file_content",
 		Args: map[string]any{"filepath": 123},
 	}
-	resp := r.handleFileRetrieval(funcCall, "/repo")
+	resp := r.handleFileRetrieval(t.Context(), funcCall, "/repo")
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.FunctionResponse)
 }

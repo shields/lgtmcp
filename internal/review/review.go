@@ -638,7 +638,7 @@ func (r *Reviewer) reviewDiffWithModel(
 				}
 
 				// Send the function response back with retry logic.
-				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath)
+				funcResponse := r.handleFileRetrieval(ctx, part.FunctionCall, repoPath)
 
 				// Log the function response for debugging.
 				r.logger.Debug("Sending function response",
@@ -767,7 +767,7 @@ func (r *Reviewer) reviewDiffWithModel(
 }
 
 // handleFileRetrieval handles file retrieval tool calls from Gemini.
-func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath string) *genai.Part {
+func (*Reviewer) handleFileRetrieval(ctx context.Context, funcCall *genai.FunctionCall, repoPath string) *genai.Part {
 	// Extract the filepath argument.
 	requestedPath, ok := funcCall.Args["filepath"].(string)
 	if !ok {
@@ -826,7 +826,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 	}
 
 	// SECURITY CHECK: Check if file is gitignored
-	isIgnored, err := isFileGitIgnored(requestedPath, repoPath)
+	isIgnored, err := isFileGitIgnored(ctx, requestedPath, repoPath)
 	if err != nil {
 		// Fail closed on any error for security
 		return genai.NewPartFromFunctionResponse(
@@ -896,10 +896,14 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 // isFileGitIgnored checks if a file is ignored by git.
 // It uses git check-ignore to properly respect all .gitignore rules including nested ones.
 // Returns (isIgnored, error) - if error is not nil, the caller should fail closed for security.
-func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
-	// Use git check-ignore to check if the file is ignored
-	// This respects all .gitignore files in the repository hierarchy
-	cmd := exec.Command("git", "check-ignore", relativePath) //nolint:gosec // relativePath is validated before use
+func isFileGitIgnored(ctx context.Context, relativePath, repoPath string) (bool, error) {
+	// Use a bounded timeout so a hung git invocation cannot stall the review.
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// The "--" separator ensures paths starting with "-" are treated as files, not flags.
+	//nolint:gosec // relativePath is validated before use
+	cmd := exec.CommandContext(checkCtx, "git", "check-ignore", "--", relativePath)
 	cmd.Dir = repoPath
 
 	var stdout, stderr bytes.Buffer
