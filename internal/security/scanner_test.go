@@ -338,6 +338,36 @@ index 0000000..2222222 100644
 		require.NoError(t, err)
 		assert.NotEmpty(t, findings) // Should find GitHub token in file2.txt.
 	})
+
+	t.Run("secret in file with space in name", func(t *testing.T) {
+		t.Parallel()
+		// Regression test: a previous parser using strings.Fields silently
+		// truncated paths with spaces, allowing such files to bypass the
+		// secret scanner entirely.
+		const filename = "my secret.txt"
+		diff := `diff --git a/` + filename + ` b/` + filename + `
+index 0000000..1111111 100644
+--- a/` + filename + `
++++ b/` + filename + `
+@@ -1 +1 @@
+-old
++token=` + fakeSecrets.GitHubPAT() + "`"
+
+		getFileContent := func(path string) (string, error) {
+			if path == filename {
+				return `token=` + fakeSecrets.GitHubPAT(), nil
+			}
+
+			return "", os.ErrNotExist
+		}
+
+		findings, err := scanner.ScanDiff(t.Context(), diff, getFileContent)
+		require.NoError(t, err)
+		assert.NotEmpty(t, findings)
+		for _, finding := range findings {
+			assert.Equal(t, filename, finding.File)
+		}
+	})
 }
 
 func TestExtractChangedFiles(t *testing.T) {
@@ -389,6 +419,236 @@ rename from old.txt
 rename to new.txt`
 		files := ExtractChangedFiles(diff)
 		assert.Equal(t, []string{"new.txt"}, files)
+	})
+
+	t.Run("filename with single space", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/my file.txt b/my file.txt
+index 0000000..1111111 100644
+--- a/my file.txt
++++ b/my file.txt
+@@ -1 +1 @@
+-old
++new`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"my file.txt"}, files)
+	})
+
+	t.Run("filename with multiple spaces", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/path with  many   spaces.txt b/path with  many   spaces.txt
+index 0000000..1111111 100644
+--- a/path with  many   spaces.txt
++++ b/path with  many   spaces.txt
+@@ -1 +1 @@
+-old
++new`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"path with  many   spaces.txt"}, files)
+	})
+
+	t.Run("filename containing literal b/ substring", func(t *testing.T) {
+		t.Parallel()
+		// Path "foo b/bar.txt" contains a " b/" substring; the parser must
+		// still pick the correct split point so the full path is recovered.
+		diff := `diff --git a/foo b/bar.txt b/foo b/bar.txt
+index 0000000..1111111 100644
+--- a/foo b/bar.txt
++++ b/foo b/bar.txt
+@@ -1 +1 @@
+-old
++new`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"foo b/bar.txt"}, files)
+	})
+
+	t.Run("renamed file with spaces", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/old name.txt b/new name.txt
+similarity index 100%
+rename from old name.txt
+rename to new name.txt`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"new name.txt"}, files)
+	})
+
+	t.Run("renamed file across directories with spaces", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/dir one/old file.go b/dir two/new file.go
+similarity index 90%
+rename from dir one/old file.go
+rename to dir two/new file.go`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"dir two/new file.go"}, files)
+	})
+
+	t.Run("copied file with spaces", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/orig file.go b/copied file.go
+similarity index 100%
+copy from orig file.go
+copy to copied file.go`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"copied file.go"}, files)
+	})
+
+	t.Run("CRLF line endings", func(t *testing.T) {
+		t.Parallel()
+		diff := "diff --git a/my file.txt b/my file.txt\r\n" +
+			"index 0000000..1111111 100644\r\n" +
+			"--- a/my file.txt\r\n" +
+			"+++ b/my file.txt\r\n" +
+			"@@ -1 +1 @@\r\n" +
+			"-old\r\n" +
+			"+new\r\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"my file.txt"}, files)
+	})
+
+	t.Run("CRLF rename with spaces", func(t *testing.T) {
+		t.Parallel()
+		diff := "diff --git a/old name.txt b/new name.txt\r\n" +
+			"similarity index 100%\r\n" +
+			"rename from old name.txt\r\n" +
+			"rename to new name.txt\r\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"new name.txt"}, files)
+	})
+
+	t.Run("noprefix header", func(t *testing.T) {
+		t.Parallel()
+		// diff.noprefix=true causes git to omit the a/ and b/ prefixes.
+		const name = "file.txt"
+		diff := "diff --git " + name + " " + name + "\n" +
+			"index 0000000..1111111 100644\n" +
+			"--- " + name + "\n" +
+			"+++ " + name + "\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{name}, files)
+	})
+
+	t.Run("noprefix header with spaces", func(t *testing.T) {
+		t.Parallel()
+		const name = "my file.txt"
+		diff := "diff --git " + name + " " + name + "\n" +
+			"index 0000000..1111111 100644\n" +
+			"--- " + name + "\n" +
+			"+++ " + name + "\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{name}, files)
+	})
+
+	t.Run("differing source and destination without rename line", func(t *testing.T) {
+		t.Parallel()
+		// "git diff file1 file2" produces a header with mismatched paths
+		// and no rename/copy lines; the destination must still be returned.
+		diff := `diff --git a/file1.txt b/file2.txt
+index 0000000..1111111 100644
+--- a/file1.txt
++++ b/file2.txt
+@@ -1 +1 @@
+-old
++new`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"file2.txt"}, files)
+	})
+
+	t.Run("noprefix header with path starting with a slash component", func(t *testing.T) {
+		t.Parallel()
+		// With diff.noprefix and a file literally named "a/foo.go", the
+		// header looks like `diff --git a/foo.go a/foo.go` and must not
+		// be misinterpreted as a standard prefixed header.
+		const name = "a/foo.go"
+		diff := "diff --git " + name + " " + name + "\n" +
+			"index 0000000..1111111 100644\n" +
+			"--- " + name + "\n" +
+			"+++ " + name + "\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{name}, files)
+	})
+
+	t.Run("destination contains literal b/ substring with mismatched source", func(t *testing.T) {
+		t.Parallel()
+		// "git diff file1 'foo b/bar.txt'" - destination has " b/" inside
+		// it. The fallback must split at the first " b/" so the embedded
+		// separator is preserved in the destination.
+		diff := `diff --git a/file1 b/foo b/bar.txt
+index 0000000..1111111 100644
+--- a/file1
++++ b/foo b/bar.txt
+@@ -1 +1 @@
+-old
++new`
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"foo b/bar.txt"}, files)
+	})
+
+	t.Run("C-quoted header with non-ASCII path", func(t *testing.T) {
+		t.Parallel()
+		// Git quotes paths with non-ASCII bytes by default. The unquoted
+		// path here is "café.txt" (with the e-acute encoded as 0xC3 0xA9).
+		diff := "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n" +
+			"index 0000000..1111111 100644\n" +
+			"--- \"a/caf\\303\\251.txt\"\n" +
+			"+++ \"b/caf\\303\\251.txt\"\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"café.txt"}, files)
+	})
+
+	t.Run("C-quoted rename to overrides header path", func(t *testing.T) {
+		t.Parallel()
+		diff := "diff --git \"a/old\\303\\251.txt\" \"b/new\\303\\251.txt\"\n" +
+			"similarity index 100%\n" +
+			"rename from \"old\\303\\251.txt\"\n" +
+			"rename to \"new\\303\\251.txt\"\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"newé.txt"}, files)
+	})
+
+	t.Run("noprefix header for path that begins with literal a slash and contains b slash", func(t *testing.T) {
+		t.Parallel()
+		// File literally named "a/foo b/bar". Under diff.noprefix the
+		// header repeats the unescaped path on both sides; the parser
+		// must prefer the noprefix-equal-halves interpretation rather
+		// than misreading "a/" as a prefix.
+		const name = "a/foo b/bar"
+		diff := "diff --git " + name + " " + name + "\n" +
+			"index 0000000..1111111 100644\n" +
+			"--- " + name + "\n" +
+			"+++ " + name + "\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{name}, files)
+	})
+
+	t.Run("C-quoted noprefix header for path beginning with b slash", func(t *testing.T) {
+		t.Parallel()
+		// File literally named "b/café.txt" with diff.noprefix. The
+		// parser must not strip the leading "b/" because the a-side
+		// also lacks the "a/" prefix that distinguishes prefixed form.
+		diff := "diff --git \"b/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n" +
+			"index 0000000..1111111 100644\n" +
+			"--- \"b/caf\\303\\251.txt\"\n" +
+			"+++ \"b/caf\\303\\251.txt\"\n" +
+			"@@ -1 +1 @@\n" +
+			"-old\n" +
+			"+new\n"
+		files := ExtractChangedFiles(diff)
+		assert.Equal(t, []string{"b/café.txt"}, files)
 	})
 
 	t.Run("deleted file", func(t *testing.T) {
