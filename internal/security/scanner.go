@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	stdpath "path"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -108,26 +109,183 @@ func (s *Scanner) ScanDiff(
 }
 
 // ExtractChangedFiles parses a git diff and returns the list of changed files.
+// It handles paths containing spaces, renames and copies (whose authoritative
+// destination comes from "rename to"/"copy to" lines), CRLF line endings, the
+// diff.noprefix git config, and C-style quoted paths used by git for non-ASCII
+// or otherwise special characters.
 func ExtractChangedFiles(diff string) []string {
 	var files []string
 	seen := make(map[string]bool)
-
-	for line := range strings.SplitSeq(diff, "\n") {
-		// Look for diff headers like "diff --git a/file.txt b/file.txt".
-		if strings.HasPrefix(line, "diff --git ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 4 {
-				// Extract the b/ file path (the new version).
-				file := strings.TrimPrefix(parts[3], "b/")
-				if !seen[file] {
-					files = append(files, file)
-					seen[file] = true
-				}
-			}
+	addFile := func(file string) {
+		if file != "" && !seen[file] {
+			files = append(files, file)
+			seen[file] = true
 		}
 	}
 
+	// pending holds the best-effort path from the most recent "diff --git"
+	// header. It is committed on the next header or at end of stream, and
+	// may be overridden by an authoritative "rename to"/"copy to" line.
+	var pending string
+	for rawLine := range strings.SplitSeq(diff, "\n") {
+		line := strings.TrimSuffix(rawLine, "\r")
+		if strings.HasPrefix(line, "diff --git ") {
+			addFile(pending)
+			pending = parseGitDiffHeader(line)
+
+			continue
+		}
+		if path, ok := strings.CutPrefix(line, "rename to "); ok {
+			pending = unquoteIfQuoted(path)
+		} else if path, ok := strings.CutPrefix(line, "copy to "); ok {
+			pending = unquoteIfQuoted(path)
+		}
+	}
+	addFile(pending)
+
 	return files
+}
+
+// parseGitDiffHeader extracts the destination file path from a "diff --git"
+// header. It handles three forms - C-quoted, standard prefixed
+// ("a/<p> b/<p>"), and noprefix ("<p> <p>", used when diff.noprefix is set) -
+// preferring whichever interpretation produces unambiguously equal halves.
+// For mismatched halves (e.g., "git diff file1 file2") it falls back to the
+// destination path after the first separator. Renames and copies should be
+// reconciled by the caller using subsequent "rename to"/"copy to" lines,
+// which override the value here.
+func parseGitDiffHeader(line string) string {
+	rest, ok := strings.CutPrefix(line, "diff --git ")
+	if !ok {
+		return ""
+	}
+	if strings.HasPrefix(rest, `"`) {
+		return parseQuotedDiffHeader(rest)
+	}
+	// Prefer unambiguous interpretations: a noprefix form whose halves are
+	// literally equal cannot also be a valid prefixed form (the latter has
+	// "a/" on the left and "b/" on the right, so the halves differ).
+	if path, ok := splitDiffPathsExact(rest, " "); ok {
+		return path
+	}
+	if afterA, ok := strings.CutPrefix(rest, "a/"); ok {
+		if path, ok := splitDiffPathsExact(afterA, " b/"); ok {
+			return path
+		}
+	}
+	// Mismatched halves: try the prefixed fallback first since unquoted
+	// "diff --git" headers normally use the "a/"/"b/" prefixes.
+	if afterA, ok := strings.CutPrefix(rest, "a/"); ok {
+		if path := splitDiffPathsFallback(afterA, " b/"); path != "" {
+			return path
+		}
+	}
+
+	return splitDiffPathsFallback(rest, " ")
+}
+
+// parseQuotedDiffHeader handles a "diff --git" header where both paths are
+// C-style quoted (used by git when paths contain control characters, double
+// quotes, backslashes, or - when core.quotePath is true - high-bit bytes).
+// It extracts and unquotes both halves and returns the destination, only
+// stripping "a/"/"b/" prefixes when both halves have them (which distinguishes
+// the standard prefixed form from a noprefix form whose paths happen to begin
+// with "b/"). It returns an empty string on any parse failure so the malformed
+// entry is skipped rather than masquerading as a valid filename.
+func parseQuotedDiffHeader(rest string) string {
+	aEnd := findQuotedEnd(rest, 0)
+	if aEnd == -1 {
+		return ""
+	}
+	bStart := aEnd + 1
+	for bStart < len(rest) && rest[bStart] == ' ' {
+		bStart++
+	}
+	if bStart >= len(rest) || rest[bStart] != '"' {
+		return ""
+	}
+	bEnd := findQuotedEnd(rest, bStart)
+	if bEnd == -1 {
+		return ""
+	}
+	aPath, errA := strconv.Unquote(rest[:aEnd+1])
+	bPath, errB := strconv.Unquote(rest[bStart : bEnd+1])
+	if errA != nil || errB != nil {
+		return ""
+	}
+	// Strip "a/"/"b/" prefixes only when both halves carry them; otherwise
+	// the header is in the noprefix form and the b-side is already the
+	// destination path verbatim.
+	if bTrimmed, bOK := strings.CutPrefix(bPath, "b/"); bOK && strings.HasPrefix(aPath, "a/") {
+		return bTrimmed
+	}
+
+	return bPath
+}
+
+// findQuotedEnd returns the index of the closing quote of a C-style quoted
+// string that starts at index start, or -1 if the string is malformed.
+func findQuotedEnd(s string, start int) int {
+	if start >= len(s) || s[start] != '"' {
+		return -1
+	}
+	for i := start + 1; i < len(s); i++ {
+		c := s[i]
+		if c == '\\' {
+			i++
+
+			continue
+		}
+		if c == '"' {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// unquoteIfQuoted returns s unchanged unless it is a C-style quoted string,
+// in which case it returns the unquoted form. On unquote failure it returns
+// the empty string so a malformed value cannot become a misleading filename.
+func unquoteIfQuoted(s string) string {
+	if !strings.HasPrefix(s, `"`) {
+		return s
+	}
+	out, err := strconv.Unquote(s)
+	if err != nil {
+		return ""
+	}
+
+	return out
+}
+
+// splitDiffPathsExact searches for a position where rest splits into two
+// identical halves around sep, scanning right-to-left so paths containing the
+// separator can still be matched. It returns the destination path and true on
+// success. This handles the common case of "<p> <p>" or "<p> b/<p>" headers
+// where the source and destination paths are equal.
+func splitDiffPathsExact(rest, sep string) (string, bool) {
+	for i := strings.LastIndex(rest, sep); i != -1; i = strings.LastIndex(rest[:i], sep) {
+		if rest[:i] == rest[i+len(sep):] {
+			return rest[i+len(sep):], true
+		}
+	}
+
+	return "", false
+}
+
+// splitDiffPathsFallback returns the substring of rest after the first
+// occurrence of sep, or "" if sep is absent. This is used as a heuristic
+// fallback for headers whose source and destination differ (e.g., the
+// uncommon "git diff file1 file2"); splitting at the first separator
+// preserves any embedded separator that belongs to the destination path.
+func splitDiffPathsFallback(rest, sep string) string {
+	_, after, ok := strings.Cut(rest, sep)
+	if !ok {
+		return ""
+	}
+
+	return after
 }
 
 // ScanContent scans arbitrary content for secrets.
