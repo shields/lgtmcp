@@ -336,3 +336,100 @@ func TestGetConfigPath(t *testing.T) {
 		assert.Equal(t, expected, path)
 	})
 }
+
+func TestDir(t *testing.T) {
+	t.Run("returns parent of config path", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", "/custom/config")
+		assert.Equal(t, "/custom/config/lgtmcp", Dir())
+	})
+}
+
+func TestValidatePathIn(t *testing.T) {
+	t.Parallel()
+
+	base := filepath.Join(string(filepath.Separator), "tmp", "base")
+
+	t.Run("empty path passes through", func(t *testing.T) {
+		t.Parallel()
+		got, err := ValidatePathIn("", base)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+	})
+
+	t.Run("relative path is resolved against base", func(t *testing.T) {
+		t.Parallel()
+		got, err := ValidatePathIn("foo/bar.md", base)
+		require.NoError(t, err)
+		assert.Equal(t, filepath.Join(base, "foo", "bar.md"), got)
+	})
+
+	t.Run("relative traversal is rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := ValidatePathIn("../etc/passwd", base)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrPathTraversal)
+	})
+
+	t.Run("traversal embedded in path is rejected", func(t *testing.T) {
+		t.Parallel()
+		// filepath.Clean reduces "foo/../../etc/passwd" to "../etc/passwd",
+		// which filepath.IsLocal then rejects.
+		_, err := ValidatePathIn("foo/../../etc/passwd", base)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrPathTraversal)
+	})
+
+	t.Run("absolute path under base is accepted", func(t *testing.T) {
+		t.Parallel()
+		under := filepath.Join(base, "review.md")
+		got, err := ValidatePathIn(under, base)
+		require.NoError(t, err)
+		assert.Equal(t, under, got)
+	})
+
+	t.Run("absolute path equal to base is accepted", func(t *testing.T) {
+		t.Parallel()
+		got, err := ValidatePathIn(base, base)
+		require.NoError(t, err)
+		assert.Equal(t, base, got)
+	})
+
+	t.Run("absolute path outside base is rejected", func(t *testing.T) {
+		t.Parallel()
+		other := filepath.Join(string(filepath.Separator), "etc", "passwd")
+		_, err := ValidatePathIn(other, base)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrPathOutsideBase)
+	})
+
+	t.Run("absolute path with sibling prefix is rejected", func(t *testing.T) {
+		t.Parallel()
+		// /tmp/baseEvil starts with /tmp/base but is not under /tmp/base.
+		sibling := base + "Evil"
+		_, err := ValidatePathIn(sibling, base)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrPathOutsideBase)
+	})
+}
+
+func TestValidatePath(t *testing.T) {
+	t.Run("uses Dir as base", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		under := filepath.Join(tmpDir, "lgtmcp", "review.md")
+		got, err := ValidatePath(under)
+		require.NoError(t, err)
+		assert.Equal(t, under, got)
+	})
+
+	t.Run("rejects absolute paths outside Dir", func(t *testing.T) {
+		tmpDir := t.TempDir()
+		t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+		other := filepath.Join(string(filepath.Separator), "etc", "passwd")
+		_, err := ValidatePath(other)
+		require.Error(t, err)
+		require.ErrorIs(t, err, ErrPathOutsideBase)
+	})
+}

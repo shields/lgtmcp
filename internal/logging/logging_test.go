@@ -24,10 +24,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	cfgpkg "msrl.dev/lgtmcp/internal/config"
 )
 
 func TestNew(t *testing.T) {
 	t.Parallel()
+	dirA := t.TempDir()
+	dirB := t.TempDir()
 	tests := []struct {
 		name        string
 		config      Config
@@ -60,7 +64,8 @@ func TestNew(t *testing.T) {
 			name: "directory logging",
 			config: Config{
 				Output:    "directory",
-				Directory: t.TempDir(),
+				Directory: dirA,
+				ConfigDir: dirA,
 				Level:     "info",
 			},
 			expectError: false,
@@ -72,7 +77,8 @@ func TestNew(t *testing.T) {
 				Level:  "info",
 				// Don't test default directory creation in unit tests
 				// as it would create directories outside of temp.
-				Directory: t.TempDir(),
+				Directory: dirB,
+				ConfigDir: dirB,
 			},
 			expectError: false, // Uses provided temp directory.
 		},
@@ -252,6 +258,7 @@ func TestDirectoryLogger(t *testing.T) {
 	config := Config{
 		Output:    "directory",
 		Directory: tempDir,
+		ConfigDir: tempDir,
 		Level:     "info",
 	}
 
@@ -281,6 +288,7 @@ func TestDirectoryLogger_LargeMessages(t *testing.T) {
 	config := Config{
 		Output:    "directory",
 		Directory: tempDir,
+		ConfigDir: tempDir,
 		Level:     "info",
 	}
 
@@ -490,6 +498,7 @@ func TestDirectoryLogger_MkdirAllError(t *testing.T) {
 	_, err := New(Config{
 		Output:    "directory",
 		Directory: filepath.Join(blocker, "subdir"),
+		ConfigDir: tmpDir,
 		Level:     "info",
 	})
 	require.Error(t, err)
@@ -509,6 +518,7 @@ func TestDirectoryLogger_OpenFileError(t *testing.T) {
 	_, err := New(Config{
 		Output:    "directory",
 		Directory: logDir,
+		ConfigDir: tmpDir,
 		Level:     "info",
 	})
 	require.Error(t, err)
@@ -560,6 +570,53 @@ func TestFormatMessage_SingleUnpairedArg(t *testing.T) {
 	t.Parallel()
 	result := formatMessage("msg", "lonely")
 	assert.Equal(t, "msg", result)
+}
+
+func TestDirectoryLogger_PathValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects parent-directory traversal", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		_, err := New(Config{
+			Output:    "directory",
+			Directory: "../../../etc",
+			ConfigDir: tmpDir,
+			Level:     "info",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid log directory")
+		require.ErrorIs(t, err, cfgpkg.ErrPathTraversal)
+	})
+
+	t.Run("rejects absolute path outside config dir", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		_, err := New(Config{
+			Output:    "directory",
+			Directory: filepath.Join(string(filepath.Separator), "etc", "lgtmcp"),
+			ConfigDir: tmpDir,
+			Level:     "info",
+		})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid log directory")
+		require.ErrorIs(t, err, cfgpkg.ErrPathOutsideBase)
+	})
+
+	t.Run("accepts directory under config dir", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		logDir := filepath.Join(tmpDir, "logs")
+		logger, err := New(Config{
+			Output:    "directory",
+			Directory: logDir,
+			ConfigDir: tmpDir,
+			Level:     "info",
+		})
+		require.NoError(t, err)
+		defer logger.Close() //nolint:errcheck // Test cleanup
+		assert.FileExists(t, filepath.Join(logDir, "lgtmcp.log"))
+	})
 }
 
 // Mock MCP sender for testing.

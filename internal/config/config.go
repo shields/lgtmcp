@@ -29,6 +29,13 @@ var ErrNoCredentials = errors.New(
 	"google.api_key or google.use_adc must be set",
 )
 
+// ErrPathTraversal indicates a config-supplied path contains "..".
+var ErrPathTraversal = errors.New("path contains parent-directory segments")
+
+// ErrPathOutsideBase indicates a config-supplied absolute path is not under
+// the allowed base directory.
+var ErrPathOutsideBase = errors.New("absolute path is outside the allowed directory")
+
 // NotFoundError indicates the config file was not found.
 type NotFoundError struct {
 	Path string
@@ -193,6 +200,55 @@ func GetConfigPath() string {
 	}
 
 	return filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml")
+}
+
+// Dir returns the directory that holds the lgtmcp configuration file. It is
+// the parent directory of [GetConfigPath].
+func Dir() string {
+	return filepath.Dir(GetConfigPath())
+}
+
+// ValidatePath validates a filesystem path supplied through the YAML
+// configuration file against the lgtmcp config directory ([Dir]). See
+// [ValidatePathIn] for the rules enforced.
+func ValidatePath(path string) (string, error) {
+	return ValidatePathIn(path, Dir())
+}
+
+// ValidatePathIn validates a filesystem path supplied through the YAML
+// configuration file and resolves it against baseDir. It exists to limit the
+// blast radius of a compromised or malicious config:
+//
+//   - Relative paths are joined onto baseDir, never the current working
+//     directory, so an attacker cannot read e.g. ".env" from a project root.
+//   - Non-absolute parts must satisfy [filepath.IsLocal], which rules out
+//     ".." traversal as well as Windows drive-relative and root-relative
+//     escapes such as `C:..\foo` or `\Windows`.
+//   - The fully resolved path must remain inside baseDir.
+//
+// An empty input path is returned as-is so callers can keep distinguishing
+// "unset" from "invalid". On success the cleaned absolute path is returned.
+func ValidatePathIn(path, baseDir string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+
+	cleaned := filepath.Clean(path)
+	base := filepath.Clean(baseDir)
+
+	if !filepath.IsAbs(cleaned) {
+		if !filepath.IsLocal(cleaned) {
+			return "", fmt.Errorf("%w: %q", ErrPathTraversal, path)
+		}
+		cleaned = filepath.Join(base, cleaned)
+	}
+
+	rel, err := filepath.Rel(base, cleaned)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("%w: %q (base %q)", ErrPathOutsideBase, path, base)
+	}
+
+	return cleaned, nil
 }
 
 // NewTestConfig returns a test configuration for use in tests.
