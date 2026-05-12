@@ -4,6 +4,7 @@
   ignorePaths: [],
   abandonmentThreshold: "2 years",
   platformAutomerge: true,
+  postUpdateOptions: ["gomodTidy"],
   packageRules: [
     {
       description: "Automerge non-major updates",
