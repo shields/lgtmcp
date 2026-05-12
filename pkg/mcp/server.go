@@ -44,6 +44,13 @@ var (
 	ErrCommitMessageNotString = errors.New("commit_message must be a string")
 )
 
+const (
+	argDirectory  = "directory"
+	schemaType    = "type"
+	schemaString  = "string"
+	schemaDescKey = "description"
+)
+
 // Server represents the MCP server.
 const (
 	// Version is the version of the LGTMCP server.
@@ -121,12 +128,12 @@ func (s *Server) registerTools() { //nolint:funcorder // Helper method
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
-				"directory": map[string]any{
-					"type":        "string",
-					"description": "Path to the git repository directory to review",
+				argDirectory: map[string]any{
+					schemaType:    schemaString,
+					schemaDescKey: "Path to the git repository directory to review",
 				},
 			},
-			Required: []string{"directory"},
+			Required: []string{argDirectory},
 		},
 	}, s.HandleReviewOnly)
 
@@ -138,23 +145,23 @@ func (s *Server) registerTools() { //nolint:funcorder // Helper method
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
-				"directory": map[string]any{
-					"type":        "string",
-					"description": "Path to the git repository directory to review",
+				argDirectory: map[string]any{
+					schemaType:    schemaString,
+					schemaDescKey: "Path to the git repository directory to review",
 				},
 				"commit_message": map[string]any{
-					"type":        "string",
-					"description": "Commit message to use if changes are approved",
+					schemaType:    schemaString,
+					schemaDescKey: "Commit message to use if changes are approved",
 				},
 			},
-			Required: []string{"directory", "commit_message"},
+			Required: []string{argDirectory, "commit_message"},
 		},
 	}, s.HandleReviewAndCommit)
 }
 
 // parseDirectory extracts and validates the directory argument from the request.
 func (*Server) parseDirectory(args map[string]any) (string, error) { //nolint:funcorder // Helper method
-	directory, ok := args["directory"].(string)
+	directory, ok := args[argDirectory].(string)
 	if !ok {
 		return "", ErrDirectoryNotString
 	}

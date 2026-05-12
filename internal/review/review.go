@@ -152,6 +152,11 @@ type Reviewer struct {
 	logger        logging.Logger
 }
 
+const (
+	defaultModel = "gemini-3.1-pro-preview"
+	errorKey     = "error"
+)
+
 // modelPricing contains per-million-token pricing for supported models.
 type modelPricing struct {
 	InputPrice  float64 // USD per 1M input tokens
@@ -761,7 +766,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": "filepath parameter must be a string",
+				errorKey: "filepath parameter must be a string",
 			},
 		)
 	}
@@ -771,7 +776,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": "invalid filepath: path traversal not allowed",
+				errorKey: "invalid filepath: path traversal not allowed",
 			},
 		)
 	}
@@ -786,7 +791,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("failed to resolve path: %v", err),
+				errorKey: fmt.Sprintf("failed to resolve path: %v", err),
 			},
 		)
 	}
@@ -796,7 +801,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("failed to resolve repository path: %v", err),
+				errorKey: fmt.Sprintf("failed to resolve repository path: %v", err),
 			},
 		)
 	}
@@ -807,7 +812,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": "access denied: path is outside repository",
+				errorKey: "access denied: path is outside repository",
 			},
 		)
 	}
@@ -819,7 +824,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("access denied: unable to verify gitignore status: %v", err),
+				errorKey: fmt.Sprintf("access denied: unable to verify gitignore status: %v", err),
 			},
 		)
 	}
@@ -827,7 +832,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": "access denied: file is gitignored",
+				errorKey: "access denied: file is gitignored",
 			},
 		)
 	}
@@ -847,7 +852,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("failed to open repository: %v", err),
+				errorKey: fmt.Sprintf("failed to open repository: %v", err),
 			},
 		)
 	}
@@ -860,7 +865,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("failed to read file: %v", err),
+				errorKey: fmt.Sprintf("failed to read file: %v", err),
 			},
 		)
 	}
@@ -871,7 +876,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("failed to stat opened file: %v", err),
+				errorKey: fmt.Sprintf("failed to stat opened file: %v", err),
 			},
 		)
 	}
@@ -879,7 +884,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": "access denied: not a regular file",
+				errorKey: "access denied: not a regular file",
 			},
 		)
 	}
@@ -894,7 +899,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("failed to read file: %v", err),
+				errorKey: fmt.Sprintf("failed to read file: %v", err),
 			},
 		)
 	}
@@ -902,7 +907,7 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 		return genai.NewPartFromFunctionResponse(
 			funcCall.Name,
 			map[string]any{
-				"error": fmt.Sprintf("file too large: exceeds %d bytes", maxRetrievedFileSize),
+				errorKey: fmt.Sprintf("file too large: exceeds %d bytes", maxRetrievedFileSize),
 			},
 		)
 	}

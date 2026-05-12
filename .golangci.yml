@@ -55,6 +55,9 @@ linters:
       check-type-assertions: true
       check-blank: true
 
+    goconst:
+      ignore-tests: true
+
     exhaustive:
       default-signifies-exhaustive: true
 

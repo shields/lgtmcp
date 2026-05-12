@@ -37,7 +37,7 @@ func NewForTesting() *Reviewer {
 	}
 	return &Reviewer{
 		client:        newDefaultStubClient(),
-		modelName:     "gemini-3.1-pro-preview",
+		modelName:     defaultModel,
 		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        logger,
@@ -46,44 +46,35 @@ func NewForTesting() *Reviewer {
 
 // newDefaultStubClient creates a stub client with sensible defaults.
 func newDefaultStubClient() GeminiClient {
+	return newStubClient("Analysis complete. Code looks good.", stubReviewJSON)
+}
+
+// newStubClient builds a StubGeminiClient that returns the given phase-1 analysis
+// text and phase-2 review JSON.
+func newStubClient(analysisText, reviewJSON string) *StubGeminiClient {
+	textResp := func(text string) *genai.GenerateContentResponse {
+		return &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{
+				{
+					Content: &genai.Content{
+						Parts: []*genai.Part{{Text: text}},
+					},
+				},
+			},
+		}
+	}
 	return &StubGeminiClient{
 		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
 			return &StubGeminiChat{
 				SendMessageFunc: func(_ context.Context, _ genai.Part) (*genai.GenerateContentResponse, error) {
-					// Return analysis text for phase 1.
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{
-							{
-								Content: &genai.Content{
-									Parts: []*genai.Part{
-										{
-											Text: "Analysis complete. Code looks good.",
-										},
-									},
-								},
-							},
-						},
-					}, nil
+					return textResp(analysisText), nil
 				},
 			}, nil
 		},
 		GenerateContentFunc: func(_ context.Context, _ string, _ []*genai.Content,
 			_ *genai.GenerateContentConfig,
 		) (*genai.GenerateContentResponse, error) {
-			// Default: approve with generic message for phase 2.
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{
-					{
-						Content: &genai.Content{
-							Parts: []*genai.Part{
-								{
-									Text: `{"lgtm": true, "comments": "Test review - changes look good"}`,
-								},
-							},
-						},
-					},
-				},
-			}, nil
+			return textResp(reviewJSON), nil
 		},
 	}
 }
@@ -102,47 +93,8 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer { //nolint:revive //
 		panic(err)
 	}
 	return &Reviewer{
-		client: &StubGeminiClient{
-			CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-				return &StubGeminiChat{
-					SendMessageFunc: func(_ context.Context, _ genai.Part) (*genai.GenerateContentResponse, error) {
-						// Return analysis text for phase 1.
-						return &genai.GenerateContentResponse{
-							Candidates: []*genai.Candidate{
-								{
-									Content: &genai.Content{
-										Parts: []*genai.Part{
-											{
-												Text: "Analysis complete for testing.",
-											},
-										},
-									},
-								},
-							},
-						}, nil
-					},
-				}, nil
-			},
-			GenerateContentFunc: func(_ context.Context, _ string, _ []*genai.Content,
-				_ *genai.GenerateContentConfig,
-			) (*genai.GenerateContentResponse, error) {
-				// Return the specified response for phase 2.
-				return &genai.GenerateContentResponse{
-					Candidates: []*genai.Candidate{
-						{
-							Content: &genai.Content{
-								Parts: []*genai.Part{
-									{
-										Text: responseJSON,
-									},
-								},
-							},
-						},
-					},
-				}, nil
-			},
-		},
-		modelName:     "gemini-3.1-pro-preview",
+		client:        newStubClient("Analysis complete for testing.", responseJSON),
+		modelName:     defaultModel,
 		temperature:   0.2,
 		retryConfig:   nil, // No retry for testing by default.
 		promptManager: prompts.New("", ""),

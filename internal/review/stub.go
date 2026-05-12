@@ -20,6 +20,8 @@ import (
 	"google.golang.org/genai"
 )
 
+const stubReviewJSON = `{"lgtm": true, "comments": "Test review - changes look good"}`
+
 // StubGeminiClient is a stub implementation of GeminiClient for testing.
 type StubGeminiClient struct {
 	CreateChatFunc func(ctx context.Context, modelName string,
@@ -54,7 +56,7 @@ func (s *StubGeminiClient) GenerateContent(
 				Content: &genai.Content{
 					Parts: []*genai.Part{
 						{
-							Text: `{"lgtm": true, "comments": "Test review - changes look good"}`,
+							Text: stubReviewJSON,
 						},
 					},
 				},
@@ -81,7 +83,7 @@ func (s *StubGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*gen
 				Content: &genai.Content{
 					Parts: []*genai.Part{
 						{
-							Text: `{"lgtm": true, "comments": "Test review - changes look good"}`,
+							Text: stubReviewJSON,
 						},
 					},
 				},

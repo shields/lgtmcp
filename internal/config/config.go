@@ -36,6 +36,8 @@ var ErrPathTraversal = errors.New("path contains parent-directory segments")
 // the allowed base directory.
 var ErrPathOutsideBase = errors.New("absolute path is outside the allowed directory")
 
+const defaultMaxBackoff = "60s"
+
 // NotFoundError indicates the config file was not found.
 type NotFoundError struct {
 	Path string
@@ -157,7 +159,7 @@ func Load() (*Config, error) {
 		cfg.Gemini.Retry = &RetryConfig{
 			MaxRetries:        5,
 			InitialBackoff:    "1s",
-			MaxBackoff:        "60s",
+			MaxBackoff:        defaultMaxBackoff,
 			BackoffMultiplier: 1.4,
 		}
 	} else {
@@ -169,7 +171,7 @@ func Load() (*Config, error) {
 			cfg.Gemini.Retry.InitialBackoff = "1s"
 		}
 		if cfg.Gemini.Retry.MaxBackoff == "" {
-			cfg.Gemini.Retry.MaxBackoff = "60s"
+			cfg.Gemini.Retry.MaxBackoff = defaultMaxBackoff
 		}
 		if cfg.Gemini.Retry.BackoffMultiplier == 0 {
 			cfg.Gemini.Retry.BackoffMultiplier = 1.4
@@ -263,7 +265,7 @@ func NewTestConfig() *Config {
 			Retry: &RetryConfig{
 				MaxRetries:        5,
 				InitialBackoff:    "1s",
-				MaxBackoff:        "60s",
+				MaxBackoff:        defaultMaxBackoff,
 				BackoffMultiplier: 1.4,
 			},
 		},
