@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/progress"
 	"msrl.dev/lgtmcp/internal/review"
 	"msrl.dev/lgtmcp/internal/security"
 	"msrl.dev/lgtmcp/internal/testutil"
@@ -947,6 +948,51 @@ func TestPrepareReview_SecurityFindings(t *testing.T) {
 	textContent, ok := result.Content[0].(mcp.TextContent)
 	require.True(t, ok)
 	assert.Contains(t, textContent.Text, "Security scan failed")
+}
+
+func TestPrepareReview_SplitsDeletionsFromChangedFiles(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+
+	// Seed two committed files; one will be modified, one will be deleted.
+	testutil.CreateFile(t, tmpDir, "kept.go", "package main\n")
+	testutil.CreateFile(t, tmpDir, "gone.go", "package main\n\nfunc unused() {}\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	// Modify kept.go and delete gone.go from the working tree.
+	testutil.CreateFile(t, tmpDir, "kept.go", "package main\n\nfunc main() {}\n")
+	require.NoError(t, os.Remove(filepath.Join(tmpDir, "gone.go")))
+
+	reporter := progress.NewNoOpReporter()
+	rc, earlyReturn, err := s.prepareReview(t.Context(), tmpDir, reporter, 4)
+	require.NoError(t, err)
+	require.Nil(t, earlyReturn, "expected real diff, not an early-return result")
+	require.NotNil(t, rc)
+
+	assert.ElementsMatch(t, []string{"kept.go", "gone.go"}, rc.changedFiles,
+		"changedFiles must include both modified and deleted paths so StageFiles can stage both")
+	assert.Equal(t, []string{"gone.go"}, rc.deletedFiles,
+		"deletedFiles must contain exactly the deleted path so Gemini gets the right signal")
+}
+
+func TestPrepareReview_NoDeletionsLeavesDeletedFilesEmpty(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+
+	testutil.CreateFile(t, tmpDir, "kept.go", "package main\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+	testutil.CreateFile(t, tmpDir, "kept.go", "package main\n\nfunc main() {}\n")
+
+	reporter := progress.NewNoOpReporter()
+	rc, earlyReturn, err := s.prepareReview(t.Context(), tmpDir, reporter, 4)
+	require.NoError(t, err)
+	require.Nil(t, earlyReturn)
+	require.NotNil(t, rc)
+
+	assert.Equal(t, []string{"kept.go"}, rc.changedFiles)
+	assert.Empty(t, rc.deletedFiles)
 }
 
 func TestPrepareReview_InstructionFiles(t *testing.T) {

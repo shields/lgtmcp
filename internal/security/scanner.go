@@ -108,30 +108,65 @@ func (s *Scanner) ScanDiff(
 	return allFindings, nil
 }
 
+// ChangedFiles is the structured result of parsing a diff.
+type ChangedFiles struct {
+	// All is every changed path in diff order, with duplicates removed.
+	All []string
+	// Deleted is the subset of All for diff blocks that carried a
+	// "deleted file mode" line. Order matches All. When the same path
+	// appears in multiple blocks (a synthetic case that does not occur
+	// in real git output), the first block wins.
+	Deleted []string
+}
+
 // ExtractChangedFiles parses a git diff and returns the list of changed files.
 // It handles paths containing spaces, renames and copies (whose authoritative
 // destination comes from "rename to"/"copy to" lines), CRLF line endings, the
 // diff.noprefix git config, and C-style quoted paths used by git for non-ASCII
 // or otherwise special characters.
 func ExtractChangedFiles(diff string) []string {
-	var files []string
+	return ExtractChangedFilesDetailed(diff).All
+}
+
+// ExtractChangedFilesDetailed parses a git diff and returns both the full set
+// of changed paths and the subset marked as deletions. Same parser semantics
+// as [ExtractChangedFiles]; the deletion subset lets callers distinguish files
+// whose content still exists on disk from files whose content lives only in
+// the diff. Real git diffs never combine "deleted file mode" with rename/copy
+// in the same block, so the deletion flag is reset only at the start of each
+// new "diff --git" block.
+func ExtractChangedFilesDetailed(diff string) ChangedFiles {
+	var all []string
+	var deleted []string
 	seen := make(map[string]bool)
-	addFile := func(file string) {
-		if file != "" && !seen[file] {
-			files = append(files, file)
-			seen[file] = true
-		}
-	}
 
 	// pending holds the best-effort path from the most recent "diff --git"
 	// header. It is committed on the next header or at end of stream, and
 	// may be overridden by an authoritative "rename to"/"copy to" line.
 	var pending string
+	var pendingDeleted bool
+	commit := func() {
+		if pending == "" || seen[pending] {
+			return
+		}
+		seen[pending] = true
+		all = append(all, pending)
+		if pendingDeleted {
+			deleted = append(deleted, pending)
+		}
+	}
+
 	for rawLine := range strings.SplitSeq(diff, "\n") {
 		line := strings.TrimSuffix(rawLine, "\r")
 		if strings.HasPrefix(line, "diff --git ") {
-			addFile(pending)
+			commit()
 			pending = parseGitDiffHeader(line)
+			pendingDeleted = false
+
+			continue
+		}
+		if strings.HasPrefix(line, "deleted file mode ") {
+			pendingDeleted = true
 
 			continue
 		}
@@ -141,9 +176,9 @@ func ExtractChangedFiles(diff string) []string {
 			pending = unquoteIfQuoted(path)
 		}
 	}
-	addFile(pending)
+	commit()
 
-	return files
+	return ChangedFiles{All: all, Deleted: deleted}
 }
 
 // parseGitDiffHeader extracts the destination file path from a "diff --git"

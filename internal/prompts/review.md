@@ -51,9 +51,17 @@ This code has already been compiled, all tests pass, and lint is clean. Do not f
 
 Focus your review on higher-level issues: design, correctness, security, and maintainability.
 
-Changed files:
+{{- if .ExistingFilesList}}
+Files changed in this diff:
 
-- {{.FilesList}}
+- {{.ExistingFilesList}}
+  {{- end}}
+  {{- if .DeletedFilesList}}
+
+Files deleted by this change. The diff below shows their full removed content:
+
+- {{.DeletedFilesList}}
+  {{- end}}
 
 Git diff to review:
 {{.Diff}}

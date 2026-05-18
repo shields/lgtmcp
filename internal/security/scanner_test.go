@@ -698,6 +698,242 @@ index 1111111..2222222 100644
 	})
 }
 
+func TestExtractChangedFilesDetailed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty diff", func(t *testing.T) {
+		t.Parallel()
+		cf := ExtractChangedFilesDetailed("")
+		assert.Empty(t, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("only added", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/new.txt b/new.txt
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1 @@
++content`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"new.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("only modified", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/file.txt b/file.txt
+index 0000000..1111111 100644
+--- a/file.txt
++++ b/file.txt
+@@ -1 +1 @@
+-old
++new`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"file.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("only deleted", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/deleted.txt b/deleted.txt
+deleted file mode 100644
+index 1234567..0000000
+--- a/deleted.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-content`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"deleted.txt"}, cf.All)
+		assert.Equal(t, []string{"deleted.txt"}, cf.Deleted)
+	})
+
+	t.Run("mixed add modify delete in one diff", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/added.txt b/added.txt
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/added.txt
+@@ -0,0 +1 @@
++content
+diff --git a/modified.txt b/modified.txt
+index 1111111..2222222 100644
+--- a/modified.txt
++++ b/modified.txt
+@@ -1 +1 @@
+-old
++new
+diff --git a/deleted.txt b/deleted.txt
+deleted file mode 100644
+index 3333333..0000000
+--- a/deleted.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-gone`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"added.txt", "modified.txt", "deleted.txt"}, cf.All)
+		assert.Equal(t, []string{"deleted.txt"}, cf.Deleted)
+	})
+
+	t.Run("two deletions reset flag between blocks", func(t *testing.T) {
+		t.Parallel()
+		// The second block's deletion flag must not bleed back into a
+		// later non-deleted block, and the first block's flag must not
+		// affect later blocks that lack a deleted file mode line.
+		diff := `diff --git a/gone1.txt b/gone1.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/gone1.txt
++++ /dev/null
+diff --git a/kept.txt b/kept.txt
+index 2222222..3333333 100644
+--- a/kept.txt
++++ b/kept.txt
+@@ -1 +1 @@
+-old
++new
+diff --git a/gone2.txt b/gone2.txt
+deleted file mode 100644
+index 4444444..0000000
+--- a/gone2.txt
++++ /dev/null`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"gone1.txt", "kept.txt", "gone2.txt"}, cf.All)
+		assert.Equal(t, []string{"gone1.txt", "gone2.txt"}, cf.Deleted)
+	})
+
+	t.Run("rename is not a deletion", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/old.txt b/new.txt
+similarity index 100%
+rename from old.txt
+rename to new.txt`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"new.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("copy is not a deletion", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/orig.go b/copied.go
+similarity index 100%
+copy from orig.go
+copy to copied.go`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"copied.go"}, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("deleted file in subdirectory", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/src/old/foo.go b/src/old/foo.go
+deleted file mode 100644
+index 1111111..0000000
+--- a/src/old/foo.go
++++ /dev/null`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"src/old/foo.go"}, cf.All)
+		assert.Equal(t, []string{"src/old/foo.go"}, cf.Deleted)
+	})
+
+	t.Run("deleted file with spaces", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/my old file.txt b/my old file.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/my old file.txt
++++ /dev/null`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"my old file.txt"}, cf.All)
+		assert.Equal(t, []string{"my old file.txt"}, cf.Deleted)
+	})
+
+	t.Run("deleted file C-quoted non-ASCII", func(t *testing.T) {
+		t.Parallel()
+		// "café.txt" with the é encoded as 0xC3 0xA9.
+		diff := "diff --git \"a/caf\\303\\251.txt\" \"b/caf\\303\\251.txt\"\n" +
+			"deleted file mode 100644\n" +
+			"index 1111111..0000000\n" +
+			"--- \"a/caf\\303\\251.txt\"\n" +
+			"+++ /dev/null\n"
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"café.txt"}, cf.All)
+		assert.Equal(t, []string{"café.txt"}, cf.Deleted)
+	})
+
+	t.Run("deleted file in noprefix header", func(t *testing.T) {
+		t.Parallel()
+		const name = "old.txt"
+		diff := "diff --git " + name + " " + name + "\n" +
+			"deleted file mode 100644\n" +
+			"index 1111111..0000000\n" +
+			"--- " + name + "\n" +
+			"+++ /dev/null\n"
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{name}, cf.All)
+		assert.Equal(t, []string{name}, cf.Deleted)
+	})
+
+	t.Run("deleted file mode after index line", func(t *testing.T) {
+		t.Parallel()
+		// Synthetic ordering: real git always emits "deleted file mode"
+		// immediately after the header, but the parser shouldn't rely on
+		// position within the block.
+		diff := `diff --git a/late.txt b/late.txt
+index 1111111..0000000
+deleted file mode 100644
+--- a/late.txt
++++ /dev/null`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"late.txt"}, cf.All)
+		assert.Equal(t, []string{"late.txt"}, cf.Deleted)
+	})
+
+	t.Run("add then delete of same path classifies as deleted via first block", func(t *testing.T) {
+		t.Parallel()
+		// Synthetic: a path appearing in two blocks. Only the first
+		// occurrence is emitted (existing dedup behavior). If the first
+		// block carries the deleted flag, the path is in Deleted; if not,
+		// it is not in Deleted even though a later block marks it deleted.
+		// This documents the dedup-wins-first behavior so a future
+		// regression here is loud.
+		diffAddThenDelete := `diff --git a/dup.txt b/dup.txt
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/dup.txt
+@@ -0,0 +1 @@
++content
+diff --git a/dup.txt b/dup.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/dup.txt
++++ /dev/null`
+		cf := ExtractChangedFilesDetailed(diffAddThenDelete)
+		assert.Equal(t, []string{"dup.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted, "first block (add) wins; later delete is dedup-skipped")
+
+		diffDeleteThenAdd := `diff --git a/dup.txt b/dup.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/dup.txt
++++ /dev/null
+diff --git a/dup.txt b/dup.txt
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/dup.txt
+@@ -0,0 +1 @@
++new`
+		cf = ExtractChangedFilesDetailed(diffDeleteThenAdd)
+		assert.Equal(t, []string{"dup.txt"}, cf.All)
+		assert.Equal(t, []string{"dup.txt"}, cf.Deleted)
+	})
+}
+
 func TestScanContent(t *testing.T) {
 	t.Parallel()
 	scanner, err := New("")

@@ -120,21 +120,27 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 type ReviewPromptData struct {
 	AnalysisSection     string
 	InstructionsSection string
-	FilesList           string
-	Diff                string
-	CurrentDate         string
+	// FilesList holds every changed path (including deletions); retained for
+	// custom templates that reference {{.FilesList}}.
+	FilesList         string
+	ExistingFilesList string
+	DeletedFilesList  string
+	Diff              string
+	CurrentDate       string
 }
 
 // BuildReviewPrompt builds the review prompt from template with the given data.
+// deletedFiles must be a subset of changedFiles; paths in it are listed as
+// deletions and excluded from the existing-files section.
 //
 //nolint:lll // Long function signature
-func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysisText, instructions string) (string, error) {
+func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []string, analysisText, instructions string) (string, error) {
 	promptTemplate, err := m.LoadPrompt(ReviewPrompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to load review prompt: %w", err)
 	}
 
-	filesList := strings.Join(changedFiles, "\n- ")
+	existing, deleted := splitFiles(changedFiles, deletedFiles)
 
 	// Include the analysis from the first phase if available.
 	analysisSection := ""
@@ -145,7 +151,9 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysis
 	data := ReviewPromptData{
 		AnalysisSection:     analysisSection,
 		InstructionsSection: instructions,
-		FilesList:           filesList,
+		FilesList:           strings.Join(changedFiles, "\n- "),
+		ExistingFilesList:   strings.Join(existing, "\n- "),
+		DeletedFilesList:    strings.Join(deleted, "\n- "),
 		Diff:                diff,
 		CurrentDate:         time.Now().Format("January 2, 2006"),
 	}
@@ -166,22 +174,32 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles []string, analysis
 // ContextGatheringPromptData contains the data for the context gathering prompt template.
 type ContextGatheringPromptData struct {
 	InstructionsSection string
-	FilesList           string
-	Diff                string
+	// FilesList holds every changed path (including deletions); retained for
+	// custom templates that reference {{.FilesList}}.
+	FilesList         string
+	ExistingFilesList string
+	DeletedFilesList  string
+	Diff              string
 }
 
 // BuildContextGatheringPrompt builds the context gathering prompt from template with the given data.
-func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles []string, instructions string) (string, error) {
+// deletedFiles must be a subset of changedFiles; paths in it are listed as
+// deletions and excluded from the existing-files section.
+//
+//nolint:lll // Long function signature
+func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles, deletedFiles []string, instructions string) (string, error) {
 	promptTemplate, err := m.LoadPrompt(ContextGatheringPrompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to load context gathering prompt: %w", err)
 	}
 
-	filesList := strings.Join(changedFiles, "\n- ")
+	existing, deleted := splitFiles(changedFiles, deletedFiles)
 
 	data := ContextGatheringPromptData{
 		InstructionsSection: instructions,
-		FilesList:           filesList,
+		FilesList:           strings.Join(changedFiles, "\n- "),
+		ExistingFilesList:   strings.Join(existing, "\n- "),
+		DeletedFilesList:    strings.Join(deleted, "\n- "),
 		Diff:                diff,
 	}
 
@@ -196,4 +214,28 @@ func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles []string
 	}
 
 	return buf.String(), nil
+}
+
+// splitFiles partitions changedFiles into the paths that still exist (i.e.,
+// are not in deletedFiles) and the paths that were deleted, preserving the
+// order from changedFiles in both outputs. The deletedFiles set is matched by
+// equality.
+//
+//nolint:nonamedreturns // Both returns are []string; names disambiguate them for revive's confusing-results rule.
+func splitFiles(changedFiles, deletedFiles []string) (existing, deleted []string) {
+	if len(deletedFiles) == 0 {
+		return changedFiles, nil
+	}
+	deletedSet := make(map[string]bool, len(deletedFiles))
+	for _, f := range deletedFiles {
+		deletedSet[f] = true
+	}
+	for _, f := range changedFiles {
+		if deletedSet[f] {
+			deleted = append(deleted, f)
+		} else {
+			existing = append(existing, f)
+		}
+	}
+	return existing, deleted
 }

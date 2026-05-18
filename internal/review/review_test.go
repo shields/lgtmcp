@@ -289,7 +289,7 @@ func runFileRetrievalTests(t *testing.T, reviewer *Reviewer, repoDir string, tes
 				},
 			}
 
-			result := reviewer.handleFileRetrieval(funcCall, repoDir)
+			result := reviewer.handleFileRetrieval(funcCall, repoDir, nil)
 
 			var response map[string]any
 			if result.FunctionResponse != nil {
@@ -338,7 +338,7 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 		},
 	}
 
-	result := reviewer.handleFileRetrieval(funcCall, nonGitDir)
+	result := reviewer.handleFileRetrieval(funcCall, nonGitDir, nil)
 
 	var response map[string]any
 	if result.FunctionResponse != nil {
@@ -430,7 +430,7 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 			}
 
 			t.Logf("Testing with filepath: %s, repoDir: %s", tt.filepath, repoDir)
-			result := reviewer.handleFileRetrieval(funcCall, repoDir)
+			result := reviewer.handleFileRetrieval(funcCall, repoDir, nil)
 
 			// Extract the response from the FunctionResponse.
 			var response map[string]any
@@ -554,7 +554,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir, nil)
 		assert.NotNil(t, response)
 
 		// Check the response contains the file content.
@@ -571,7 +571,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			Args: map[string]any{},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir, nil)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -589,7 +589,7 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir, nil)
 		assert.NotNil(t, response)
 
 		// Check for error response.
@@ -607,13 +607,72 @@ func TestHandleFileRetrieval(t *testing.T) {
 			},
 		}
 
-		response := r.handleFileRetrieval(funcCall, tmpDir)
+		response := r.handleFileRetrieval(funcCall, tmpDir, nil)
 		assert.NotNil(t, response)
 
 		// Check for error response.
 		if response.FunctionResponse != nil {
 			assert.Contains(t, response.FunctionResponse.Response["error"], "failed to read file")
 		}
+	})
+
+	t.Run("deleted file returns explicit deleted-file message", func(t *testing.T) {
+		t.Parallel()
+		// The model asks for a path the caller flagged as a deletion. The
+		// tool must short-circuit and tell the model the file was removed,
+		// rather than letting it fall through to a generic ENOENT that
+		// could be mistaken for a transient read failure.
+		funcCall := &genai.FunctionCall{
+			Name: "get_file_content",
+			Args: map[string]any{"filepath": "gone.txt"},
+		}
+		deleted := map[string]bool{"gone.txt": true}
+
+		response := r.handleFileRetrieval(funcCall, tmpDir, deleted)
+		require.NotNil(t, response)
+		require.NotNil(t, response.FunctionResponse)
+
+		errMsg, ok := response.FunctionResponse.Response["error"].(string)
+		require.True(t, ok, "expected error in response, got %+v", response.FunctionResponse.Response)
+		assert.Equal(t, errDeletedFileMsg, errMsg)
+		assert.NotContains(t, errMsg, "failed to read file")
+		assert.NotContains(t, errMsg, "no such file or directory")
+
+		// And it must not leak content.
+		_, leaked := response.FunctionResponse.Response["content"]
+		assert.False(t, leaked, "deleted-file response must not include content")
+	})
+
+	t.Run("deleted-file short-circuit also applies for paths with redundant components", func(t *testing.T) {
+		t.Parallel()
+		// The deleted set is keyed by filepath.Clean'd paths; a request
+		// for "./gone.txt" should still hit the short-circuit.
+		funcCall := &genai.FunctionCall{
+			Name: "get_file_content",
+			Args: map[string]any{"filepath": "./gone.txt"},
+		}
+		deleted := map[string]bool{"gone.txt": true}
+
+		response := r.handleFileRetrieval(funcCall, tmpDir, deleted)
+		require.NotNil(t, response.FunctionResponse)
+		errMsg, ok := response.FunctionResponse.Response["error"].(string)
+		require.True(t, ok)
+		assert.Equal(t, errDeletedFileMsg, errMsg)
+	})
+
+	t.Run("existing file is unaffected by populated deleted set", func(t *testing.T) {
+		t.Parallel()
+		// Sanity check that a non-empty deleted set does not poison the
+		// happy path: a request for a still-present file returns content.
+		funcCall := &genai.FunctionCall{
+			Name: "get_file_content",
+			Args: map[string]any{"filepath": "test.txt"},
+		}
+		deleted := map[string]bool{"some-other-path.txt": true}
+
+		response := r.handleFileRetrieval(funcCall, tmpDir, deleted)
+		require.NotNil(t, response.FunctionResponse)
+		assert.Equal(t, testContent, response.FunctionResponse.Response["content"])
 	})
 }
 
@@ -1872,7 +1931,8 @@ func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	}
 
 	fetchedFiles := []string{}
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"main.go"}, tmpDir,
+	result, err := r.ReviewDiff(
+		t.Context(), "diff content", []string{"main.go"}, tmpDir,
 		WithFileFetchCallback(func(path string) { fetchedFiles = append(fetchedFiles, path) }),
 		WithInstructions("test instructions"),
 	)
@@ -2031,7 +2091,7 @@ func TestHandleFileRetrieval_NonStringFilepath(t *testing.T) {
 		Name: "get_file_content",
 		Args: map[string]any{"filepath": 123},
 	}
-	resp := r.handleFileRetrieval(funcCall, "/repo")
+	resp := r.handleFileRetrieval(funcCall, "/repo", nil)
 	assert.NotNil(t, resp)
 	assert.NotNil(t, resp.FunctionResponse)
 }
@@ -2163,7 +2223,7 @@ func TestHandleFileRetrieval_ParentSymlinkEscape(t *testing.T) {
 		Name: "get_file_content",
 		Args: map[string]any{"filepath": "escape/secret.txt"},
 	}
-	resp := reviewer.handleFileRetrieval(funcCall, repoDir)
+	resp := reviewer.handleFileRetrieval(funcCall, repoDir, nil)
 	require.NotNil(t, resp.FunctionResponse)
 	errMsg, ok := resp.FunctionResponse.Response["error"].(string)
 	require.True(t, ok, "expected error response, got %+v", resp.FunctionResponse.Response)
@@ -2191,7 +2251,7 @@ func TestHandleFileRetrieval_FileSizeLimit(t *testing.T) {
 		Name: "get_file_content",
 		Args: map[string]any{"filepath": "big.bin"},
 	}
-	resp := reviewer.handleFileRetrieval(funcCall, repoDir)
+	resp := reviewer.handleFileRetrieval(funcCall, repoDir, nil)
 	require.NotNil(t, resp.FunctionResponse)
 	errMsg, ok := resp.FunctionResponse.Response["error"].(string)
 	require.True(t, ok, "expected error response, got %+v", resp.FunctionResponse.Response)

@@ -168,6 +168,10 @@ Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-speci
 - Symlinks pointing outside the repository are skipped
 - Discovery errors are non-fatal (logged as warnings)
 
+## Deleted-File Handling
+
+When the diff contains deleted files, lgtmcp lists them in a dedicated "Files deleted by this change" section in both prompts, and the `get_file_content` tool short-circuits requests for those paths with the dedicated `errDeletedFileMsg` instead of returning a generic ENOENT. The diff already carries the full removed content, so the model has everything it needs without a follow-up fetch. The deletion set comes from `security.ChangedFiles.Deleted` (returned by `ExtractChangedFilesDetailed`) and is threaded through `review.WithDeletedFiles`. Staging still receives the full path list so deletions are committed; the broader stage-time TOCTOU window (re-created files, modification swap) is documented at the `StageFiles` callsite in `pkg/mcp/server.go` and tracked separately.
+
 ## Security Features
 
 - **Gitignore Protection**: The `get_file_contents` tool respects `.gitignore` files and refuses access to any ignored files

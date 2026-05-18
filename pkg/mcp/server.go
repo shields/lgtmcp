@@ -190,6 +190,7 @@ type reviewContext struct {
 	diff         string
 	absPath      string
 	changedFiles []string
+	deletedFiles []string
 	instructions string
 }
 
@@ -350,7 +351,8 @@ func (s *Server) prepareReview(
 	}
 
 	// Extract list of changed files from the diff for Gemini's file retrieval.
-	changedFiles := security.ExtractChangedFiles(diff)
+	cf := security.ExtractChangedFilesDetailed(diff)
+	changedFiles := cf.All
 
 	// Discover AGENTS.md and REVIEW.md files relevant to the changed files.
 	var instructionsBuf strings.Builder
@@ -379,6 +381,7 @@ func (s *Server) prepareReview(
 		gitClient:    gitClient,
 		diff:         diff,
 		changedFiles: changedFiles,
+		deletedFiles: cf.Deleted,
 		absPath:      directory,
 		instructions: instructionsBuf.String(),
 	}, nil, nil
@@ -406,7 +409,8 @@ func (s *Server) performReview(
 
 	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath,
 		review.WithFileFetchCallback(fileFetchCallback),
-		review.WithInstructions(rc.instructions))
+		review.WithInstructions(rc.instructions),
+		review.WithDeletedFiles(rc.deletedFiles))
 
 	duration := time.Since(start)
 	if err != nil {

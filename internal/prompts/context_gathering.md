@@ -22,9 +22,17 @@ You are analyzing code changes for a thorough review. Please examine this git di
 {{.InstructionsSection}}
 {{- end}}
 
-Changed files:
+{{- if .ExistingFilesList}}
+Files changed in this diff (call get_file_content to retrieve current content if you need more than the diff shows):
 
-- {{.FilesList}}
+- {{.ExistingFilesList}}
+  {{- end}}
+  {{- if .DeletedFilesList}}
+
+Files deleted by this change. The diff below shows their full removed content; do not call get_file_content for these paths because they no longer exist:
+
+- {{.DeletedFilesList}}
+  {{- end}}
 
 Git diff to analyze:
 {{.Diff}}

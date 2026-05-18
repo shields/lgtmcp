@@ -122,6 +122,8 @@ type GeminiChat interface {
 type Options struct {
 	FileFetchCallback FileFetchCallback
 	Instructions      string
+	// DeletedFiles is the subset of changed paths that the diff marks as deletions.
+	DeletedFiles []string
 }
 
 // Option is a functional option for ReviewDiff.
@@ -141,6 +143,14 @@ func WithInstructions(instructions string) Option {
 	}
 }
 
+// WithDeletedFiles records which changed paths are deletions so the file
+// retrieval tool can respond with a clear deleted-file message.
+func WithDeletedFiles(deleted []string) Option {
+	return func(opts *Options) {
+		opts.DeletedFiles = deleted
+	}
+}
+
 // Reviewer handles code review using Gemini.
 type Reviewer struct {
 	client        GeminiClient
@@ -153,8 +163,9 @@ type Reviewer struct {
 }
 
 const (
-	defaultModel = "gemini-3.1-pro-preview"
-	errorKey     = "error"
+	defaultModel      = "gemini-3.1-pro-preview"
+	errorKey          = "error"
+	errDeletedFileMsg = "file was deleted in this change; its full removed content is shown in the diff"
 )
 
 // modelPricing contains per-million-token pricing for supported models.
@@ -568,8 +579,15 @@ func (r *Reviewer) reviewDiffWithModel(
 		}
 	}()
 
+	deletedSet := make(map[string]bool, len(opts.DeletedFiles))
+	for _, p := range opts.DeletedFiles {
+		deletedSet[filepath.Clean(p)] = true
+	}
+
 	// Phase 1: Let Gemini analyze the code with tool support for file retrieval.
-	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(diff, changedFiles, opts.Instructions)
+	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(
+		diff, changedFiles, opts.DeletedFiles, opts.Instructions,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build context gathering prompt: %w", err)
 	}
@@ -643,7 +661,7 @@ func (r *Reviewer) reviewDiffWithModel(
 				}
 
 				// Send the function response back with retry logic.
-				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath)
+				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath, deletedSet)
 
 				// Log the function response for debugging.
 				r.logger.Debug("Sending function response",
@@ -674,7 +692,9 @@ func (r *Reviewer) reviewDiffWithModel(
 	}
 
 	// Phase 2: Get structured review result without tools.
-	reviewPrompt, err := r.promptManager.BuildReviewPrompt(diff, changedFiles, analysisText, opts.Instructions)
+	reviewPrompt, err := r.promptManager.BuildReviewPrompt(
+		diff, changedFiles, opts.DeletedFiles, analysisText, opts.Instructions,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build review prompt: %w", err)
 	}
@@ -758,8 +778,13 @@ func (r *Reviewer) reviewDiffWithModel(
 	return nil, ErrEmptyResponse
 }
 
-// handleFileRetrieval handles file retrieval tool calls from Gemini.
-func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath string) *genai.Part {
+// handleFileRetrieval handles file retrieval tool calls from Gemini. The
+// deleted set contains paths the caller has identified as deletions in the
+// diff under review; requests for those paths return a clear deleted-file
+// response instead of attempting to open the (now-missing) file.
+func (*Reviewer) handleFileRetrieval(
+	funcCall *genai.FunctionCall, repoPath string, deleted map[string]bool,
+) *genai.Part {
 	// Extract the filepath argument.
 	requestedPath, ok := funcCall.Args["filepath"].(string)
 	if !ok {
@@ -768,6 +793,15 @@ func (*Reviewer) handleFileRetrieval(funcCall *genai.FunctionCall, repoPath stri
 			map[string]any{
 				errorKey: "filepath parameter must be a string",
 			},
+		)
+	}
+
+	// Short-circuit deletions so the model gets a deletion-specific message
+	// instead of a generic ENOENT it might think is transient.
+	if deleted[filepath.Clean(requestedPath)] {
+		return genai.NewPartFromFunctionResponse(
+			funcCall.Name,
+			map[string]any{errorKey: errDeletedFileMsg},
 		)
 	}
 

@@ -17,6 +17,7 @@ package prompts
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -93,7 +94,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		changedFiles := []string{"main.go", "test.go"}
 		analysisText := "The code looks good overall"
 
-		prompt, err := m.BuildReviewPrompt(diff, changedFiles, analysisText, "")
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, nil, analysisText, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, diff)
 		assert.Contains(t, prompt, "main.go")
@@ -108,7 +109,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		diff := testDiffGitHeader
 		changedFiles := []string{"main.go"}
 
-		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "", "")
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, nil, "", "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, diff)
 		assert.Contains(t, prompt, "main.go")
@@ -125,7 +126,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 
 		m := New(customPromptPath, "")
 		m.SetConfigDir(tmpDir)
-		prompt, err := m.BuildReviewPrompt("test diff", []string{"file1.go"}, "", "")
+		prompt, err := m.BuildReviewPrompt("test diff", []string{"file1.go"}, nil, "", "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Custom: test diff")
 		assert.Contains(t, prompt, "Files: file1.go")
@@ -141,7 +142,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 
 		m := New(customPromptPath, "")
 		m.SetConfigDir(tmpDir)
-		_, err = m.BuildReviewPrompt("test", []string{"file.go"}, "", "")
+		_, err = m.BuildReviewPrompt("test", []string{"file.go"}, nil, "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "failed to parse review prompt template")
 	})
@@ -156,7 +157,7 @@ func TestManager_BuildContextGatheringPrompt(t *testing.T) {
 		diff := testDiffGitHeader
 		changedFiles := []string{"main.go", "lib.go"}
 
-		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, "")
+		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, nil, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, diff)
 		assert.Contains(t, prompt, "main.go")
@@ -174,7 +175,7 @@ func TestManager_BuildContextGatheringPrompt(t *testing.T) {
 
 		m := New("", customPromptPath)
 		m.SetConfigDir(tmpDir)
-		prompt, err := m.BuildContextGatheringPrompt("test diff", []string{"file1.go", "file2.go"}, "")
+		prompt, err := m.BuildContextGatheringPrompt("test diff", []string{"file1.go", "file2.go"}, nil, "")
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Analyze: test diff")
 		assert.Contains(t, prompt, "file1.go")
@@ -191,7 +192,7 @@ func TestManager_BuildReviewPromptWithInstructions(t *testing.T) {
 		changedFiles := []string{"main.go"}
 		instructions := "## Agent Instructions\n\nAlways check for tests."
 
-		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "", instructions)
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, nil, "", instructions)
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Agent Instructions")
 		assert.Contains(t, prompt, "Always check for tests")
@@ -203,7 +204,7 @@ func TestManager_BuildReviewPromptWithInstructions(t *testing.T) {
 		diff := testDiffGitHeader
 		changedFiles := []string{"main.go"}
 
-		prompt, err := m.BuildReviewPrompt(diff, changedFiles, "", "")
+		prompt, err := m.BuildReviewPrompt(diff, changedFiles, nil, "", "")
 		require.NoError(t, err)
 		assert.NotContains(t, prompt, "Agent Instructions")
 	})
@@ -219,7 +220,7 @@ func TestManager_BuildContextGatheringPromptWithInstructions(t *testing.T) {
 		changedFiles := []string{"main.go"}
 		instructions := "## Agent Instructions\n\nCheck security carefully."
 
-		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, instructions)
+		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, nil, instructions)
 		require.NoError(t, err)
 		assert.Contains(t, prompt, "Agent Instructions")
 		assert.Contains(t, prompt, "Check security carefully")
@@ -231,7 +232,7 @@ func TestManager_BuildContextGatheringPromptWithInstructions(t *testing.T) {
 		diff := testDiffGitHeader
 		changedFiles := []string{"main.go"}
 
-		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, "")
+		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, nil, "")
 		require.NoError(t, err)
 		assert.NotContains(t, prompt, "Agent Instructions")
 	})
@@ -270,7 +271,7 @@ func TestPromptData(t *testing.T) {
 func TestBuildReviewPrompt_LoadPromptError(t *testing.T) {
 	t.Parallel()
 	m := New("/nonexistent/review.md", "")
-	_, err := m.BuildReviewPrompt("diff", []string{"file.go"}, "", "")
+	_, err := m.BuildReviewPrompt("diff", []string{"file.go"}, nil, "", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load review prompt")
 }
@@ -278,7 +279,7 @@ func TestBuildReviewPrompt_LoadPromptError(t *testing.T) {
 func TestBuildContextGatheringPrompt_LoadPromptError(t *testing.T) {
 	t.Parallel()
 	m := New("", "/nonexistent/context.md")
-	_, err := m.BuildContextGatheringPrompt("diff", []string{"file.go"}, "")
+	_, err := m.BuildContextGatheringPrompt("diff", []string{"file.go"}, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to load context gathering prompt")
 }
@@ -292,7 +293,7 @@ func TestBuildContextGatheringPrompt_TemplateParseError(t *testing.T) {
 
 	m := New("", customPromptPath)
 	m.SetConfigDir(tmpDir)
-	_, err = m.BuildContextGatheringPrompt("diff", []string{"file.go"}, "")
+	_, err = m.BuildContextGatheringPrompt("diff", []string{"file.go"}, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to parse context gathering prompt template")
 }
@@ -307,7 +308,7 @@ func TestBuildContextGatheringPrompt_TemplateExecutionError(t *testing.T) {
 
 	m := New("", customPromptPath)
 	m.SetConfigDir(tmpDir)
-	_, err = m.BuildContextGatheringPrompt("diff", []string{"file.go"}, "")
+	_, err = m.BuildContextGatheringPrompt("diff", []string{"file.go"}, nil, "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to execute context gathering prompt template")
 }
@@ -332,7 +333,7 @@ func TestBuildReviewPrompt_TemplateExecutionError(t *testing.T) {
 
 	m := New(customPromptPath, "")
 	m.SetConfigDir(tmpDir)
-	_, err = m.BuildReviewPrompt("diff", []string{"file.go"}, "", "")
+	_, err = m.BuildReviewPrompt("diff", []string{"file.go"}, nil, "", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to execute review prompt template")
 }
@@ -406,7 +407,8 @@ func TestEmbeddedPrompts(t *testing.T) {
 		t.Parallel()
 		assert.NotEmpty(t, defaultReviewPrompt)
 		assert.Contains(t, defaultReviewPrompt, "{{.Diff}}")
-		assert.Contains(t, defaultReviewPrompt, "{{.FilesList}}")
+		assert.Contains(t, defaultReviewPrompt, ".ExistingFilesList")
+		assert.Contains(t, defaultReviewPrompt, ".DeletedFilesList")
 		assert.Contains(t, defaultReviewPrompt, ".InstructionsSection")
 	})
 
@@ -414,7 +416,111 @@ func TestEmbeddedPrompts(t *testing.T) {
 		t.Parallel()
 		assert.NotEmpty(t, defaultContextGatheringPrompt)
 		assert.Contains(t, defaultContextGatheringPrompt, "{{.Diff}}")
-		assert.Contains(t, defaultContextGatheringPrompt, "{{.FilesList}}")
+		assert.Contains(t, defaultContextGatheringPrompt, ".ExistingFilesList")
+		assert.Contains(t, defaultContextGatheringPrompt, ".DeletedFilesList")
 		assert.Contains(t, defaultContextGatheringPrompt, ".InstructionsSection")
+	})
+}
+
+// TestBuildPrompts_DeletedFileSections covers the new behavior: deletions go
+// into a dedicated section so the model knows not to call get_file_content
+// for them, and the existing-files section is suppressed entirely when the
+// diff only deletes files.
+func TestBuildPrompts_DeletedFileSections(t *testing.T) {
+	t.Parallel()
+
+	t.Run("review prompt with only existing files omits deleted section", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		prompt, err := m.BuildReviewPrompt("diff", []string{"keep.go"}, nil, "", "")
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "Files changed in this diff")
+		assert.Contains(t, prompt, "keep.go")
+		assert.NotContains(t, prompt, "Files deleted by this change")
+	})
+
+	t.Run("review prompt with only deletions omits changed section", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		prompt, err := m.BuildReviewPrompt("diff", []string{"gone.go"}, []string{"gone.go"}, "", "")
+		require.NoError(t, err)
+		assert.NotContains(t, prompt, "Files changed in this diff")
+		assert.Contains(t, prompt, "Files deleted by this change")
+		assert.Contains(t, prompt, "gone.go")
+	})
+
+	t.Run("review prompt with both kinds renders both sections", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		prompt, err := m.BuildReviewPrompt(
+			"diff", []string{"keep.go", "gone.go"}, []string{"gone.go"}, "", "",
+		)
+		require.NoError(t, err)
+		existingIdx := strings.Index(prompt, "Files changed in this diff")
+		deletedIdx := strings.Index(prompt, "Files deleted by this change")
+		require.NotEqual(t, -1, existingIdx, "expected existing section in prompt")
+		require.NotEqual(t, -1, deletedIdx, "expected deleted section in prompt")
+		assert.Less(t, existingIdx, deletedIdx, "existing section must precede deleted section")
+		// keep.go appears in the existing section, gone.go in the deleted section.
+		assert.Contains(t, prompt[existingIdx:deletedIdx], "keep.go")
+		assert.NotContains(t, prompt[existingIdx:deletedIdx], "gone.go")
+		assert.Contains(t, prompt[deletedIdx:], "gone.go")
+	})
+
+	t.Run("context gathering prompt with only existing files omits deleted section", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		prompt, err := m.BuildContextGatheringPrompt("diff", []string{"keep.go"}, nil, "")
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "Files changed in this diff")
+		assert.NotContains(t, prompt, "Files deleted by this change")
+	})
+
+	t.Run("context gathering prompt with deletions includes warning not to fetch them", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+		prompt, err := m.BuildContextGatheringPrompt(
+			"diff", []string{"keep.go", "gone.go"}, []string{"gone.go"}, "",
+		)
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "Files deleted by this change")
+		assert.Contains(t, prompt, "do not call get_file_content")
+		assert.Contains(t, prompt, "gone.go")
+	})
+
+	t.Run("custom template using FilesList still receives full list", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		customPromptPath := filepath.Join(tmpDir, "custom.md")
+		// Older custom templates only know about {{.FilesList}}; verify
+		// they keep working and see deletions alongside other changes.
+		err := os.WriteFile(customPromptPath, []byte("Files: {{.FilesList}}"), 0o600)
+		require.NoError(t, err)
+
+		m := New(customPromptPath, "")
+		m.SetConfigDir(tmpDir)
+		prompt, err := m.BuildReviewPrompt(
+			"diff", []string{"keep.go", "gone.go"}, []string{"gone.go"}, "", "",
+		)
+		require.NoError(t, err)
+		assert.Contains(t, prompt, "keep.go")
+		assert.Contains(t, prompt, "gone.go")
+	})
+
+	t.Run("splitFiles preserves changedFiles order in both outputs", func(t *testing.T) {
+		t.Parallel()
+		existing, deleted := splitFiles(
+			[]string{"a.go", "b.go", "c.go", "d.go"},
+			[]string{"b.go", "d.go"},
+		)
+		assert.Equal(t, []string{"a.go", "c.go"}, existing)
+		assert.Equal(t, []string{"b.go", "d.go"}, deleted)
+	})
+
+	t.Run("splitFiles with empty deletions returns full list", func(t *testing.T) {
+		t.Parallel()
+		existing, deleted := splitFiles([]string{"a.go", "b.go"}, nil)
+		assert.Equal(t, []string{"a.go", "b.go"}, existing)
+		assert.Empty(t, deleted)
 	})
 }
