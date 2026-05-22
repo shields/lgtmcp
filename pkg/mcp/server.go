@@ -124,7 +124,9 @@ func (s *Server) registerTools() { //nolint:funcorder // Helper method
 	s.mcpServer.AddTool(mcp.Tool{
 		Name: "review_only",
 		Description: "Review code changes using Gemini and return feedback without committing. " +
-			"Returns review comments and approval status.",
+			"Reviews all workspace changes (staged, unstaged, and untracked), not just staged " +
+			"files; stash anything you want to exclude first. Returns review comments and " +
+			"approval status.",
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
 			Properties: map[string]any{
@@ -141,6 +143,8 @@ func (s *Server) registerTools() { //nolint:funcorder // Helper method
 	s.mcpServer.AddTool(mcp.Tool{
 		Name: "review_and_commit",
 		Description: "Review code changes using Gemini and commit if approved (LGTM). " +
+			"Reviews and commits all workspace changes (staged, unstaged, and untracked), not " +
+			"just staged files; stash anything you want to exclude first for a partial commit. " +
 			"Returns review comments if not approved or success message with commit hash if approved and committed.",
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
