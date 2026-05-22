@@ -46,6 +46,7 @@ linters:
     - noctx # Not all functions need context
     - noinlineerr # Inline errors are often clearer
     - maintidx # Flags table-driven tests as too complex
+    - gomodguard # Deprecated since v2.12.0; replaced by gomodguard_v2 (enabled by default: all)
 
   settings:
     dupl:
