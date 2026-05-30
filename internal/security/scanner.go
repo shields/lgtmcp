@@ -98,11 +98,7 @@ func (s *Scanner) ScanDiff(
 			continue
 		}
 
-		findings := s.detector.DetectString(content)
-		for i := range findings {
-			findings[i].File = file
-		}
-		allFindings = append(allFindings, findings...)
+		allFindings = append(allFindings, s.scanContent(content, file)...)
 	}
 
 	return allFindings, nil
@@ -135,6 +131,15 @@ func ExtractChangedFiles(diff string) []string {
 // the diff. Real git diffs never combine "deleted file mode" with rename/copy
 // in the same block, so the deletion flag is reset only at the start of each
 // new "diff --git" block.
+//
+// The diff must use git's standard "a/" and "b/" path prefixes (or no prefix,
+// when diff.noprefix is set). The parser deliberately does not strip git's
+// mnemonic prefixes ("c/ i/ w/ o/", emitted when diff.mnemonicPrefix is set):
+// a file literally named "i/foo" is indistinguishable from a mnemonic-prefixed
+// path, so guessing would risk mangling genuine paths. lgtmcp's own diffs are
+// safe because the git package forces --src-prefix=a/ --dst-prefix=b/ when
+// running git diff; any other caller must supply equivalently-prefixed diffs
+// or the returned paths will keep the mnemonic prefix and fail to resolve.
 func ExtractChangedFilesDetailed(diff string) ChangedFiles {
 	var all []string
 	var deleted []string
@@ -323,23 +328,23 @@ func splitDiffPathsFallback(rest, sep string) string {
 	return after
 }
 
-// ScanContent scans arbitrary content for secrets.
-func (s *Scanner) ScanContent(_ context.Context, content, filename string) ([]report.Finding, error) {
+// scanContent scans arbitrary content for secrets, stamping the given filename
+// onto each finding. DetectString leaves Finding.File empty, so this attributes
+// the secret to the right file for downstream reporting. A blank filename
+// leaves the field as-is.
+func (s *Scanner) scanContent(content, filename string) []report.Finding {
 	if content == "" {
-		return nil, nil
+		return nil
 	}
 
 	findings := s.detector.DetectString(content)
-
-	// DetectString leaves Finding.File empty; stamp the caller-supplied
-	// filename so downstream reporting attributes the secret correctly.
 	if filename != "" {
 		for i := range findings {
 			findings[i].File = filename
 		}
 	}
 
-	return findings, nil
+	return findings
 }
 
 // FormatFindings formats findings into a human-readable string.

@@ -941,8 +941,7 @@ func TestScanContent(t *testing.T) {
 
 	t.Run("empty content", func(t *testing.T) {
 		t.Parallel()
-		findings, err := scanner.ScanContent(t.Context(), "", "test.txt")
-		require.NoError(t, err)
+		findings := scanner.scanContent("", "test.txt")
 		assert.Empty(t, findings)
 	})
 
@@ -953,16 +952,14 @@ import "fmt"
 func main() {
 	fmt.Println("Hello, World!")
 }`
-		findings, err := scanner.ScanContent(t.Context(), content, "main.go")
-		require.NoError(t, err)
+		findings := scanner.scanContent(content, "main.go")
 		assert.Empty(t, findings)
 	})
 
 	t.Run("content with GitHub token", func(t *testing.T) {
 		t.Parallel()
 		content := `token: ` + fakeSecrets.GitHubPAT()
-		findings, err := scanner.ScanContent(t.Context(), content, "config.yml")
-		require.NoError(t, err)
+		findings := scanner.scanContent(content, "config.yml")
 		// Gitleaks should detect GitHub tokens.
 		assert.NotNil(t, findings)
 		if len(findings) > 0 {
@@ -973,8 +970,7 @@ func main() {
 	t.Run("content without filename", func(t *testing.T) {
 		t.Parallel()
 		content := `password = "super_secret_password_123"`
-		findings, err := scanner.ScanContent(t.Context(), content, "")
-		require.NoError(t, err)
+		findings := scanner.scanContent(content, "")
 		// DetectString returns a slice (possibly empty).
 		assert.Empty(t, findings)
 	})
@@ -985,8 +981,7 @@ func main() {
 github_token = "` + fakeSecrets.GitHubPAT() + `"
 private_key = "` + fakeSecrets.FullPrivateKey() + `"
 `
-		findings, err := scanner.ScanContent(t.Context(), content, "secrets.txt")
-		require.NoError(t, err)
+		findings := scanner.scanContent(content, "secrets.txt")
 		assert.GreaterOrEqual(t, len(findings), 2) // Should find at least 2 secrets.
 	})
 }
