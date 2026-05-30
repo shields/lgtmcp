@@ -52,7 +52,7 @@ type Config struct {
 	MCPSender MCPLogSender `json:"-"`
 
 	// ConfigDir is the lgtmcp config directory used to validate Directory
-	// when it is set. When empty, [cfgpkg.ConfigDir] is used. Tests may set
+	// when it is set. When empty, [cfgpkg.Dir] is used. Tests may set
 	// it to a temporary directory; production code should leave it empty.
 	ConfigDir string `json:"-"`
 }

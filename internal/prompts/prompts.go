@@ -55,7 +55,7 @@ type Manager struct {
 	reviewPromptPath           string
 	contextGatheringPromptPath string
 	// configDir is the lgtmcp config directory used to validate custom
-	// prompt paths. When empty, [config.ConfigDir] is used at validation
+	// prompt paths. When empty, [config.Dir] is used at validation
 	// time. Tests may override it via [Manager.SetConfigDir].
 	configDir string
 }
@@ -70,7 +70,7 @@ func New(reviewPromptPath, contextGatheringPromptPath string) *Manager {
 
 // SetConfigDir overrides the lgtmcp config directory used to validate custom
 // prompt paths. Intended for tests; production code should rely on the
-// default ([config.ConfigDir]).
+// default ([config.Dir]).
 func (m *Manager) SetConfigDir(dir string) {
 	m.configDir = dir
 }
