@@ -269,6 +269,50 @@ func TestHandleFileRetrieval_GitInfoExclude(t *testing.T) {
 	runFileRetrievalTests(t, reviewer, repoDir, tests)
 }
 
+// TestHandleFileRetrieval_GitEnvLeak ensures gitignore enforcement consults the
+// target repository even when git-location environment variables (GIT_DIR,
+// GIT_WORK_TREE, GIT_INDEX_FILE) are inherited, as happens when lgtmcp runs
+// inside another git process such as a pre-commit hook. Without sanitizing the
+// child process environment, git check-ignore would resolve a different
+// repository and silently fail to honor the target repo's .gitignore.
+//
+// This test mutates the process environment and therefore must not run in
+// parallel.
+func TestHandleFileRetrieval_GitEnvLeak(t *testing.T) {
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("secret.txt\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "secret.txt"), []byte("secret content"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "normal.txt"), []byte("normal content"), 0o600))
+
+	// Point git-location vars at an unrelated repository to simulate the leak.
+	otherRepo := testutil.CreateTempGitRepo(t)
+	t.Setenv("GIT_DIR", filepath.Join(otherRepo, ".git"))
+	t.Setenv("GIT_WORK_TREE", otherRepo)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(otherRepo, ".git", "index"))
+
+	cfg := config.NewTestConfig()
+	reviewer, err := New(cfg, testutil.NewTestLogger())
+	require.NoError(t, err)
+
+	ignored := reviewer.handleFileRetrieval(&genai.FunctionCall{
+		Name: "get_file_content",
+		Args: map[string]any{"filepath": "secret.txt"},
+	}, repoDir, nil)
+	require.NotNil(t, ignored.FunctionResponse)
+	errMsg, ok := ignored.FunctionResponse.Response["error"].(string)
+	require.True(t, ok, "gitignored file must be denied despite leaked git env, got %+v",
+		ignored.FunctionResponse.Response)
+	assert.Contains(t, errMsg, "access denied: file is gitignored")
+
+	allowed := reviewer.handleFileRetrieval(&genai.FunctionCall{
+		Name: "get_file_content",
+		Args: map[string]any{"filepath": "normal.txt"},
+	}, repoDir, nil)
+	require.NotNil(t, allowed.FunctionResponse)
+	assert.Equal(t, "normal content", allowed.FunctionResponse.Response["content"])
+}
+
 type fileRetrievalTest struct {
 	name          string
 	filepath      string
@@ -1804,6 +1848,71 @@ func TestReviewDiffWithModel_NoResponse(t *testing.T) {
 
 	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
 	require.ErrorIs(t, err, ErrNoResponse)
+}
+
+// TestReviewDiffWithModel_NilContentReviewPhase ensures a candidate returned
+// with no Content (e.g. blocked by safety filters or stopped on MAX_TOKENS)
+// in the structured review phase yields a clean error rather than a nil
+// pointer panic.
+func TestReviewDiffWithModel_NilContentReviewPhase(t *testing.T) {
+	t.Parallel()
+	client := newStubClientWithGenerateContent(func(
+		_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+	) (*genai.GenerateContentResponse, error) {
+		return &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{Content: nil, FinishReason: genai.FinishReasonSafety}},
+		}, nil
+	})
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+	require.ErrorIs(t, err, ErrEmptyResponse)
+}
+
+// TestReviewDiffWithModel_NilContentContextPhase ensures a candidate returned
+// with no Content during the context-gathering phase does not panic; the
+// review proceeds to the structured phase and succeeds.
+func TestReviewDiffWithModel_NilContentContextPhase(t *testing.T) {
+	t.Parallel()
+	client := &StubGeminiClient{
+		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
+			return &StubGeminiChat{
+				SendMessageFunc: func(_ context.Context, _ genai.Part) (*genai.GenerateContentResponse, error) {
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: nil, FinishReason: genai.FinishReasonMaxTokens}},
+					}, nil
+				},
+			}, nil
+		},
+		GenerateContentFunc: func(
+			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{Content: &genai.Content{
+					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
+				}}},
+			}, nil
+		},
+	}
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
 }
 
 // newStubClientWithGenerateContent creates a StubGeminiClient where chat
