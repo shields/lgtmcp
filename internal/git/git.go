@@ -435,14 +435,86 @@ func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error)
 func (g *Git) runGitCommandStdin(
 	ctx context.Context, stdin io.Reader, extraEnv []string, args ...string,
 ) (string, error) {
+	res, err := runGit(ctx, g.repoPath, stdin, extraEnv, args...)
+	if err != nil {
+		if errors.Is(err, ErrCommandTimeout) {
+			return "", err
+		}
+		errMsg := res.stderr
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+
+		return "", fmt.Errorf("%w: %s", ErrCommandFailed, errMsg)
+	}
+	if res.exitCode != 0 {
+		errMsg := res.stderr
+		if errMsg == "" {
+			errMsg = fmt.Sprintf("exit status %d", res.exitCode)
+		}
+
+		return "", fmt.Errorf("%w: %s", ErrCommandFailed, errMsg)
+	}
+
+	return res.stdout, nil
+}
+
+// IsIgnored reports whether relativePath is ignored by git in the repository at
+// repoPath. It shells out to `git check-ignore`, which honors the full ignore
+// ruleset — nested .gitignore files, negations, core.excludesFile, and
+// .git/info/exclude — that an in-process matcher would not faithfully reproduce.
+// The result gates whether file contents are exposed to the model, so any error
+// is returned to the caller to fail closed.
+//
+// The "--" separator stops git from treating a path that begins with "-" as an
+// option. Routing through runGit strips inherited GIT_* variables (e.g. GIT_DIR
+// or GIT_CONFIG_GLOBAL) that would otherwise redirect the check at a different
+// repository or ignore file when lgtmcp runs inside another git process such as a
+// pre-commit hook.
+func IsIgnored(ctx context.Context, repoPath, relativePath string) (bool, error) {
+	res, err := runGit(ctx, repoPath, nil, nil, "check-ignore", "--", relativePath)
+	if err != nil {
+		return false, fmt.Errorf("failed to execute git check-ignore: %w", err)
+	}
+
+	switch res.exitCode {
+	case 0: // The path is ignored.
+		return true, nil
+	case 1: // The path is not ignored.
+		return false, nil
+	default: // 128 (e.g. not a git repository) or anything else: fail closed.
+		msg := strings.TrimSpace(res.stderr)
+		if msg == "" {
+			msg = fmt.Sprintf("exit status %d", res.exitCode)
+		}
+
+		return false, fmt.Errorf("%w: git check-ignore: %s", ErrCommandFailed, msg)
+	}
+}
+
+// gitResult holds the outcome of a completed git invocation.
+type gitResult struct {
+	stdout   string
+	stderr   string
+	exitCode int
+}
+
+// runGit runs git in repoPath with a sanitized environment and the standard
+// timeout, returning the command's stdout, stderr, and process exit code. All
+// GIT_* variables are stripped so the command operates on repoPath rather than
+// being redirected by an inherited GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_* (which
+// happens when lgtmcp is exercised from inside a git pre-commit hook). A non-zero
+// exit is reported via the result's exitCode with a nil error; err is non-nil
+// only when the command could not be run to completion — ErrCommandTimeout on
+// deadline, otherwise the underlying exec error such as git not being found.
+func runGit(
+	ctx context.Context, repoPath string, stdin io.Reader, extraEnv []string, args ...string,
+) (gitResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // args are constructed internally, not from user input
-	cmd.Dir = g.repoPath
-	// Strip GIT_* env vars so the command operates on g.repoPath rather than
-	// being redirected by an inherited GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_*
-	// (which happens when lgtmcp is exercised from inside a git pre-commit hook).
+	cmd.Dir = repoPath
 	cmd.Env = scrubGitEnv(os.Environ())
 	if len(extraEnv) > 0 {
 		cmd.Env = append(cmd.Env, extraEnv...)
@@ -451,27 +523,41 @@ func (g *Git) runGitCommandStdin(
 		cmd.Stdin = stdin
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var outBuf, errBuf bytes.Buffer
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
 
-	err := cmd.Run()
-	if err != nil {
+	runErr := cmd.Run()
+	res := gitResult{stdout: outBuf.String(), stderr: errBuf.String()}
+	if runErr != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return "", fmt.Errorf("%w: %s", ErrCommandTimeout, strings.Join(args, " "))
-		}
-		errMsg := stderr.String()
-		if errMsg == "" {
-			errMsg = err.Error()
+			return res, fmt.Errorf("%w: %s", ErrCommandTimeout, strings.Join(args, " "))
 		}
 
-		return "", fmt.Errorf("%w: %s", ErrCommandFailed, errMsg)
+		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
+			res.exitCode = exitErr.ExitCode()
+
+			return res, nil
+		}
+
+		res.exitCode = -1
+
+		return res, runErr
 	}
 
-	return stdout.String(), nil
+	return res, nil
 }
 
-// scrubGitEnv returns env with all GIT_* variables removed.
+// scrubGitEnv returns env with all GIT_* variables removed. This applies to every
+// git command, commit included, and is deliberate: lgtmcp often runs inside
+// another git process (e.g. a pre-commit hook), where variables such as GIT_DIR,
+// GIT_INDEX_FILE, GIT_AUTHOR_NAME/EMAIL, and GIT_CONFIG_GLOBAL describe the outer
+// operation and would otherwise misdirect lgtmcp's command at the wrong
+// repository, author, or ignore file. Commit identity and signing are still
+// honored — git reads user.name/user.email, commit.gpgsign, and user.signingkey
+// from the repository config and the user's ~/.gitconfig, which HOME (left intact)
+// still locates. Narrowing this to only the location variables would re-expose the
+// author and ignore-file leaks it exists to prevent.
 func scrubGitEnv(env []string) []string {
 	out := env[:0:0]
 	for _, e := range env {

@@ -16,7 +16,6 @@
 package review
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,13 +25,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"google.golang.org/genai"
 	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/git"
 	"msrl.dev/lgtmcp/internal/logging"
 	"msrl.dev/lgtmcp/internal/prompts"
 )
@@ -668,7 +667,7 @@ func (r *Reviewer) reviewDiffWithModel(
 				}
 
 				// Send the function response back with retry logic.
-				funcResponse := r.handleFileRetrieval(part.FunctionCall, repoPath, deletedSet)
+				funcResponse := r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet)
 
 				// Log the function response for debugging.
 				r.logger.Debug("Sending function response",
@@ -793,7 +792,7 @@ func (r *Reviewer) reviewDiffWithModel(
 // diff under review; requests for those paths return a clear deleted-file
 // response instead of attempting to open the (now-missing) file.
 func (*Reviewer) handleFileRetrieval(
-	funcCall *genai.FunctionCall, repoPath string, deleted map[string]bool,
+	ctx context.Context, funcCall *genai.FunctionCall, repoPath string, deleted map[string]bool,
 ) *genai.Part {
 	// Extract the filepath argument.
 	requestedPath, ok := funcCall.Args["filepath"].(string)
@@ -862,7 +861,7 @@ func (*Reviewer) handleFileRetrieval(
 	}
 
 	// SECURITY CHECK: Check if file is gitignored
-	isIgnored, err := isFileGitIgnored(requestedPath, repoPath)
+	isIgnored, err := git.IsIgnored(ctx, repoPath, requestedPath)
 	if err != nil {
 		// Fail closed on any error for security
 		return genai.NewPartFromFunctionResponse(
@@ -962,85 +961,4 @@ func (*Reviewer) handleFileRetrieval(
 			"content": string(content),
 		},
 	)
-}
-
-// isFileGitIgnored checks if a file is ignored by git.
-// It uses git check-ignore to properly respect all .gitignore rules including nested ones.
-// Returns (isIgnored, error) - if error is not nil, the caller should fail closed for security.
-func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
-	// Use git check-ignore to check if the file is ignored
-	// This respects all .gitignore files in the repository hierarchy.
-	// The "--" separator stops git from interpreting a path that begins with
-	// "-" (e.g. "-foo.txt") as an option flag.
-	cmd := exec.Command("git", "check-ignore", "--", relativePath) //nolint:gosec // relativePath is validated before use
-	cmd.Dir = repoPath
-	// Strip inherited git-location environment variables (e.g. GIT_DIR,
-	// GIT_WORK_TREE) so they cannot override cmd.Dir and point check-ignore at
-	// a different repository. These leak in when lgtmcp runs inside another git
-	// process such as a pre-commit hook; without this, gitignore enforcement
-	// would consult the wrong repo.
-	cmd.Env = gitLocationSanitizedEnv()
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
-	if err != nil {
-		// Check if it's an exit error
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			// git check-ignore returns exit code 1 when file is NOT ignored
-			// This is expected behavior, not an error
-			if exitErr.ExitCode() == 1 {
-				return false, nil
-			}
-			// Exit code 128 typically means not a git repository or other git errors
-			// We should fail closed in this case for security
-			if exitErr.ExitCode() == 128 {
-				stderrStr := stderr.String()
-				return false, fmt.Errorf("git check-ignore failed: %w: %s", err, stderrStr)
-			}
-		}
-		// For any other error (e.g., git not found), fail closed
-		return false, fmt.Errorf("failed to execute git check-ignore: %w", err)
-	}
-	// Exit code 0 means the file is ignored
-	return true, nil
-}
-
-// gitLocationEnvPrefixes are the environment variables git consults to locate
-// the repository, index, and worktree. Any of them, if inherited, would
-// override an explicit cmd.Dir.
-var gitLocationEnvPrefixes = []string{
-	"GIT_DIR=",
-	"GIT_COMMON_DIR=",
-	"GIT_WORK_TREE=",
-	"GIT_INDEX_FILE=",
-	"GIT_OBJECT_DIRECTORY=",
-	"GIT_CEILING_DIRECTORIES=",
-	"GIT_NAMESPACE=",
-}
-
-// gitLocationSanitizedEnv returns the current environment with the git
-// repository-location variables removed, so a child git process resolves the
-// repository from its working directory rather than inherited state.
-func gitLocationSanitizedEnv() []string {
-	environ := os.Environ()
-	sanitized := make([]string, 0, len(environ))
-	for _, kv := range environ {
-		drop := false
-		for _, prefix := range gitLocationEnvPrefixes {
-			if strings.HasPrefix(kv, prefix) {
-				drop = true
-
-				break
-			}
-		}
-		if !drop {
-			sanitized = append(sanitized, kv)
-		}
-	}
-
-	return sanitized
 }

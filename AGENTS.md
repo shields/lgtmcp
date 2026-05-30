@@ -185,7 +185,7 @@ Untracked files and initial-commit files have no blob to diff against, so `GetDi
 - **Gitignore Protection**: The `get_file_contents` tool respects `.gitignore` files and refuses access to any ignored files
   - Prevents accidental exposure of sensitive files like `.env`, API keys, secrets
   - Respects nested `.gitignore` files throughout the repository hierarchy
-  - Uses `git check-ignore` for accurate gitignore rule evaluation
+  - Uses `git check-ignore` (via the `git.IsIgnored` helper in `internal/git`) for accurate gitignore rule evaluation; the helper strips inherited `GIT_*` variables so a leaked `GIT_DIR`/`GIT_CONFIG_GLOBAL` cannot redirect the check at another repository
 
 ## Technical Choices
 
@@ -193,6 +193,32 @@ Untracked files and initial-commit files have no blob to diff against, so `GetDi
 - **mark3labs/mcp-go**: Most mature MCP implementation
 - **Gitleaks v8**: MIT licensed, embedded library (no subprocess)
 - **Gemini 3.1 Pro Preview**: Advanced reasoning model for code understanding
+
+## Why the git CLI (not go-git)
+
+lgtmcp deliberately shells out to the `git` binary — centralized in
+`internal/git/git.go`, including the `git.IsIgnored` gitignore check — rather than
+a pure-Go library such as go-git. The deciding factors:
+
+- **The diff is the product.** The unified diff sent to Gemini must match what
+  `git diff` emits byte-for-byte; go-git's diff engine differs (hunk boundaries,
+  `\ No newline at end of file`, prefixes, rename/binary handling), and the
+  new-file synthesis in `writeNewFileDiff`/`gitFileMode` is tuned to real git.
+- **Commit behavior is a feature.** `review_and_commit` must honor the user's git
+  config — GPG/SSH signing, hooks, `includeIf`, commit templates. go-git runs no
+  hooks and has only partial signing.
+- **`check-ignore` is a fail-closed security boundary.** It depends on git's full
+  ignore semantics (nested `.gitignore`, negations, `core.excludesFile`,
+  `.git/info/exclude`); go-git's matcher is its least-complete component, and an
+  under-match would expose a file the repo intends to hide.
+- **No dependency is saved.** lgtmcp only runs inside git repositories, so the
+  `git` binary is always present and is a required runtime dependency.
+
+All git subprocesses route through one hardened helper in `internal/git`
+(`runGit`), which strips every `GIT_*` variable — so an inherited
+`GIT_DIR`/`GIT_CONFIG_GLOBAL` from a surrounding git process such as a pre-commit
+hook cannot redirect a command at the wrong repository — and applies a uniform
+timeout.
 
 ## Troubleshooting
 

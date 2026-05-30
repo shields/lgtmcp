@@ -1130,3 +1130,109 @@ func createTempWorktree(t *testing.T) string {
 
 	return worktreeDir
 }
+
+func TestIsIgnored(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".gitignore"),
+		[]byte("secret.txt\n*.key\nbuild/\n!keep.key\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, "nested"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "nested", ".gitignore"),
+		[]byte("local.conf\n"), 0o600))
+	// .git/info/exclude is consulted alongside the .gitignore files; an
+	// in-process matcher that only reads .gitignore would miss it.
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".git", "info", "exclude"),
+		[]byte("excluded.txt\n"), 0o600))
+
+	tests := []struct {
+		name    string
+		path    string
+		ignored bool
+	}{
+		{"plain ignored file", "secret.txt", true},
+		{"pattern ignored file", "private.key", true},
+		{"negated pattern is not ignored", "keep.key", false},
+		{"member of ignored directory", "build/output.js", true},
+		{"unmatched file is not ignored", "main.go", false},
+		{"nested gitignore applies", "nested/local.conf", true},
+		{"nested gitignore does not leak up", "local.conf", false},
+		{"info/exclude is honored", "excluded.txt", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := IsIgnored(t.Context(), repoDir, tt.path)
+			require.NoError(t, err)
+			assert.Equal(t, tt.ignored, got)
+		})
+	}
+}
+
+func TestIsIgnored_LeadingDashPath(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("-weird.txt\n"), 0o600))
+
+	// The "--" separator must keep a path beginning with "-" from being parsed
+	// as an option flag.
+	got, err := IsIgnored(t.Context(), repoDir, "-weird.txt")
+	require.NoError(t, err)
+	assert.True(t, got)
+}
+
+func TestIsIgnored_NotGitRepo(t *testing.T) {
+	t.Parallel()
+	// A non-repository directory makes check-ignore exit 128; IsIgnored must
+	// surface that as an error so callers fail closed.
+	got, err := IsIgnored(t.Context(), t.TempDir(), "file.txt")
+	require.ErrorIs(t, err, ErrCommandFailed)
+	assert.False(t, got)
+}
+
+// TestIsIgnored_GitEnvLeak verifies that inherited git-location variables
+// (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE) cannot redirect the check at a
+// different repository, as happens when lgtmcp runs inside another git process
+// such as a pre-commit hook. It mutates the process environment and therefore
+// must not run in parallel.
+func TestIsIgnored_GitEnvLeak(t *testing.T) {
+	repoDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".gitignore"), []byte("secret.txt\n"), 0o600))
+
+	otherRepo := testutil.CreateTempGitRepo(t)
+	t.Setenv("GIT_DIR", filepath.Join(otherRepo, ".git"))
+	t.Setenv("GIT_WORK_TREE", otherRepo)
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(otherRepo, ".git", "index"))
+
+	ignored, err := IsIgnored(t.Context(), repoDir, "secret.txt")
+	require.NoError(t, err)
+	assert.True(t, ignored, "target repo's .gitignore must be honored despite leaked git env")
+
+	notIgnored, err := IsIgnored(t.Context(), repoDir, "normal.txt")
+	require.NoError(t, err)
+	assert.False(t, notIgnored)
+}
+
+// TestIsIgnored_GitConfigGlobalLeak verifies that a leaked GIT_CONFIG_GLOBAL —
+// which the previous narrow scrub left in place — cannot repoint
+// core.excludesFile and skew the result. It mutates the environment and must
+// not run in parallel.
+func TestIsIgnored_GitConfigGlobalLeak(t *testing.T) {
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	// An attacker-controlled global config that ignores a file the repo does not.
+	evilDir := t.TempDir()
+	evilExcludes := filepath.Join(evilDir, "excludes")
+	require.NoError(t, os.WriteFile(evilExcludes, []byte("globally-evil.txt\n"), 0o600))
+	evilConfig := filepath.Join(evilDir, "gitconfig")
+	require.NoError(t, os.WriteFile(evilConfig,
+		fmt.Appendf(nil, "[core]\n\texcludesFile = %s\n", evilExcludes), 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", evilConfig)
+
+	// Because runGit strips all GIT_* variables, the global excludesFile is not
+	// consulted and the file is reported as not ignored.
+	ignored, err := IsIgnored(t.Context(), repoDir, "globally-evil.txt")
+	require.NoError(t, err)
+	assert.False(t, ignored, "leaked GIT_CONFIG_GLOBAL must not influence the result")
+}
