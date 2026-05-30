@@ -125,9 +125,9 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 		for _, file := range fileList {
 			if file != "" && !uniqueFiles[file] {
 				uniqueFiles[file] = true
-				content, contentErr := g.GetFileContent(ctx, file)
-				if contentErr == nil && content != "" {
-					writeNewFileDiff(&diffOutput, file, content)
+				content, mode, contentErr := g.newFileForDiff(file)
+				if contentErr == nil {
+					writeNewFileDiff(&diffOutput, file, content, mode)
 				}
 			}
 		}
@@ -154,9 +154,9 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 			var untrackedDiff bytes.Buffer
 			for file := range strings.SplitSeq(strings.TrimSpace(untrackedFiles), "\n") {
 				if file != "" {
-					content, err := g.GetFileContent(ctx, file)
-					if err == nil && content != "" {
-						writeNewFileDiff(&untrackedDiff, file, content)
+					content, mode, err := g.newFileForDiff(file)
+					if err == nil {
+						writeNewFileDiff(&untrackedDiff, file, content, mode)
 					}
 				}
 			}
@@ -178,17 +178,18 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 
 // writeNewFileDiff renders content as a synthetic "new file" diff block (used
 // for untracked files and initial commits, which have no blob to diff against),
-// mirroring git's own rendering: a "@@ -0,0 +1,N @@" hunk header, one "+" line
+// mirroring git's own rendering: a "new file mode" line whose value reflects the
+// file on disk (see gitFileMode), a "@@ -0,0 +1,N @@" hunk header, one "+" line
 // per added line, and a "\ No newline at end of file" marker when the content
 // does not end in a newline. A single trailing newline is treated as the
 // terminator of the last line, not as content, so a file ending in "\n" does
 // not gain a phantom empty added line (content ending in "\n\n" keeps a genuine
 // blank final line). An empty file yields only the header lines and no hunk,
-// also matching git; callers already skip empty content, so that path is a
-// safety net.
-func writeNewFileDiff(buf *bytes.Buffer, file, content string) {
+// also matching git, so a newly added empty file is still surfaced to the
+// reviewer rather than dropped.
+func writeNewFileDiff(buf *bytes.Buffer, file, content string, mode os.FileMode) {
 	_, _ = fmt.Fprintf(buf, "diff --git a/%s b/%s\n", file, file)
-	_, _ = buf.WriteString("new file mode 100644\n")
+	_, _ = fmt.Fprintf(buf, "new file mode %s\n", gitFileMode(mode))
 	if content == "" {
 		return
 	}
@@ -202,6 +203,24 @@ func writeNewFileDiff(buf *bytes.Buffer, file, content string) {
 	}
 	if !strings.HasSuffix(content, "\n") {
 		_, _ = buf.WriteString("\\ No newline at end of file\n")
+	}
+}
+
+// gitFileMode renders the git index mode for a synthesized new-file block.
+// Symlinks are 120000 (checked first, since a symlink's permission bits often
+// include execute bits). A regular file is 100755 when its owner-execute bit is
+// set and 100644 otherwise, mirroring git's ce_permissions, which keys off 0o100
+// alone and ignores group/other execute bits. On Windows, Go never reports
+// execute bits, so regular files resolve to 100644 — matching git's default
+// core.fileMode=false there.
+func gitFileMode(mode os.FileMode) string {
+	switch {
+	case mode&os.ModeSymlink != 0:
+		return "120000"
+	case mode&0o100 != 0:
+		return "100755"
+	default:
+		return "100644"
 	}
 }
 
@@ -278,16 +297,28 @@ func (g *Git) Commit(ctx context.Context, message string) (string, error) {
 
 // GetFileContent returns the content of a file at the given relative path.
 func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, error) {
+	content, _, err := g.readRepoFile(relativePath)
+
+	return content, err
+}
+
+// GetRepoPath returns the absolute path to the repository.
+func (g *Git) GetRepoPath() string {
+	return g.repoPath
+}
+
+// repoPathFor joins a repo-relative path onto the repository root and verifies
+// it stays within the repo lexically — before any symlink resolution. It rejects
+// absolute paths and paths that escape the repo (e.g. via ".."). The returned
+// path is not guaranteed to exist; callers stat it as needed.
+func (g *Git) repoPathFor(relativePath string) (string, error) {
 	// Reject absolute paths.
 	if filepath.IsAbs(relativePath) {
 		return "", fmt.Errorf("%w: absolute paths not allowed", ErrInvalidPath)
 	}
 
-	// Clean the path and ensure it's relative.
-	cleanPath := filepath.Clean(relativePath)
-
-	// Construct full path.
-	fullPath := filepath.Join(g.repoPath, cleanPath)
+	// Clean the path and construct the full path under the repo root.
+	fullPath := filepath.Join(g.repoPath, filepath.Clean(relativePath))
 
 	// Security check: ensure the path is within the repo.
 	absPath, err := filepath.Abs(fullPath)
@@ -301,13 +332,27 @@ func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, er
 		return "", fmt.Errorf("%w: %s", ErrPathOutsideRepo, relativePath)
 	}
 
+	return fullPath, nil
+}
+
+// readRepoFile reads a repo-relative file and returns its content together with
+// the mode of the resolved file. Symlinks are followed and the full chain is
+// resolved so a link cannot escape the repository; the final target must be a
+// regular file. This is the security-sensitive reader backing the MCP
+// get_file_content tool, which must never expose files outside the repo.
+func (g *Git) readRepoFile(relativePath string) (string, os.FileMode, error) {
+	fullPath, err := g.repoPathFor(relativePath)
+	if err != nil {
+		return "", 0, err
+	}
+
 	// Check if file exists (use Lstat to not follow symlinks).
 	if _, lstatErr := os.Lstat(fullPath); lstatErr != nil {
 		if os.IsNotExist(lstatErr) {
-			return "", fmt.Errorf("%w: %s", ErrFileNotFound, relativePath)
+			return "", 0, fmt.Errorf("%w: %s", ErrFileNotFound, relativePath)
 		}
 
-		return "", fmt.Errorf("failed to stat file: %w", lstatErr)
+		return "", 0, fmt.Errorf("failed to stat file: %w", lstatErr)
 	}
 
 	// Resolve the full symlink chain to catch multi-hop symlinks and
@@ -320,38 +365,67 @@ func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, er
 	// does not arise in practice.
 	canonicalRepo, err := filepath.EvalSymlinks(g.repoPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve repo path: %w", err)
+		return "", 0, fmt.Errorf("failed to resolve repo path: %w", err)
 	}
 
 	resolved, err := filepath.EvalSymlinks(fullPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return "", 0, fmt.Errorf("failed to resolve path: %w", err)
 	}
 
 	if !strings.HasPrefix(resolved, canonicalRepo+string(filepath.Separator)) && resolved != canonicalRepo {
-		return "", fmt.Errorf("%w: %s", ErrPathOutsideRepo, relativePath)
+		return "", 0, fmt.Errorf("%w: %s", ErrPathOutsideRepo, relativePath)
 	}
 
 	// After resolution, verify it's a regular file (not a directory, device, etc.).
 	resolvedInfo, err := os.Stat(resolved)
 	if err != nil {
-		return "", fmt.Errorf("failed to stat resolved file: %w", err)
+		return "", 0, fmt.Errorf("failed to stat resolved file: %w", err)
 	}
 	if !resolvedInfo.Mode().IsRegular() {
-		return "", fmt.Errorf("%w: %s", ErrNotRegularFile, relativePath)
+		return "", 0, fmt.Errorf("%w: %s", ErrNotRegularFile, relativePath)
 	}
 
 	content, err := os.ReadFile(resolved)
 	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
+		return "", 0, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	return string(content), nil
+	return string(content), resolvedInfo.Mode(), nil
 }
 
-// GetRepoPath returns the absolute path to the repository.
-func (g *Git) GetRepoPath() string {
-	return g.repoPath
+// newFileForDiff returns the content and mode used to synthesize a "new file"
+// diff block for a repo-relative path. A symlink yields its target text — via
+// os.Readlink, which does not dereference the link, so the contents of a target
+// outside the repo are never read — and the symlink mode, matching how git
+// records symlinks and ensuring escaping or dangling symlinks are surfaced to
+// the reviewer rather than silently dropped. Regular files delegate to
+// readRepoFile, returning their content and a 100644/100755 mode.
+func (g *Git) newFileForDiff(relativePath string) (string, os.FileMode, error) {
+	fullPath, err := g.repoPathFor(relativePath)
+	if err != nil {
+		return "", 0, err
+	}
+
+	info, err := os.Lstat(fullPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", 0, fmt.Errorf("%w: %s", ErrFileNotFound, relativePath)
+		}
+
+		return "", 0, fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, linkErr := os.Readlink(fullPath)
+		if linkErr != nil {
+			return "", 0, fmt.Errorf("failed to read symlink: %w", linkErr)
+		}
+
+		return target, info.Mode(), nil
+	}
+
+	return g.readRepoFile(relativePath)
 }
 
 func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error) {

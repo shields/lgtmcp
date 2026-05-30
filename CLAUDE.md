@@ -172,6 +172,14 @@ Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-speci
 
 When the diff contains deleted files, lgtmcp lists them in a dedicated "Files deleted by this change" section in both prompts, and the `get_file_content` tool short-circuits requests for those paths with the dedicated `errDeletedFileMsg` instead of returning a generic ENOENT. The diff already carries the full removed content, so the model has everything it needs without a follow-up fetch. The deletion set comes from `security.ChangedFiles.Deleted` (returned by `ExtractChangedFilesDetailed`) and is threaded through `review.WithDeletedFiles`. Staging still receives the full path list so deletions are committed; the broader stage-time TOCTOU window (re-created files, modification swap) is documented at the `StageFiles` callsite in `pkg/mcp/server.go` and tracked separately.
 
+## New-File Diff Synthesis
+
+Untracked files and initial-commit files have no blob to diff against, so `GetDiff` synthesizes a git-style "new file" block via `writeNewFileDiff` in `internal/git/git.go`. The `new file mode` line reflects the file on disk rather than a hardcoded value, matching what real `git diff` emits:
+
+- `gitFileMode` chooses the mode: `120000` for symlinks (checked first, since a symlink's permission bits often include execute bits), `100755` when a regular file's owner-execute bit is set, else `100644`. This mirrors git's `ce_permissions`, which keys off `0o100` alone and ignores group/other execute bits. On Windows, Go never reports execute bits, so regular files resolve to `100644` (consistent with git's default `core.fileMode=false`).
+- `newFileForDiff` supplies the content and mode. For a symlink it returns the link target via `os.Readlink` (which reads only the link text and never dereferences the link, so a target outside the repo is never read) and the symlink mode; escaping or dangling symlinks are therefore surfaced to the reviewer as `120000` entries rather than being silently dropped. Regular files delegate to `readRepoFile`, the shared reader that also backs the public `GetFileContent`/`get_file_content` tool — whose follow-the-symlink-and-reject-escapes security contract is unchanged.
+- Newly added **empty** files (e.g. `__init__.py`, `.gitkeep`) are surfaced as a header-only block (`writeNewFileDiff` writes the headers and returns), matching git. The `GetDiff` callsites guard only on the read error, not on empty content, so an empty new file is neither dropped from the review nor (for `review_and_commit`, whose staged-file list is derived from the diff) silently omitted from the commit.
+
 ## Security Features
 
 - **Gitignore Protection**: The `get_file_contents` tool respects `.gitignore` files and refuses access to any ignored files

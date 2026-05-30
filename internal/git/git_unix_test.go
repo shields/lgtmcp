@@ -38,6 +38,105 @@ func TestIsGitRepo_SpecialFile(t *testing.T) {
 	assert.False(t, CheckGitRepo(tmpDir))
 }
 
+func TestGetDiff_ExecutableUntrackedFile(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+
+	testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	// An executable untracked script must synthesize as mode 100755 (CreateFile
+	// writes 0o600, so chmod it executable explicitly)...
+	testutil.CreateFile(t, tmpDir, "run.sh", "#!/bin/sh\necho hi\n")
+	//nolint:gosec // Deliberately executable to exercise 100755 mode synthesis.
+	require.NoError(t, os.Chmod(filepath.Join(tmpDir, "run.sh"), 0o755))
+	// ...while a plain untracked file stays 100644.
+	testutil.CreateFile(t, tmpDir, "notes.txt", "plain\n")
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	diff, err := g.GetDiff(t.Context())
+	require.NoError(t, err)
+	// Assert each mode line together with its diff header so the modes are
+	// coupled to the right files; separate Contains checks would still pass if
+	// the two modes were swapped between run.sh and notes.txt.
+	assert.Contains(t, diff, "diff --git a/run.sh b/run.sh\nnew file mode 100755")
+	assert.Contains(t, diff, "diff --git a/notes.txt b/notes.txt\nnew file mode 100644")
+}
+
+func TestGetDiff_SymlinkUntracked(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+
+	// target.txt is committed so it does not appear in the diff itself; only the
+	// untracked symlink should. git records a symlink as mode 120000 with the
+	// link target as content — never the dereferenced file's bytes.
+	testutil.CreateFile(t, tmpDir, "target.txt", "secret-bytes\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+	require.NoError(t, os.Symlink("target.txt", filepath.Join(tmpDir, "link")))
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	diff, err := g.GetDiff(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, diff, "diff --git a/link b/link")
+	assert.Contains(t, diff, "new file mode 120000")
+	assert.Contains(t, diff, "+target.txt")
+	// os.Readlink reads only the link text, so the target file's contents must
+	// never leak into the diff.
+	assert.NotContains(t, diff, "secret-bytes")
+}
+
+func TestGetDiff_SymlinkEscapingRepoIsSurfaced(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+
+	testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	// A symlink whose target escapes the repo must still be shown as a new
+	// 120000 entry — previously GetFileContent rejected it and the file was
+	// silently dropped from the diff entirely.
+	require.NoError(t, os.Symlink("/etc/passwd", filepath.Join(tmpDir, "escape")))
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	diff, err := g.GetDiff(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, diff, "diff --git a/escape b/escape")
+	assert.Contains(t, diff, "new file mode 120000")
+	assert.Contains(t, diff, "+/etc/passwd")
+}
+
+func TestGetDiff_DanglingSymlinkSurfaced(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+
+	testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	// A symlink to a nonexistent in-repo target must still be surfaced as a
+	// 120000 entry with the (dangling) target text as content — os.Readlink does
+	// not require the target to exist, and the old GetFileContent path dropped it.
+	require.NoError(t, os.Symlink("does-not-exist.txt", filepath.Join(tmpDir, "dangle")))
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	diff, err := g.GetDiff(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, diff, "diff --git a/dangle b/dangle")
+	assert.Contains(t, diff, "new file mode 120000")
+	assert.Contains(t, diff, "+does-not-exist.txt")
+}
+
 func TestGetFileContent_SymlinkChainEscapesRepo(t *testing.T) {
 	t.Parallel()
 	tmpDir := testutil.CreateTempGitRepo(t)

@@ -34,13 +34,82 @@ func TestWriteNewFileDiffEmptyContent(t *testing.T) {
 	// Callers skip empty content, but in isolation an empty file must render
 	// like git: header lines only, with no hunk or no-newline marker.
 	var buf bytes.Buffer
-	writeNewFileDiff(&buf, "empty.txt", "")
+	writeNewFileDiff(&buf, "empty.txt", "", 0o644)
 	out := buf.String()
 	assert.Contains(t, out, "diff --git a/empty.txt b/empty.txt")
 	assert.Contains(t, out, "new file mode 100644")
 	assert.NotContains(t, out, "--- /dev/null")
 	assert.NotContains(t, out, "@@")
 	assert.NotContains(t, out, "No newline")
+}
+
+func TestWriteNewFileDiffMode(t *testing.T) {
+	t.Parallel()
+	t.Run("executable regular file uses 100755", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, "run.sh", "#!/bin/sh\n", 0o755)
+		out := buf.String()
+		assert.Contains(t, out, "new file mode 100755")
+		assert.NotContains(t, out, "100644")
+	})
+
+	t.Run("non-executable regular file uses 100644", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, "notes.txt", "hello\n", 0o644)
+		out := buf.String()
+		assert.Contains(t, out, "new file mode 100644")
+		assert.NotContains(t, out, "100755")
+	})
+
+	t.Run("symlink uses 120000 with target as content", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		// A symlink's mode carries ModeSymlink plus exec perm bits; the 120000
+		// branch must win over the executable-bit branch, and the target string
+		// (no trailing newline) is the content.
+		writeNewFileDiff(&buf, "link", "target.txt", os.ModeSymlink|0o777)
+		out := buf.String()
+		assert.Contains(t, out, "new file mode 120000")
+		assert.Contains(t, out, "+target.txt")
+		assert.Contains(t, out, "No newline at end of file")
+	})
+
+	t.Run("empty executable file keeps 100755 with header only", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		// The mode line is written before the empty-content early return, so an
+		// empty executable still records 100755 — with no hunk.
+		writeNewFileDiff(&buf, "empty.sh", "", 0o755)
+		out := buf.String()
+		assert.Contains(t, out, "new file mode 100755")
+		assert.NotContains(t, out, "@@")
+	})
+}
+
+func TestGitFileMode(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		mode os.FileMode
+		want string
+	}{
+		{"plain 0644", 0o644, "100644"},
+		{"owner-only 0600", 0o600, "100644"},
+		{"group/other exec only", 0o655, "100644"},
+		{"owner exec 0755", 0o755, "100755"},
+		{"owner exec 0744", 0o744, "100755"},
+		{"owner exec 0711", 0o711, "100755"},
+		{"symlink with perm bits", os.ModeSymlink | 0o777, "120000"},
+		{"symlink without perm bits", os.ModeSymlink, "120000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, gitFileMode(tt.mode))
+		})
+	}
 }
 
 func TestNew(t *testing.T) {
@@ -110,6 +179,24 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		assert.Contains(t, diff, "+content2")
 	})
 
+	t.Run("initial commit with only an empty file is surfaced", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		// No HEAD yet, so this exercises the initial-commit branch and its own
+		// ErrNoChanges gate. An empty new file must still be surfaced as a
+		// header-only block rather than collapsing to "no changes".
+		testutil.CreateFile(t, tmpDir, "empty.py", "")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "diff --git a/empty.py b/empty.py")
+		assert.Contains(t, diff, "new file mode 100644")
+	})
+
 	t.Run("modified files", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := testutil.CreateTempGitRepo(t)
@@ -150,6 +237,28 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		assert.Contains(t, diff, "untracked.txt")
 		assert.Contains(t, diff, "+new content")
 		assert.Contains(t, diff, "new file mode")
+	})
+
+	t.Run("empty untracked file is surfaced as a header-only block", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// A newly added empty file (e.g. __init__.py, .gitkeep) has no content,
+		// but its addition is still reviewable and git shows it — so it must
+		// appear as a header-only new-file block, not be dropped from the diff.
+		testutil.CreateFile(t, tmpDir, "empty.py", "")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "diff --git a/empty.py b/empty.py")
+		assert.Contains(t, diff, "new file mode 100644")
 	})
 
 	t.Run("untracked file ending in newline has no phantom empty added line", func(t *testing.T) {
