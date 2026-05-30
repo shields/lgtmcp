@@ -51,11 +51,8 @@ const (
 	schemaDescKey = "description"
 )
 
-// Server represents the MCP server.
-const (
-	// Version is the version of the LGTMCP server.
-	Version = "0.0.0-dev"
-)
+// Version is the version of the LGTMCP server reported during MCP initialization.
+const Version = "0.0.0-dev"
 
 // Server implements the MCP server for LGTMCP.
 type Server struct {

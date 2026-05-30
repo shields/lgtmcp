@@ -277,7 +277,6 @@ func TestHandleReviewAndCommitWithRealRepo(t *testing.T) {
 				Arguments: map[string]any{
 					"directory":      tmpDir,
 					"commit_message": "test commit",
-					"commit_on_lgtm": false,
 				},
 			},
 		}
@@ -311,7 +310,6 @@ func TestHandleReviewAndCommitWithRealRepo(t *testing.T) {
 				Arguments: map[string]any{
 					"directory":      tmpDir,
 					"commit_message": "test commit",
-					"commit_on_lgtm": false,
 				},
 			},
 		}
