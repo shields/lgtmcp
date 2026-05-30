@@ -33,8 +33,6 @@ import (
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
-var fakeSecrets = security.FakeSecrets{}
-
 // TestGitIntegration tests the complete git workflow.
 func TestGitIntegration(t *testing.T) {
 	t.Parallel()

@@ -28,27 +28,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"msrl.dev/lgtmcp/internal/config"
-	"msrl.dev/lgtmcp/internal/security"
+	"msrl.dev/lgtmcp/internal/testutil"
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
-var fakeSecrets = security.FakeSecrets{}
-
-// TestMCPProtocolE2E tests the complete MCP protocol workflow
+// TestMCPProtocolE2E tests the complete MCP protocol workflow.
 func TestMCPProtocolE2E(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping E2E test in short mode")
 	}
 
 	cfg := config.NewTestConfig()
-	server, err := mcpserver.New(cfg)
+	server, err := mcpserver.New(cfg, testutil.NewTestLogger())
 	if err != nil {
 		t.Skipf("Cannot create MCP server for E2E test: %v", err)
 	}
 
 	t.Run("review_only tool with clean changes", func(t *testing.T) {
-		tmpDir := createTempGitRepo(t)
-		defer cleanup(t, tmpDir)
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit
 		testFile := filepath.Join(tmpDir, "main.go")
@@ -60,8 +59,8 @@ func main() {
 	fmt.Println("Hello")
 }`
 		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// Make changes
 		modifiedContent := `package main
@@ -102,8 +101,8 @@ func main() {
 	})
 
 	t.Run("review_only tool with no changes", func(t *testing.T) {
-		tmpDir := createTempGitRepo(t)
-		defer cleanup(t, tmpDir)
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit with no pending changes
 		testFile := filepath.Join(tmpDir, "main.go")
@@ -113,8 +112,8 @@ func main() {
 	println("hello")
 }`
 		require.NoError(t, os.WriteFile(testFile, []byte(content), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// Create MCP request (no changes to review)
 		request := mcp.CallToolRequest{
@@ -139,16 +138,16 @@ func main() {
 	})
 
 	t.Run("review_only tool with secrets", func(t *testing.T) {
-		tmpDir := createTempGitRepo(t)
-		defer cleanup(t, tmpDir)
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit
 		testFile := filepath.Join(tmpDir, "config.yaml")
 		initialContent := `api:
   endpoint: https://api.example.com`
 		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial config")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial config")
 
 		// Add secrets
 		secretContent := `api:
@@ -182,8 +181,8 @@ func main() {
 	})
 
 	t.Run("review_and_commit tool with clean changes", func(t *testing.T) {
-		tmpDir := createTempGitRepo(t)
-		defer cleanup(t, tmpDir)
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// Create initial commit
 		testFile := filepath.Join(tmpDir, "main.go")
@@ -193,8 +192,8 @@ func main() {
 	println("hello")
 }`
 		require.NoError(t, os.WriteFile(testFile, []byte(initialContent), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial commit")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial commit")
 
 		// Make changes
 		modifiedContent := `package main
@@ -234,6 +233,7 @@ func main() {
 	})
 
 	t.Run("review_and_commit tool validation errors", func(t *testing.T) {
+		t.Parallel()
 		ctx := context.Background()
 
 		// Test missing directory
@@ -261,7 +261,7 @@ func main() {
 			},
 		}
 
-		result, err = server.handleReviewAndCommit(ctx, request)
+		result, err = server.HandleReviewAndCommit(ctx, request)
 		require.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "commit_message must be a string")
@@ -277,22 +277,24 @@ func main() {
 			},
 		}
 
-		result, err = server.handleReviewAndCommit(ctx, request)
+		result, err = server.HandleReviewAndCommit(ctx, request)
 		require.Error(t, err)
 		assert.Nil(t, result)
 		assert.Contains(t, err.Error(), "invalid git repository")
 	})
 }
 
-// TestMCPServerLifecycle tests server startup and shutdown
+// TestMCPServerLifecycle tests server startup and shutdown.
 func TestMCPServerLifecycle(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping lifecycle test in short mode")
 	}
 
 	t.Run("server creation and initialization", func(t *testing.T) {
+		t.Parallel()
 		cfg := config.NewTestConfig()
-		server, err := mcpserver.New(cfg)
+		server, err := mcpserver.New(cfg, testutil.NewTestLogger())
 		if err != nil {
 			t.Skipf("Cannot create server: %v", err)
 		}
@@ -304,13 +306,14 @@ func TestMCPServerLifecycle(t *testing.T) {
 	})
 
 	t.Run("server with invalid configuration", func(t *testing.T) {
+		t.Parallel()
 		// Test server creation failure paths
 		// This depends on how the server validates configuration
 
 		// The server should either create successfully or fail gracefully
 		cfg := config.NewTestConfig()
 		cfg.Google.APIKey = ""
-		server, err := mcpserver.New(cfg)
+		server, err := mcpserver.New(cfg, testutil.NewTestLogger())
 
 		if err != nil {
 			// Expected failure case
@@ -322,21 +325,22 @@ func TestMCPServerLifecycle(t *testing.T) {
 	})
 }
 
-// TestCompleteWorkflowE2E tests a realistic end-to-end scenario
+// TestCompleteWorkflowE2E tests a realistic end-to-end scenario.
 func TestCompleteWorkflowE2E(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("Skipping complete workflow test in short mode")
 	}
 
 	cfg := config.NewTestConfig()
-	server, err := mcpserver.New(cfg)
+	server, err := mcpserver.New(cfg, testutil.NewTestLogger())
 	if err != nil {
 		t.Skipf("Cannot create MCP server for E2E test: %v", err)
 	}
 
 	t.Run("realistic development workflow", func(t *testing.T) {
-		tmpDir := createTempGitRepo(t)
-		defer cleanup(t, tmpDir)
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
 
 		// 1. Start with a basic Go project
 		mainFile := filepath.Join(tmpDir, "main.go")
@@ -355,8 +359,8 @@ A simple Go application.`
 
 		require.NoError(t, os.WriteFile(mainFile, []byte(initialContent), 0o600))
 		require.NoError(t, os.WriteFile(readmeFile, []byte(readmeContent), 0o600))
-		runGitCmd(t, tmpDir, "add", ".")
-		runGitCmd(t, tmpDir, "commit", "-m", "initial project setup")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial project setup")
 
 		// 2. Make multiple improvements
 		improvedContent := `package main
@@ -405,7 +409,7 @@ go run main.go [name]
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 
-		result, err := server.handleReviewOnly(ctx, reviewRequest)
+		result, err := server.HandleReviewOnly(ctx, reviewRequest)
 
 		if err != nil {
 			// Expected to fail at review step in test environment
@@ -415,7 +419,7 @@ go run main.go [name]
 			// If review succeeds, should get proper response
 			assert.NotNil(t, result)
 			assert.NotNil(t, result.Content)
-			t.Logf("Review succeeded unexpectedly")
+			t.Log("Review succeeded unexpectedly")
 		}
 
 		// 4. Test commit workflow (will also likely fail at review step)
@@ -439,12 +443,12 @@ go run main.go [name]
 			// If it succeeds, verify structure
 			assert.NotNil(t, result)
 			assert.NotNil(t, result.Content)
-			t.Logf("Commit workflow succeeded unexpectedly")
+			t.Log("Commit workflow succeeded unexpectedly")
 		}
 
 		// 5. Verify that the git repository state is consistent
 		// (Changes should still be staged since commit would have failed)
-		output := runGitCmd(t, tmpDir, "status", "--porcelain")
+		output := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
 		assert.NotEmpty(t, output) // Should have uncommitted changes
 	})
 }
