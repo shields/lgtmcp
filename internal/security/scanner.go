@@ -329,19 +329,14 @@ func (s *Scanner) ScanContent(_ context.Context, content, filename string) ([]re
 		return nil, nil
 	}
 
-	// Use DetectString to scan the content.
 	findings := s.detector.DetectString(content)
 
-	// Filter findings to only include those relevant to the given filename if provided.
+	// DetectString leaves Finding.File empty; stamp the caller-supplied
+	// filename so downstream reporting attributes the secret correctly.
 	if filename != "" {
-		var filtered []report.Finding
-		for _, finding := range findings {
-			// Update the file path in the finding to match the provided filename.
-			finding.File = filename
-			filtered = append(filtered, finding)
+		for i := range findings {
+			findings[i].File = filename
 		}
-
-		return filtered, nil
 	}
 
 	return findings, nil
