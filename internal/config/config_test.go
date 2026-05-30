@@ -17,11 +17,34 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestConfigPermissionWarning(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not meaningful on Windows")
+	}
+
+	dir := t.TempDir()
+
+	secure := filepath.Join(dir, "secure.yaml")
+	require.NoError(t, os.WriteFile(secure, []byte("x"), 0o600))
+	require.NoError(t, os.Chmod(secure, 0o600))
+	assert.Empty(t, configPermissionWarning(secure), "0600 file should not warn")
+
+	loose := filepath.Join(dir, "loose.yaml")
+	require.NoError(t, os.WriteFile(loose, []byte("x"), 0o600))
+	//nolint:gosec // Deliberately group/other-readable to exercise the warning.
+	require.NoError(t, os.Chmod(loose, 0o644))
+	assert.NotEmpty(t, configPermissionWarning(loose), "group/other-readable file should warn")
+
+	assert.Empty(t, configPermissionWarning(filepath.Join(dir, "missing.yaml")), "missing file should not warn")
+}
 
 func TestLoad(t *testing.T) {
 	t.Run("valid config file", func(t *testing.T) {

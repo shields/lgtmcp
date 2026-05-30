@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"sigs.k8s.io/yaml"
 )
@@ -135,6 +136,13 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("cannot read %s: %w", configPath, err)
 	}
 
+	// The logger is built from this config, so it does not exist yet; send the
+	// advisory permission warning straight to stderr (stdout carries the MCP
+	// protocol and must not be written to).
+	if warning := configPermissionWarning(configPath); warning != "" {
+		_, _ = fmt.Fprintln(os.Stderr, "warning: "+warning)
+	}
+
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("cannot parse %s: %w", configPath, err)
@@ -185,6 +193,33 @@ func Load() (*Config, error) {
 
 	// If both are set, API key takes precedence (logged during client creation).
 	return &cfg, nil
+}
+
+// configPermissionWarning returns a non-empty advisory message when the config
+// file at path is readable or writable by group or others. The file may hold a
+// Gemini API key, so permissions broader than 0600 risk leaking the credential.
+// It returns "" on Windows (whose file modes carry no Unix permission bits) and
+// when the file cannot be stat'd. This is advisory only; Load never fails on it.
+func configPermissionWarning(path string) string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+
+	perm := info.Mode().Perm()
+	if perm&0o077 == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"config file %s has permissions %#o and may contain a Gemini API key; "+
+			"restrict access with: chmod 600 %s",
+		path, perm, path,
+	)
 }
 
 // GetConfigPath returns the path to the configuration file.
