@@ -127,13 +127,7 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 				uniqueFiles[file] = true
 				content, contentErr := g.GetFileContent(ctx, file)
 				if contentErr == nil && content != "" {
-					_, _ = fmt.Fprintf(&diffOutput, "diff --git a/%s b/%s\n", file, file)
-					_, _ = diffOutput.WriteString("new file mode 100644\n")
-					_, _ = diffOutput.WriteString("--- /dev/null\n")
-					_, _ = fmt.Fprintf(&diffOutput, "+++ b/%s\n", file)
-					for line := range strings.SplitSeq(content, "\n") {
-						_, _ = fmt.Fprintf(&diffOutput, "+%s\n", line)
-					}
+					writeNewFileDiff(&diffOutput, file, content)
 				}
 			}
 		}
@@ -162,13 +156,7 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 				if file != "" {
 					content, err := g.GetFileContent(ctx, file)
 					if err == nil && content != "" {
-						_, _ = fmt.Fprintf(&untrackedDiff, "diff --git a/%s b/%s\n", file, file)
-						_, _ = untrackedDiff.WriteString("new file mode 100644\n")
-						_, _ = untrackedDiff.WriteString("--- /dev/null\n")
-						_, _ = fmt.Fprintf(&untrackedDiff, "+++ b/%s\n", file)
-						for line := range strings.SplitSeq(content, "\n") {
-							_, _ = fmt.Fprintf(&untrackedDiff, "+%s\n", line)
-						}
+						writeNewFileDiff(&untrackedDiff, file, content)
 					}
 				}
 			}
@@ -186,6 +174,21 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	}
 
 	return diff, nil
+}
+
+// writeNewFileDiff renders content as a synthetic "new file" diff block (used
+// for untracked files and initial commits, which have no blob to diff against).
+// A single trailing newline is treated as the terminator of the last line, not
+// as content, so a file ending in "\n" does not gain a phantom empty added
+// line — matching how git itself renders the file.
+func writeNewFileDiff(buf *bytes.Buffer, file, content string) {
+	_, _ = fmt.Fprintf(buf, "diff --git a/%s b/%s\n", file, file)
+	_, _ = buf.WriteString("new file mode 100644\n")
+	_, _ = buf.WriteString("--- /dev/null\n")
+	_, _ = fmt.Fprintf(buf, "+++ b/%s\n", file)
+	for line := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
+		_, _ = fmt.Fprintf(buf, "+%s\n", line)
+	}
 }
 
 // StageAll stages all changes in the repository.

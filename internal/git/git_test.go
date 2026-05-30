@@ -137,6 +137,49 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		assert.Contains(t, diff, "new file mode")
 	})
 
+	t.Run("untracked file ending in newline has no phantom empty added line", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// Trailing newline is the line terminator, not a blank final line, so
+		// the synthesized diff must not append a spurious empty "+" line.
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "alpha\nbeta\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "+alpha\n+beta\n")
+		// A genuine blank trailing line would be "+\n"; the terminator must not
+		// produce one.
+		assert.NotContains(t, diff, "+beta\n+\n")
+	})
+
+	t.Run("untracked file with genuine blank final line keeps it", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// Two trailing newlines: one terminates "beta", the other is a real
+		// blank line that must be preserved as a single "+" line.
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "alpha\nbeta\n\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "+alpha\n+beta\n+\n")
+	})
+
 	t.Run("mixed changes - staged and unstaged", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := testutil.CreateTempGitRepo(t)
