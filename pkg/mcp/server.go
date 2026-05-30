@@ -311,14 +311,6 @@ func (s *Server) prepareReview(
 		return nil, nil, fmt.Errorf("failed to get diff: %w", err)
 	}
 
-	if diff == "" {
-		return nil, &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.NewTextContent("No changes to review"),
-			},
-		}, nil
-	}
-
 	// Report progress: security scan.
 	reporter.Report(ctx, 2, totalSteps, "Running security scan...")
 
@@ -628,7 +620,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 
 	// Changes are approved - proceed to commit.
 	// Report progress: staging changes.
-	reporter.Report(ctx, 5, 6, "Staging changes...")
+	reporter.Report(ctx, 5, totalSteps, "Staging changes...")
 
 	// Stage only the files that were present in the diff and passed the
 	// security scan. Files created during the review window are intentionally
@@ -656,7 +648,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		"duration_ms", stageDuration.Milliseconds())
 
 	// Report progress: committing changes.
-	reporter.Report(ctx, 6, 6, "Committing changes...")
+	reporter.Report(ctx, 6, totalSteps, "Committing changes...")
 
 	// Commit the changes.
 	commitStart := time.Now()
