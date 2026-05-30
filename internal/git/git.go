@@ -177,17 +177,31 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 }
 
 // writeNewFileDiff renders content as a synthetic "new file" diff block (used
-// for untracked files and initial commits, which have no blob to diff against).
-// A single trailing newline is treated as the terminator of the last line, not
-// as content, so a file ending in "\n" does not gain a phantom empty added
-// line — matching how git itself renders the file.
+// for untracked files and initial commits, which have no blob to diff against),
+// mirroring git's own rendering: a "@@ -0,0 +1,N @@" hunk header, one "+" line
+// per added line, and a "\ No newline at end of file" marker when the content
+// does not end in a newline. A single trailing newline is treated as the
+// terminator of the last line, not as content, so a file ending in "\n" does
+// not gain a phantom empty added line (content ending in "\n\n" keeps a genuine
+// blank final line). An empty file yields only the header lines and no hunk,
+// also matching git; callers already skip empty content, so that path is a
+// safety net.
 func writeNewFileDiff(buf *bytes.Buffer, file, content string) {
 	_, _ = fmt.Fprintf(buf, "diff --git a/%s b/%s\n", file, file)
 	_, _ = buf.WriteString("new file mode 100644\n")
+	if content == "" {
+		return
+	}
 	_, _ = buf.WriteString("--- /dev/null\n")
 	_, _ = fmt.Fprintf(buf, "+++ b/%s\n", file)
-	for line := range strings.SplitSeq(strings.TrimSuffix(content, "\n"), "\n") {
+
+	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
+	_, _ = fmt.Fprintf(buf, "@@ -0,0 +1,%d @@\n", len(lines))
+	for _, line := range lines {
 		_, _ = fmt.Fprintf(buf, "+%s\n", line)
+	}
+	if !strings.HasSuffix(content, "\n") {
+		_, _ = buf.WriteString("\\ No newline at end of file\n")
 	}
 }
 

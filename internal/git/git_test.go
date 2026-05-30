@@ -15,6 +15,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -27,6 +28,20 @@ import (
 	"msrl.dev/lgtmcp/internal/config"
 	"msrl.dev/lgtmcp/internal/testutil"
 )
+
+func TestWriteNewFileDiffEmptyContent(t *testing.T) {
+	t.Parallel()
+	// Callers skip empty content, but in isolation an empty file must render
+	// like git: header lines only, with no hunk or no-newline marker.
+	var buf bytes.Buffer
+	writeNewFileDiff(&buf, "empty.txt", "")
+	out := buf.String()
+	assert.Contains(t, out, "diff --git a/empty.txt b/empty.txt")
+	assert.Contains(t, out, "new file mode 100644")
+	assert.NotContains(t, out, "--- /dev/null")
+	assert.NotContains(t, out, "@@")
+	assert.NotContains(t, out, "No newline")
+}
 
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -178,6 +193,72 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		diff, err := g.GetDiff(t.Context())
 		require.NoError(t, err)
 		assert.Contains(t, diff, "+alpha\n+beta\n+\n")
+	})
+
+	t.Run("untracked file emits a hunk header like git", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "alpha\nbeta\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		// Two content lines -> "@@ -0,0 +1,2 @@", matching git's own output.
+		assert.Contains(t, diff, "@@ -0,0 +1,2 @@")
+	})
+
+	t.Run("untracked file without trailing newline gets a no-newline marker", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// No trailing newline: git marks this explicitly, and so should the
+		// synthesized diff.
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "alpha\nbeta")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "+alpha\n+beta\n")
+		assert.Contains(t, diff, "\\ No newline at end of file")
+	})
+
+	t.Run("forces a/ b/ prefixes even with diff.mnemonicPrefix set", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "main.go", "package main\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		// With diff.mnemonicPrefix set, git would otherwise emit c/ and w/ (or
+		// i/) prefixes that ExtractChangedFiles does not understand. GetDiff
+		// must force the standard a/ b/ prefixes regardless.
+		testutil.RunGitCmd(t, tmpDir, "config", "diff.mnemonicPrefix", "true")
+
+		testutil.CreateFile(t, tmpDir, "main.go", "package main\n\nfunc main() {}\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "diff --git a/main.go b/main.go")
+		assert.Contains(t, diff, "--- a/main.go")
+		assert.Contains(t, diff, "+++ b/main.go")
+		assert.NotContains(t, diff, "c/main.go")
+		assert.NotContains(t, diff, "w/main.go")
 	})
 
 	t.Run("mixed changes - staged and unstaged", func(t *testing.T) {
