@@ -645,6 +645,13 @@ func (r *Reviewer) reviewDiffWithModel(
 	for response != nil && len(response.Candidates) > 0 {
 		candidate := response.Candidates[0]
 
+		// A candidate can arrive with no Content (e.g. blocked by safety
+		// filters or stopped on MAX_TOKENS), in which case there is nothing
+		// to act on; fall through to the structured review phase.
+		if candidate.Content == nil {
+			break
+		}
+
 		// Check if the model made any function calls.
 		var hasToolCalls bool
 		for _, part := range candidate.Content.Parts {
@@ -746,6 +753,9 @@ func (r *Reviewer) reviewDiffWithModel(
 	}
 
 	candidate := reviewResponse.Candidates[0]
+	if candidate.Content == nil {
+		return nil, ErrEmptyResponse
+	}
 	for _, part := range candidate.Content.Parts {
 		if part.Text != "" {
 			// Log the raw response for debugging.
@@ -959,9 +969,17 @@ func (*Reviewer) handleFileRetrieval(
 // Returns (isIgnored, error) - if error is not nil, the caller should fail closed for security.
 func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
 	// Use git check-ignore to check if the file is ignored
-	// This respects all .gitignore files in the repository hierarchy
-	cmd := exec.Command("git", "check-ignore", relativePath) //nolint:gosec // relativePath is validated before use
+	// This respects all .gitignore files in the repository hierarchy.
+	// The "--" separator stops git from interpreting a path that begins with
+	// "-" (e.g. "-foo.txt") as an option flag.
+	cmd := exec.Command("git", "check-ignore", "--", relativePath) //nolint:gosec // relativePath is validated before use
 	cmd.Dir = repoPath
+	// Strip inherited git-location environment variables (e.g. GIT_DIR,
+	// GIT_WORK_TREE) so they cannot override cmd.Dir and point check-ignore at
+	// a different repository. These leak in when lgtmcp runs inside another git
+	// process such as a pre-commit hook; without this, gitignore enforcement
+	// would consult the wrong repo.
+	cmd.Env = gitLocationSanitizedEnv()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -989,4 +1007,40 @@ func isFileGitIgnored(relativePath, repoPath string) (bool, error) {
 	}
 	// Exit code 0 means the file is ignored
 	return true, nil
+}
+
+// gitLocationEnvPrefixes are the environment variables git consults to locate
+// the repository, index, and worktree. Any of them, if inherited, would
+// override an explicit cmd.Dir.
+var gitLocationEnvPrefixes = []string{
+	"GIT_DIR=",
+	"GIT_COMMON_DIR=",
+	"GIT_WORK_TREE=",
+	"GIT_INDEX_FILE=",
+	"GIT_OBJECT_DIRECTORY=",
+	"GIT_CEILING_DIRECTORIES=",
+	"GIT_NAMESPACE=",
+}
+
+// gitLocationSanitizedEnv returns the current environment with the git
+// repository-location variables removed, so a child git process resolves the
+// repository from its working directory rather than inherited state.
+func gitLocationSanitizedEnv() []string {
+	environ := os.Environ()
+	sanitized := make([]string, 0, len(environ))
+	for _, kv := range environ {
+		drop := false
+		for _, prefix := range gitLocationEnvPrefixes {
+			if strings.HasPrefix(kv, prefix) {
+				drop = true
+
+				break
+			}
+		}
+		if !drop {
+			sanitized = append(sanitized, kv)
+		}
+	}
+
+	return sanitized
 }
