@@ -33,6 +33,9 @@ import (
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
+// fakeSecrets generates synthetic, non-functional secret values for tests.
+var fakeSecrets = security.FakeSecrets{}
+
 // TestGitIntegration tests the complete git workflow.
 func TestGitIntegration(t *testing.T) {
 	t.Parallel()

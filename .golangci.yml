@@ -19,7 +19,6 @@ run:
   timeout: 5m
   tests: true
   build-tags:
-    - e2e
     - integration
 
 linters:
