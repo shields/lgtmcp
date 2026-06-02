@@ -159,6 +159,7 @@ All workflows use pinned action versions with SHA hashes for reproducibility.
 - [x] **Usage stats in response** - Duration, token counts, and cost shown in review response footer
 - [x] **AGENTS.md discovery** - Automatically discover and inject AGENTS.md instructions into review prompts
 - [x] **REVIEW.md discovery** - Automatically discover and inject REVIEW.md instructions into review prompts
+- [x] **Context caching measurement** - Log implicit-cache hit rate and dollar savings; correct cached-token cost accounting
 
 ## AGENTS.md and REVIEW.md Support
 
@@ -179,6 +180,17 @@ Untracked files and initial-commit files have no blob to diff against, so `GetDi
 - `gitFileMode` chooses the mode: `120000` for symlinks (checked first, since a symlink's permission bits often include execute bits), `100755` when a regular file's owner-execute bit is set, else `100644`. This mirrors git's `ce_permissions`, which keys off `0o100` alone and ignores group/other execute bits. On Windows, Go never reports execute bits, so regular files resolve to `100644` (consistent with git's default `core.fileMode=false`).
 - `newFileForDiff` supplies the content and mode. For a symlink it returns the link target via `os.Readlink` (which reads only the link text and never dereferences the link, so a target outside the repo is never read) and the symlink mode; escaping or dangling symlinks are therefore surfaced to the reviewer as `120000` entries rather than being silently dropped. Regular files delegate to `readRepoFile`, the shared reader that also backs the public `GetFileContent`/`get_file_content` tool — whose follow-the-symlink-and-reject-escapes security contract is unchanged.
 - Newly added **empty** files (e.g. `__init__.py`, `.gitkeep`) are surfaced as a header-only block (`writeNewFileDiff` writes the headers and returns), matching git. The `GetDiff` callsites guard only on the read error, not on empty content, so an empty new file is neither dropped from the review nor (for `review_and_commit`, whose staged-file list is derived from the diff) silently omitted from the commit.
+
+## Context Caching
+
+Gemini 2.5/3.x perform **implicit** context caching automatically (no API setup, no storage cost): when a request shares a long prefix with a recent one, the shared tokens are billed at ~10% of the input rate. Within a single review this fires across Phase 1's tool-calling loop, where the chat resends the growing history (including the diff) on each turn. lgtmcp deliberately does **not** create explicit caches (`Caches.Create`): for a one-review-at-a-time workload the hourly storage floor plus per-cache create overhead exceed the read discount from the handful of reuses a single review generates, so explicit caching would lose money. Implicit caching is free and always on, so there is nothing to configure.
+
+The review measures and reports caching effectiveness (`internal/review/review.go`):
+
+- `tokenUsage.cost` bills `PromptTokens - CachedTokens` at the full input rate and `CachedTokens` at 10%. Gemini reports `PromptTokenCount` as the _total effective_ prompt size, which already includes the cached tokens (per the genai `UsageMetadata` docs), so the cached count is subtracted out rather than added on top — fixing an earlier double-count that overstated cost on a cache hit.
+- `costWithoutCaching` is the no-cache baseline (every prompt token at the full rate); `savings` is baseline minus actual; `cacheHitRate` is `CachedTokens / PromptTokens`.
+- Every review emits the `Token usage` log with `cost_usd_uncached`, `cache_savings_usd`, `cache_hit_rate`, and `cache_engaged`, plus a plain-language `Context caching` line (`engaged=true/false`) so "did it work / are we saving money" is answerable with one grep. The MCP response footer (`pkg/mcp/server.go`) shows `Cached: N (X% hit, saved $Y)`, or `Cached: 0 (no hit)` when nothing was cached.
+- Small diffs below the model's implicit-cache minimum (4096 tokens for `gemini-3.1-pro-preview`) never cache; the `engaged=false` log states that explicitly rather than looking broken.
 
 ## Security Features
 

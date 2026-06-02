@@ -1519,6 +1519,17 @@ func TestTokenUsage(t *testing.T) {
 				cachedTokens:     1_000_000, // 1M cached = $2.00 * 0.1 = $0.20
 				expectedCost:     0.20,
 			},
+			{
+				// Realistic cache hit: PromptTokens already includes the cached
+				// tokens, so only the 600K non-cached remainder bills at the
+				// full rate. The pre-fix formula double-counted and returned 2.08.
+				name:             "cache hit discounts only the cached portion",
+				modelName:        "gemini-3.1-pro-preview",
+				promptTokens:     1_000_000, // 600K non-cached @ $2.00 = $1.20
+				candidatesTokens: 0,
+				cachedTokens:     400_000, // 400K cached @ $0.20 = $0.08
+				expectedCost:     1.28,
+			},
 		}
 
 		for _, tt := range tests {
@@ -1536,6 +1547,39 @@ func TestTokenUsage(t *testing.T) {
 					"cost should be approximately $%.4f", tt.expectedCost)
 			})
 		}
+	})
+
+	t.Run("costWithoutCaching ignores the cache discount", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{PromptTokens: 1_000_000, CachedTokens: 400_000}
+		// All prompt tokens billed at the full input rate, no discount.
+		assert.InDelta(t, 2.00, usage.costWithoutCaching("gemini-3.1-pro-preview"), 0.0001)
+		// Unknown model returns -1, matching cost().
+		assert.InDelta(t, -1.0, usage.costWithoutCaching("unknown-model"), 0.0001)
+	})
+
+	t.Run("savings is baseline minus actual", func(t *testing.T) {
+		t.Parallel()
+		// 400K cached of 1M prompt: baseline $2.00, actual $1.28, saved $0.72.
+		usage := &tokenUsage{PromptTokens: 1_000_000, CachedTokens: 400_000}
+		assert.InDelta(t, 0.72, usage.savings("gemini-3.1-pro-preview"), 0.0001)
+
+		// No cached tokens: nothing saved.
+		noCache := &tokenUsage{PromptTokens: 1_000_000}
+		assert.InDelta(t, 0.0, noCache.savings("gemini-3.1-pro-preview"), 0.0001)
+
+		// Unknown model: zero, not a negative number.
+		assert.InDelta(t, 0.0, usage.savings("unknown-model"), 0.0001)
+	})
+
+	t.Run("cacheHitRate is cached over prompt", func(t *testing.T) {
+		t.Parallel()
+		usage := &tokenUsage{PromptTokens: 1_000_000, CachedTokens: 400_000}
+		assert.InDelta(t, 0.4, usage.cacheHitRate(), 0.0001)
+
+		// Divide-by-zero guard: no prompt tokens => 0, no panic.
+		empty := &tokenUsage{}
+		assert.InDelta(t, 0.0, empty.cacheHitRate(), 0.0001)
 	})
 }
 
@@ -2256,6 +2300,8 @@ func TestReviewDiffWithModel_TokenUsage(t *testing.T) {
 	assert.Equal(t, int32(10), result.TokenUsage.CachedTokens)
 	assert.Equal(t, int32(20), result.TokenUsage.ThoughtsTokens)
 	assert.Greater(t, result.CostUSD, float64(0))
+	// The 10 cached tokens flow through to a positive savings on the result.
+	assert.Greater(t, result.CacheSavingsUSD, float64(0))
 }
 
 // TestHandleFileRetrieval_TOCTOUHappyPath is a regression test for the

@@ -94,12 +94,13 @@ type TokenUsage struct {
 
 // Result represents the result of a code review.
 type Result struct {
-	Comments   string      `json:"comments"`
-	LGTM       bool        `json:"lgtm"`
-	TokenUsage *TokenUsage `json:"token_usage,omitempty"`
-	DurationMS int64       `json:"duration_ms,omitempty"`
-	CostUSD    float64     `json:"cost_usd,omitempty"`
-	Model      string      `json:"model,omitempty"`
+	Comments        string      `json:"comments"`
+	LGTM            bool        `json:"lgtm"`
+	TokenUsage      *TokenUsage `json:"token_usage,omitempty"`
+	DurationMS      int64       `json:"duration_ms,omitempty"`
+	CostUSD         float64     `json:"cost_usd,omitempty"`
+	CacheSavingsUSD float64     `json:"cache_savings_usd,omitempty"`
+	Model           string      `json:"model,omitempty"`
 }
 
 // FileFetchCallback is called when a file is fetched during review.
@@ -219,13 +220,54 @@ func (t *tokenUsage) cost(modelName string) float64 {
 	if !ok {
 		return -1 // Unknown model
 	}
-	// Input cost: full price for prompt tokens, 10% for cached tokens.
-	inputCost := float64(t.PromptTokens)/1_000_000*pricing.InputPrice +
+	// PromptTokens is the total effective prompt size and already includes
+	// CachedTokens (per the genai UsageMetadata docs), so only the non-cached
+	// remainder bills at the full input rate; cached tokens bill at 10%.
+	// Clamp; the API should never report cached > prompt, but guard anyway.
+	fullRateTokens := max(t.PromptTokens-t.CachedTokens, 0)
+	inputCost := float64(fullRateTokens)/1_000_000*pricing.InputPrice +
 		float64(t.CachedTokens)/1_000_000*pricing.InputPrice*0.1
 	// Output cost: includes thoughts tokens (reasoning models bill these as output).
 	outputTokens := t.CandidatesTokens + t.ThoughtsTokens
 	outputCost := float64(outputTokens) / 1_000_000 * pricing.OutputPrice
 	return inputCost + outputCost
+}
+
+// costWithoutCaching is the baseline cost had no tokens been served from cache:
+// every prompt token billed at the full input rate. It is the reference point
+// for savings(). Returns -1 for unknown models, matching cost().
+func (t *tokenUsage) costWithoutCaching(modelName string) float64 {
+	pricing, ok := pricingByModel[modelName]
+	if !ok {
+		return -1
+	}
+	inputCost := float64(t.PromptTokens) / 1_000_000 * pricing.InputPrice
+	outputTokens := t.CandidatesTokens + t.ThoughtsTokens
+	return inputCost + float64(outputTokens)/1_000_000*pricing.OutputPrice
+}
+
+// savings returns the USD saved by (implicit) context caching on this review:
+// the baseline cost minus the actual discounted cost. Returns 0 for unknown
+// models or when nothing was cached.
+func (t *tokenUsage) savings(modelName string) float64 {
+	base := t.costWithoutCaching(modelName)
+	if base < 0 {
+		return 0
+	}
+	if s := base - t.cost(modelName); s > 0 {
+		return s
+	}
+	return 0
+}
+
+// cacheHitRate returns CachedTokens/PromptTokens in [0,1] — the fraction of the
+// prompt served from cache (PromptTokens already includes cached tokens).
+// Guards against divide-by-zero.
+func (t *tokenUsage) cacheHitRate() float64 {
+	if t.PromptTokens <= 0 {
+		return 0
+	}
+	return float64(t.CachedTokens) / float64(t.PromptTokens)
 }
 
 // New creates a new Reviewer with the Gemini API client.
@@ -572,9 +614,31 @@ func (r *Reviewer) reviewDiffWithModel(
 				logArgs = append(logArgs, "tool_use_tokens", usage.ToolUseTokens)
 			}
 			if cost := usage.cost(modelName); cost >= 0 {
-				logArgs = append(logArgs, "cost_usd", cost)
+				logArgs = append(logArgs, "cost_usd", cost,
+					"cost_usd_uncached", usage.costWithoutCaching(modelName),
+					"cache_savings_usd", usage.savings(modelName),
+					"cache_hit_rate", usage.cacheHitRate(),
+					"cache_engaged", usage.CachedTokens > 0)
 			}
 			r.logger.Info("Token usage", logArgs...)
+
+			// Plain-language caching verdict so "did it work / are we saving
+			// money" is answerable with a single grep (msg="Context caching").
+			if usage.CachedTokens == 0 {
+				r.logger.Info("Context caching",
+					"engaged", false,
+					"reason", "no cached tokens (prompt below model minimum, prefix changed, or no implicit cache)",
+					"prompt_tokens", usage.PromptTokens,
+					"model", modelName)
+			} else {
+				r.logger.Info("Context caching",
+					"engaged", true,
+					"cached_tokens", usage.CachedTokens,
+					"prompt_tokens", usage.PromptTokens,
+					"hit_rate", usage.cacheHitRate(),
+					"saved_usd", usage.savings(modelName),
+					"model", modelName)
+			}
 		}
 	}()
 
@@ -778,6 +842,7 @@ func (r *Reviewer) reviewDiffWithModel(
 			}
 			if cost := usage.cost(modelName); cost >= 0 {
 				result.CostUSD = cost
+				result.CacheSavingsUSD = usage.savings(modelName)
 			}
 
 			return &result, nil

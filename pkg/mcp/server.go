@@ -245,6 +245,18 @@ func formatReviewResponse(result *review.Result, commitHash string) string {
 				result.TokenUsage.PromptTokens,
 				result.TokenUsage.CandidatesTokens)
 			parts = append(parts, tokenPart)
+
+			// Caching: always report whether it engaged, folding savings in.
+			if result.TokenUsage.CachedTokens > 0 && result.TokenUsage.PromptTokens > 0 {
+				hitPct := 100 * float64(result.TokenUsage.CachedTokens) / float64(result.TokenUsage.PromptTokens)
+				cachedPart := fmt.Sprintf("Cached: %d (%.0f%% hit", result.TokenUsage.CachedTokens, hitPct)
+				if result.CacheSavingsUSD > 0 {
+					cachedPart += fmt.Sprintf(", saved $%.4f", result.CacheSavingsUSD)
+				}
+				parts = append(parts, cachedPart+")")
+			} else {
+				parts = append(parts, "Cached: 0 (no hit)")
+			}
 		}
 
 		// Cost.

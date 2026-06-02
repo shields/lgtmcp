@@ -791,6 +791,43 @@ func TestFormatReviewResponse(t *testing.T) {
 		assert.Contains(t, response, " | ")
 	})
 
+	t.Run("with cache hit and savings", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "Approved",
+			TokenUsage: &review.TokenUsage{
+				PromptTokens:     10000,
+				CandidatesTokens: 2000,
+				TotalTokens:      12000,
+				CachedTokens:     4700, // 47% of prompt
+			},
+			CostUSD:         0.05,
+			CacheSavingsUSD: 0.0332,
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Cached: 4700 (47% hit, saved $0.0332)")
+	})
+
+	t.Run("with no cache hit", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "Approved",
+			TokenUsage: &review.TokenUsage{
+				PromptTokens:     8000,
+				CandidatesTokens: 1000,
+				TotalTokens:      9000,
+				CachedTokens:     0,
+			},
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "Cached: 0 (no hit)")
+		assert.NotContains(t, response, "saved $")
+	})
+
 	t.Run("with commit hash", func(t *testing.T) {
 		t.Parallel()
 		result := &review.Result{
