@@ -181,7 +181,8 @@ var pricingByModel = map[string]modelPricing{
 	"gemini-3-pro-preview":   {InputPrice: 2.00, OutputPrice: 12.00},
 	"gemini-2.5-pro":         {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},
-	"gemini-2.5-flash":       {InputPrice: 0.15, OutputPrice: 0.60},
+	"gemini-2.5-flash":       {InputPrice: 0.30, OutputPrice: 2.50},
+	"gemini-2.5-flash-lite":  {InputPrice: 0.10, OutputPrice: 0.40},
 	"gemini-1.5-pro":         {InputPrice: 1.25, OutputPrice: 5.00},
 	"gemini-1.5-flash":       {InputPrice: 0.075, OutputPrice: 0.30},
 }

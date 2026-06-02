@@ -1497,6 +1497,13 @@ func TestTokenUsage(t *testing.T) {
 				expectedCost:     0.375,
 			},
 			{
+				name:             "gemini-2.5-flash pricing",
+				modelName:        "gemini-2.5-flash",
+				promptTokens:     1_000_000, // 1M input = $0.30
+				candidatesTokens: 1_000_000, // 1M output = $2.50
+				expectedCost:     2.80,
+			},
+			{
 				name:             "unknown model returns -1",
 				modelName:        "unknown-model",
 				promptTokens:     1_000_000,
