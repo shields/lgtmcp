@@ -147,11 +147,12 @@ CI workflows in `.github/workflows/`:
 
 - **lint.yaml** - Runs golangci-lint, then zizmor (GitHub Actions static analysis, `pedantic` persona) on push/PR to main
 - **test.yaml** - Runs tests with race detection and coverage on push/PR to main
-- **codeql.yaml** - CodeQL security scanning for Go (push/PR to main)
 
 All workflows use pinned action versions with SHA hashes for reproducibility.
 
 The zizmor step runs the official `zizmorcore/zizmor-action` as a plain pass/fail gate: `advanced-security: false` (no SARIF upload, so the job stays `contents: read`) and `online-audits: false` (deterministic, offline — matches local `zizmor --pedantic .`). Renovate bumps the pinned action SHA, which also advances the bundled zizmor version.
+
+The project intentionally runs no SAST scan of the Go source: the CodeQL workflow was removed deliberately and is not being replaced. The zizmor step audits only the GitHub Actions workflow files, not Go code, so it is not a SAST substitute. Reintroduce a Go SAST workflow here if that coverage is wanted again.
 
 ## TODO
 
