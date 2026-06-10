@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: all build test coverage test-integration clean lint fmt deps tools install run help
+.PHONY: all build test coverage coverage-html test-integration test-all clean lint lint-fix fmt deps tools install run help
 
 # Variables
 BINARY_NAME=lgtmcp

@@ -91,7 +91,7 @@ export PATH="$HOME/bin:$PATH"
      level: "info"
    ```
 
-The `fallback_model` is use when we run into quota exhaustion on the primary
+The `fallback_model` is used when we run into quota exhaustion on the primary
 model. While Gemini 3.1 Pro is in preview, it has very low daily rate limits.
 
 ### Claude Code configuration
