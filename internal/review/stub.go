@@ -67,13 +67,15 @@ func (s *StubGeminiClient) GenerateContent(
 
 // StubGeminiChat is a stub implementation of GeminiChat for testing.
 type StubGeminiChat struct {
-	SendMessageFunc func(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error)
+	SendMessageFunc func(ctx context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error)
 }
 
 // SendMessage implements GeminiChat.
-func (s *StubGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error) {
+func (s *StubGeminiChat) SendMessage(
+	ctx context.Context, parts ...genai.Part,
+) (*genai.GenerateContentResponse, error) {
 	if s.SendMessageFunc != nil {
-		return s.SendMessageFunc(ctx, part)
+		return s.SendMessageFunc(ctx, parts...)
 	}
 
 	// Default response for testing.

@@ -90,6 +90,7 @@ type TokenUsage struct {
 	TotalTokens      int32 `json:"total_tokens"`
 	CachedTokens     int32 `json:"cached_tokens,omitempty"`
 	ThoughtsTokens   int32 `json:"thoughts_tokens,omitempty"`
+	ToolUseTokens    int32 `json:"tool_use_tokens,omitempty"`
 }
 
 // Result represents the result of a code review.
@@ -113,9 +114,11 @@ type GeminiClient interface {
 		genConfig *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
 }
 
-// GeminiChat abstracts the chat session operations.
+// GeminiChat abstracts the chat session operations. SendMessage is variadic,
+// matching genai.Chat.SendMessage, so that a single turn can carry one
+// function response part per function call the model made in parallel.
 type GeminiChat interface {
-	SendMessage(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error)
+	SendMessage(ctx context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error)
 }
 
 // Options contains optional parameters for a review.
@@ -166,6 +169,11 @@ const (
 	defaultModel      = "gemini-3.1-pro-preview"
 	errorKey          = "error"
 	errDeletedFileMsg = "file was deleted in this change; its full removed content is shown in the diff"
+
+	// maxToolTurns bounds the Phase 1 tool-calling loop. Each turn can fetch
+	// several files (parallel function calls), so this is generous for a code
+	// review while still stopping a runaway model from burning tokens forever.
+	maxToolTurns = 32
 )
 
 // modelPricing contains per-million-token pricing for supported models.
@@ -208,9 +216,10 @@ func (t *tokenUsage) addFromResponse(resp *genai.GenerateContentResponse) {
 	t.ToolUseTokens += resp.UsageMetadata.ToolUsePromptTokenCount
 }
 
-// total returns the total number of tokens used (input + output + thoughts).
+// total returns the total number of tokens used. It mirrors the genai
+// TotalTokenCount definition: prompt + candidates + tool-use prompt + thoughts.
 func (t *tokenUsage) total() int32 {
-	return t.PromptTokens + t.CandidatesTokens + t.ThoughtsTokens
+	return t.PromptTokens + t.CandidatesTokens + t.ToolUseTokens + t.ThoughtsTokens
 }
 
 // cost returns the estimated cost in USD for the given model.
@@ -225,7 +234,9 @@ func (t *tokenUsage) cost(modelName string) float64 {
 	// CachedTokens (per the genai UsageMetadata docs), so only the non-cached
 	// remainder bills at the full input rate; cached tokens bill at 10%.
 	// Clamp; the API should never report cached > prompt, but guard anyway.
-	fullRateTokens := max(t.PromptTokens-t.CachedTokens, 0)
+	// Tool-use prompt tokens are reported separately from PromptTokens and
+	// are also input.
+	fullRateTokens := max(t.PromptTokens-t.CachedTokens, 0) + t.ToolUseTokens
 	inputCost := float64(fullRateTokens)/1_000_000*pricing.InputPrice +
 		float64(t.CachedTokens)/1_000_000*pricing.InputPrice*0.1
 	// Output cost: includes thoughts tokens (reasoning models bill these as output).
@@ -242,7 +253,7 @@ func (t *tokenUsage) costWithoutCaching(modelName string) float64 {
 	if !ok {
 		return -1
 	}
-	inputCost := float64(t.PromptTokens) / 1_000_000 * pricing.InputPrice
+	inputCost := float64(t.PromptTokens+t.ToolUseTokens) / 1_000_000 * pricing.InputPrice
 	outputTokens := t.CandidatesTokens + t.ThoughtsTokens
 	return inputCost + float64(outputTokens)/1_000_000*pricing.OutputPrice
 }
@@ -317,20 +328,6 @@ func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 	}, nil
 }
 
-// NewWithClient creates a new Reviewer with a custom client (for testing).
-//
-//nolint:lll // Long function signature
-func NewWithClient(client GeminiClient, modelName string, temperature float32, retryConfig *config.RetryConfig, promptManager *prompts.Manager) *Reviewer {
-	return &Reviewer{
-		client:        client,
-		modelName:     modelName,
-		temperature:   temperature,
-		retryConfig:   retryConfig,
-		promptManager: promptManager,
-	}
-}
-
-// ReviewDiff reviews a git diff and returns the review result.
 // isRetryableError checks if the error is retryable (rate limit or server errors).
 func isRetryableError(err error) bool {
 	if err == nil {
@@ -566,8 +563,11 @@ func (r *Reviewer) ReviewDiff(
 
 	result, err := r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.modelName, options)
 
-	// On quota exhaustion, try fallback model once.
-	if errors.Is(err, ErrQuotaExhausted) && r.fallbackModel != config.FallbackModelNone && r.fallbackModel != r.modelName {
+	// On quota exhaustion, try fallback model once. An empty fallback model
+	// (possible on a hand-constructed Reviewer; config.Load defaults it)
+	// means no fallback rather than a request with an empty model name.
+	if errors.Is(err, ErrQuotaExhausted) && r.fallbackModel != "" &&
+		r.fallbackModel != config.FallbackModelNone && r.fallbackModel != r.modelName {
 		r.logger.Warn("Primary model quota exhausted, falling back",
 			"primary_model", r.modelName,
 			"fallback_model", r.fallbackModel)
@@ -705,8 +705,17 @@ func (r *Reviewer) reviewDiffWithModel(
 	}
 	usage.addFromResponse(response)
 
-	// Handle function calls.
-	for response != nil && len(response.Candidates) > 0 {
+	// Handle function calls. The loop is bounded: nothing upstream applies a
+	// deadline, so without a cap a model that keeps requesting files would
+	// fetch (and bill) forever. On hitting the cap we proceed to the
+	// structured review phase with the context gathered so far.
+	for turn := 0; response != nil && len(response.Candidates) > 0; turn++ {
+		if turn >= maxToolTurns {
+			r.logger.Warn("Tool-calling turn limit reached; proceeding to review",
+				"max_turns", maxToolTurns)
+			break
+		}
+
 		candidate := response.Candidates[0]
 
 		// A candidate can arrive with no Content (e.g. blocked by safety
@@ -716,50 +725,53 @@ func (r *Reviewer) reviewDiffWithModel(
 			break
 		}
 
-		// Check if the model made any function calls.
-		var hasToolCalls bool
+		// The model may make several function calls in one turn (parallel
+		// function calling). The API requires exactly one response part per
+		// call, so collect a response for each before replying.
+		var funcResponses []genai.Part
 		for _, part := range candidate.Content.Parts {
-			if part.FunctionCall != nil {
-				hasToolCalls = true
+			switch {
+			case part.FunctionCall != nil:
 				requestedFile, ok := part.FunctionCall.Args["filepath"].(string)
 				r.logger.Debug("Model requested file",
 					"function", part.FunctionCall.Name,
 					"filepath", requestedFile)
 
 				// Invoke file fetch callback if provided.
-				if opts != nil && opts.FileFetchCallback != nil && ok && requestedFile != "" {
+				if opts.FileFetchCallback != nil && ok && requestedFile != "" {
 					opts.FileFetchCallback(requestedFile)
 				}
 
-				// Send the function response back with retry logic.
-				funcResponse := r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet)
-
-				// Log the function response for debugging.
-				r.logger.Debug("Sending function response",
-					"function", part.FunctionCall.Name)
-
-				err = r.retryableOperation(ctx, func() error {
-					var sendErr error
-					response, sendErr = chat.SendMessage(ctx, *funcResponse)
-
-					return sendErr
-				}, "function_response")
-				if err != nil {
-					return nil, fmt.Errorf("failed to send function response: %w", err)
-				}
-				usage.addFromResponse(response)
-
-				break
-			} else if part.Text != "" {
-				// Capture any analysis text from the model.
+				funcResponses = append(funcResponses,
+					*r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet))
+			case part.Text != "" && !part.Thought:
+				// Capture any analysis text from the model. Thought-summary
+				// parts also carry text but are reasoning, not analysis, so
+				// they fall through to the default case.
 				analysisText = part.Text
+			default:
+				// Other part kinds (inline data, thought summaries) need no action.
 			}
 		}
 
 		// If no tool calls, we have the analysis response.
-		if !hasToolCalls {
+		if len(funcResponses) == 0 {
 			break
 		}
+
+		// Send the function responses back with retry logic.
+		r.logger.Debug("Sending function responses", "count", len(funcResponses))
+
+		err = r.retryableOperation(ctx, func() error {
+			var sendErr error
+			response, sendErr = chat.SendMessage(ctx, funcResponses...)
+
+			return sendErr
+		}, "function_response")
+		if err != nil {
+			return nil, fmt.Errorf("failed to send function response: %w", err)
+		}
+		usage.addFromResponse(response)
 	}
 
 	// Phase 2: Get structured review result without tools.
@@ -821,7 +833,9 @@ func (r *Reviewer) reviewDiffWithModel(
 		return nil, ErrEmptyResponse
 	}
 	for _, part := range candidate.Content.Parts {
-		if part.Text != "" {
+		// Skip thought-summary parts: they carry text but are reasoning, not
+		// the structured JSON verdict, and would fail to parse below.
+		if part.Text != "" && !part.Thought {
 			// Log the raw response for debugging.
 			r.logger.Debug("Raw review response from Gemini", "text", part.Text)
 
@@ -840,6 +854,7 @@ func (r *Reviewer) reviewDiffWithModel(
 				TotalTokens:      usage.total(),
 				CachedTokens:     usage.CachedTokens,
 				ThoughtsTokens:   usage.ThoughtsTokens,
+				ToolUseTokens:    usage.ToolUseTokens,
 			}
 			if cost := usage.cost(modelName); cost >= 0 {
 				result.CostUSD = cost
@@ -944,6 +959,62 @@ func (*Reviewer) handleFileRetrieval(
 				errorKey: "access denied: file is gitignored",
 			},
 		)
+	}
+
+	// git check-ignore matches the requested name only, while the rooted open
+	// below follows in-repo symlinks. Without this re-check, a symlink such as
+	// "config-link -> .env" (link not ignored, target ignored) would launder
+	// gitignored content past the check above. Resolve the path and, when it
+	// differs from the requested one, run check-ignore on the target too.
+	// Resolution errors (e.g. nonexistent file, dangling symlink) fall through
+	// to the open, which fails with the clearer ENOENT-style message. Like the
+	// check above this is best-effort against races; os.Root still guarantees
+	// the escape property at open time.
+	if resolved, evalErr := filepath.EvalSymlinks(absPath); evalErr == nil {
+		// Resolve the repo root too: on systems where the repo path itself
+		// contains symlinked components (e.g. /tmp on macOS), Rel against the
+		// unresolved root would misreport every file as outside the repo.
+		resolvedRepo, repoErr := filepath.EvalSymlinks(absRepoPath)
+		if repoErr != nil {
+			return genai.NewPartFromFunctionResponse(
+				funcCall.Name,
+				map[string]any{
+					errorKey: fmt.Sprintf("failed to resolve repository path: %v", repoErr),
+				},
+			)
+		}
+		relResolved, relErr := filepath.Rel(resolvedRepo, resolved)
+		if relErr != nil || relResolved == ".." ||
+			strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
+			return genai.NewPartFromFunctionResponse(
+				funcCall.Name,
+				map[string]any{
+					errorKey: "access denied: path is outside repository",
+				},
+			)
+		}
+		if relResolved != filepath.Clean(requestedPath) {
+			targetIgnored, targetErr := git.IsIgnored(ctx, repoPath, relResolved)
+			if targetErr != nil {
+				// Fail closed on any error for security.
+				return genai.NewPartFromFunctionResponse(
+					funcCall.Name,
+					map[string]any{
+						errorKey: fmt.Sprintf(
+							"access denied: unable to verify gitignore status: %v", targetErr,
+						),
+					},
+				)
+			}
+			if targetIgnored {
+				return genai.NewPartFromFunctionResponse(
+					funcCall.Name,
+					map[string]any{
+						errorKey: "access denied: file is gitignored",
+					},
+				)
+			}
+		}
 	}
 
 	// TOCTOU defense: route the open through os.Root, which uses openat

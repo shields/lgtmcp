@@ -16,17 +16,12 @@ package review
 
 import (
 	"context"
-	"os"
+	"encoding/json"
 
 	"google.golang.org/genai"
 	"msrl.dev/lgtmcp/internal/logging"
 	"msrl.dev/lgtmcp/internal/prompts"
 )
-
-// IsTestMode returns true if we're running in test mode (no external API calls).
-func IsTestMode() bool {
-	return os.Getenv("LGTMCP_TEST_MODE") == "true"
-}
 
 // NewForTesting creates a Reviewer with a stub client for testing.
 func NewForTesting() *Reviewer {
@@ -66,7 +61,7 @@ func newStubClient(analysisText, reviewJSON string) *StubGeminiClient {
 	return &StubGeminiClient{
 		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
 			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ genai.Part) (*genai.GenerateContentResponse, error) {
+				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
 					return textResp(analysisText), nil
 				},
 			}, nil
@@ -80,12 +75,14 @@ func newStubClient(analysisText, reviewJSON string) *StubGeminiClient {
 }
 
 // WithStubResponse creates a Reviewer that returns a specific response.
-func WithStubResponse(lgtm bool, comments string) *Reviewer { //nolint:revive // lgtm is response data
-	lgtmStr := "false"
-	if lgtm {
-		lgtmStr = "true"
+func WithStubResponse(lgtm bool, comments string) *Reviewer {
+	// Marshal rather than concatenate so comments containing quotes or
+	// backslashes still produce valid JSON.
+	responseJSON, err := json.Marshal(Result{LGTM: lgtm, Comments: comments})
+	if err != nil {
+		// Marshaling a plain struct of bool and string cannot fail.
+		panic(err)
 	}
-	responseJSON := `{"lgtm": ` + lgtmStr + `, "comments": "` + comments + `"}`
 
 	logger, err := logging.New(logging.Config{Output: "none"})
 	if err != nil {
@@ -93,7 +90,7 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer { //nolint:revive //
 		panic(err)
 	}
 	return &Reviewer{
-		client:        newStubClient("Analysis complete for testing.", responseJSON),
+		client:        newStubClient("Analysis complete for testing.", string(responseJSON)),
 		modelName:     defaultModel,
 		temperature:   0.2,
 		retryConfig:   nil, // No retry for testing by default.

@@ -50,6 +50,8 @@ type RealGeminiChat struct {
 }
 
 // SendMessage sends a message to the chat session.
-func (c *RealGeminiChat) SendMessage(ctx context.Context, part genai.Part) (*genai.GenerateContentResponse, error) {
-	return c.chat.SendMessage(ctx, part)
+func (c *RealGeminiChat) SendMessage(
+	ctx context.Context, parts ...genai.Part,
+) (*genai.GenerateContentResponse, error) {
+	return c.chat.SendMessage(ctx, parts...)
 }
