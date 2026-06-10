@@ -145,8 +145,8 @@ Go tools (golangci-lint, gofumpt) are managed via the `tool` directive in `go.mo
 
 CI workflows in `.github/workflows/`:
 
-- **lint.yaml** - Runs golangci-lint, then zizmor (GitHub Actions static analysis, `pedantic` persona) on push/PR to main
-- **test.yaml** - Runs tests with race detection and coverage on push/PR to main
+- **lint.yaml** - Runs golangci-lint, then zizmor (GitHub Actions static analysis, `pedantic` persona) on every push and pull request
+- **test.yaml** - Runs tests with race detection and coverage on every push and pull request
 
 All workflows use pinned action versions with SHA hashes for reproducibility.
 

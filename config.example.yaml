@@ -111,20 +111,31 @@ logging:
 
 # Prompts configuration (optional)
 # Customize the prompts used for code review
+#
+# For security, prompt files must live inside the lgtmcp config directory
+# (the directory containing this file). Relative paths are resolved against
+# it; absolute paths outside it are rejected.
 prompts:
   # Path to custom review prompt file (optional)
   # The file should be a Markdown template with Go template syntax
   # Available template variables:
   #   - {{.AnalysisSection}} - Previous analysis from context gathering
-  #   - {{.FilesList}} - List of changed files
+  #   - {{.InstructionsSection}} - Discovered AGENTS.md/REVIEW.md instructions
+  #   - {{.ExistingFilesList}} - Changed files that still exist
+  #   - {{.DeletedFilesList}} - Files deleted by the change
+  #   - {{.FilesList}} - All changed paths, including deletions
   #   - {{.Diff}} - Git diff content
+  #   - {{.CurrentDate}} - Today's date
   # If not specified, uses the embedded default prompt
-  # review_prompt_path: "/path/to/custom/review_prompt.md"
+  # review_prompt_path: "review_prompt.md"
 
   # Path to custom context gathering prompt file (optional)
   # The file should be a Markdown template with Go template syntax
   # Available template variables:
-  #   - {{.FilesList}} - List of changed files
+  #   - {{.InstructionsSection}} - Discovered AGENTS.md/REVIEW.md instructions
+  #   - {{.ExistingFilesList}} - Changed files that still exist
+  #   - {{.DeletedFilesList}} - Files deleted by the change
+  #   - {{.FilesList}} - All changed paths, including deletions
   #   - {{.Diff}} - Git diff content
   # If not specified, uses the embedded default prompt
-  # context_gathering_prompt_path: "/path/to/custom/context_prompt.md"
+  # context_gathering_prompt_path: "context_prompt.md"

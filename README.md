@@ -91,7 +91,7 @@ export PATH="$HOME/bin:$PATH"
      level: "info"
    ```
 
-The `fallback_model` is use when we run into quota exhaustion on the primary
+The `fallback_model` is used when we run into quota exhaustion on the primary
 model. While Gemini 3.1 Pro is in preview, it has very low daily rate limits.
 
 ### Claude Code configuration
@@ -181,7 +181,7 @@ You can configure logging in your `config.yaml`:
 
 ```yaml
 logging:
-  output: "directory" # Options: none, stdout, stderr, directory, mcp
+  output: "directory" # Options: none, stdout, stderr, directory
   level: "info" # Options: debug, info, warn, error
   # directory: "/custom/log/path"  # Optional custom directory
 ```

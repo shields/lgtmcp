@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-.PHONY: all build test coverage test-integration clean lint fmt deps tools install run help
+.PHONY: all build test coverage coverage-html test-integration test-all clean lint lint-fix fmt deps tools install run help
 
 # Variables
 BINARY_NAME=lgtmcp
@@ -35,13 +35,15 @@ LDFLAGS=-ldflags "-s -w -X 'msrl.dev/lgtmcp/internal/appinfo.Version=$(VERSION)'
 # Default target
 all: deps fmt lint test build
 
-# Help target
+# Help target. Every target listed here is defined elsewhere in this file
+# (e.g. coverage-html, which lives below next to coverage).
 help:
 	@echo "Available targets:"
 	@echo "  deps          - Download and verify dependencies"
 	@echo "  build         - Build the binary"
 	@echo "  test          - Run unit tests"
 	@echo "  coverage      - Run tests with coverage report"
+	@echo "  coverage-html - Generate HTML coverage report"
 	@echo "  test-integration - Run integration tests"
 	@echo "  test-all      - Run all tests with coverage"
 	@echo "  lint          - Run golangci-lint"
