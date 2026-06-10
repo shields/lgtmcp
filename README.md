@@ -181,7 +181,7 @@ You can configure logging in your `config.yaml`:
 
 ```yaml
 logging:
-  output: "directory" # Options: none, stdout, stderr, directory, mcp
+  output: "directory" # Options: none, stdout, stderr, directory
   level: "info" # Options: debug, info, warn, error
   # directory: "/custom/log/path"  # Optional custom directory
 ```
