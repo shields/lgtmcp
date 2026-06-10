@@ -1762,21 +1762,6 @@ func TestWithInstructions(t *testing.T) {
 	assert.Equal(t, "review carefully", opts.Instructions)
 }
 
-func TestIsTestMode(t *testing.T) {
-	t.Run("test mode on", func(t *testing.T) {
-		t.Setenv("LGTMCP_TEST_MODE", "true")
-		assert.True(t, IsTestMode())
-	})
-	t.Run("test mode off", func(t *testing.T) {
-		t.Setenv("LGTMCP_TEST_MODE", "false")
-		assert.False(t, IsTestMode())
-	})
-	t.Run("test mode unset", func(t *testing.T) {
-		t.Setenv("LGTMCP_TEST_MODE", "")
-		assert.False(t, IsTestMode())
-	})
-}
-
 func TestStubGeminiClient_DefaultPaths(t *testing.T) {
 	t.Parallel()
 	client := &StubGeminiClient{}
@@ -2610,4 +2595,87 @@ func TestReviewDiff_NoFallbackWhenUnset(t *testing.T) {
 	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
 	require.ErrorIs(t, err, ErrQuotaExhausted)
 	assert.Equal(t, 1, callCount, "must not retry with an empty fallback model")
+}
+
+// TestReviewDiffWithModel_ThoughtPartNotCapturedAsAnalysis ensures Phase 1
+// does not mistake a thought-summary part (Thought=true, which also carries
+// text) for the model's analysis: the model's reasoning must not displace the
+// real analysis text in the Phase 2 review prompt.
+func TestReviewDiffWithModel_ThoughtPartNotCapturedAsAnalysis(t *testing.T) {
+	t.Parallel()
+	var reviewPrompt string
+	client := &StubGeminiClient{
+		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
+			return &StubGeminiChat{
+				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
+					// The thought summary arrives after the analysis text;
+					// without the Thought guard it would overwrite it.
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: &genai.Content{
+							Parts: []*genai.Part{
+								{Text: "Real analysis of the change"},
+								{Text: "internal reasoning summary", Thought: true},
+							},
+						}}},
+					}, nil
+				},
+			}, nil
+		},
+		GenerateContentFunc: func(
+			_ context.Context, _ string, contents []*genai.Content, _ *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			reviewPrompt = contents[0].Parts[0].Text
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{Content: &genai.Content{
+					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
+				}}},
+			}, nil
+		},
+	}
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	assert.Contains(t, reviewPrompt, "Real analysis of the change")
+	assert.NotContains(t, reviewPrompt, "internal reasoning summary")
+}
+
+// TestReviewDiffWithModel_ThoughtPartSkippedInReviewPhase ensures Phase 2
+// skips a leading thought-summary part instead of trying to parse the
+// model's reasoning as the structured JSON verdict.
+func TestReviewDiffWithModel_ThoughtPartSkippedInReviewPhase(t *testing.T) {
+	t.Parallel()
+	client := newStubClientWithGenerateContent(func(
+		_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+	) (*genai.GenerateContentResponse, error) {
+		return &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{Content: &genai.Content{
+				Parts: []*genai.Part{
+					{Text: "thinking about the verdict", Thought: true},
+					{Text: `{"lgtm": true, "comments": "OK"}`},
+				},
+			}}},
+		}, nil
+	})
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	assert.Equal(t, "OK", result.Comments)
 }

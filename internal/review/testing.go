@@ -17,17 +17,11 @@ package review
 import (
 	"context"
 	"encoding/json"
-	"os"
 
 	"google.golang.org/genai"
 	"msrl.dev/lgtmcp/internal/logging"
 	"msrl.dev/lgtmcp/internal/prompts"
 )
-
-// IsTestMode returns true if we're running in test mode (no external API calls).
-func IsTestMode() bool {
-	return os.Getenv("LGTMCP_TEST_MODE") == "true"
-}
 
 // NewForTesting creates a Reviewer with a stub client for testing.
 func NewForTesting() *Reviewer {

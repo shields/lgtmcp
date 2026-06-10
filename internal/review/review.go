@@ -744,11 +744,13 @@ func (r *Reviewer) reviewDiffWithModel(
 
 				funcResponses = append(funcResponses,
 					*r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet))
-			case part.Text != "":
-				// Capture any analysis text from the model.
+			case part.Text != "" && !part.Thought:
+				// Capture any analysis text from the model. Thought-summary
+				// parts also carry text but are reasoning, not analysis, so
+				// they fall through to the default case.
 				analysisText = part.Text
 			default:
-				// Other part kinds (inline data, thoughts) need no action.
+				// Other part kinds (inline data, thought summaries) need no action.
 			}
 		}
 
@@ -831,7 +833,9 @@ func (r *Reviewer) reviewDiffWithModel(
 		return nil, ErrEmptyResponse
 	}
 	for _, part := range candidate.Content.Parts {
-		if part.Text != "" {
+		// Skip thought-summary parts: they carry text but are reasoning, not
+		// the structured JSON verdict, and would fail to parse below.
+		if part.Text != "" && !part.Thought {
 			// Log the raw response for debugging.
 			r.logger.Debug("Raw review response from Gemini", "text", part.Text)
 
