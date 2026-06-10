@@ -83,8 +83,9 @@ func main() {
 		require.NoError(t, err)
 		assert.Equal(t, modifiedContent, content)
 
-		// Test staging and committing.
-		err = gitClient.StageAll(ctx)
+		// Test staging and committing via the diff-derived file list, the
+		// path production uses (HandleReviewAndCommit never calls StageAll).
+		err = gitClient.StageFiles(ctx, security.ExtractChangedFiles(diff))
 		require.NoError(t, err)
 
 		_, err = gitClient.Commit(ctx, "Update greeting message")
@@ -167,7 +168,7 @@ index 0000000..2222222 100644
 @@ -1,2 +1,3 @@
  api:
    endpoint: https://api.example.com
-+  token: ` + fakeSecrets.GitHubPAT() + "`"
++  token: ` + fakeSecrets.GitHubPAT()
 
 		getFileContent := func(path string) (string, error) {
 			if path == "config.yaml" {
@@ -213,13 +214,15 @@ index 3333333..0000000
 @@ -1 +0,0 @@
 -deleted content`
 
-		files := security.ExtractChangedFiles(diff)
+		cf := security.ExtractChangedFilesDetailed(diff)
 		expected := []string{"src/main.go", "docs/README.md", "old.txt"}
-		assert.Equal(t, expected, files)
+		assert.Equal(t, expected, cf.All)
+		assert.Equal(t, []string{"old.txt"}, cf.Deleted,
+			"deleted files must stay in the staged-file list but be flagged as deletions")
 	})
 }
 
-// TestReviewIntegration tests review functionality (will skip without API key).
+// TestReviewIntegration tests review functionality with a stub reviewer.
 func TestReviewIntegration(t *testing.T) {
 	t.Parallel()
 
@@ -350,8 +353,12 @@ func main() {
 		require.NoError(t, err)
 		assert.Empty(t, findings) // Should be no secrets.
 
-		// 6. Stage and commit.
-		err = gitClient.StageAll(ctx)
+		// 6. Stage exactly the diff-derived file list, mirroring
+		// HandleReviewAndCommit's staging step (which deliberately avoids
+		// StageAll so files created after the security scan are excluded).
+		cf := security.ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"main.go"}, cf.All)
+		err = gitClient.StageFiles(ctx, cf.All)
 		require.NoError(t, err)
 
 		_, err = gitClient.Commit(ctx, "Improve greeting message")
@@ -359,7 +366,7 @@ func main() {
 
 		// 7. Verify no more changes.
 		_, err = gitClient.GetDiff(ctx)
-		require.Error(t, err) // Should return ErrNoChanges.
+		require.ErrorIs(t, err, git.ErrNoChanges)
 	})
 
 	t.Run("workflow with secrets detection", func(t *testing.T) {
@@ -392,16 +399,10 @@ DATABASE_URL=postgres://localhost/mydb`
 
 		findings, err := scanner.ScanDiff(ctx, diff, getFileContent)
 		require.NoError(t, err)
+		require.NotEmpty(t, findings)
 
-		// So we'll test both cases: if secrets are detected or not.
-		if len(findings) > 0 {
-			// Verify findings format if secrets were detected.
-			formatted := security.FormatFindings(findings)
-			assert.Contains(t, formatted, "potential secret")
-			assert.Contains(t, formatted, "config.env")
-		} else {
-			// If no secrets detected, that's also acceptable for this test.
-			t.Log("No secrets detected by scanner (this may be expected depending on gitleaks rules)")
-		}
+		formatted := security.FormatFindings(findings)
+		assert.Contains(t, formatted, "potential secret")
+		assert.Contains(t, formatted, "config.env")
 	})
 }

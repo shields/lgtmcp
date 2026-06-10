@@ -27,6 +27,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"msrl.dev/lgtmcp/internal/appinfo"
 	"msrl.dev/lgtmcp/internal/config"
 	"msrl.dev/lgtmcp/internal/git"
 	"msrl.dev/lgtmcp/internal/logging"
@@ -51,9 +52,6 @@ const (
 	schemaDescKey = "description"
 )
 
-// Version is the version of the LGTMCP server reported during MCP initialization.
-const Version = "0.0.0-dev"
-
 // Server implements the MCP server for LGTMCP.
 type Server struct {
 	mcpServer *server.MCPServer
@@ -66,10 +64,12 @@ type Server struct {
 
 // New creates a new MCP server instance.
 func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
-	// Create MCP server with stdio transport.
+	// Create MCP server with stdio transport. The version reported during MCP
+	// initialization is the build version injected via ldflags, matching
+	// the --version flag.
 	mcpServer := server.NewMCPServer(
 		"lgtmcp",
-		Version,
+		appinfo.Version,
 	)
 
 	// Initialize components.
@@ -92,7 +92,7 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 		serveFunc: server.ServeStdio,
 	}
 
-	// Register the review_and_commit tool.
+	// Register the review_only and review_and_commit tools.
 	s.registerTools()
 
 	return s, nil
@@ -102,7 +102,7 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 //
 //nolint:lll // Test constructor with many parameters
 func newForTesting(cfg *config.Config, logger logging.Logger, reviewer *review.Reviewer, scanner *security.Scanner) *Server {
-	mcpServer := server.NewMCPServer("lgtmcp", Version)
+	mcpServer := server.NewMCPServer("lgtmcp", appinfo.Version)
 	s := &Server{
 		mcpServer: mcpServer,
 		reviewer:  reviewer,
@@ -539,11 +539,10 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	}
 	start := time.Now()
 
-	// Log request start without exposing arguments
+	// Log request start without exposing arguments.
 	s.logger.Info("Review and commit request started",
 		"request_id", requestID,
-		"tool", "review_and_commit",
-		"arguments", "map[...]")
+		"tool", "review_and_commit")
 
 	// Create progress reporter based on whether client requested progress.
 	reporter := s.createProgressReporter(request)
@@ -694,7 +693,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 
 // Run starts the MCP server.
 func (s *Server) Run(_ context.Context) error {
-	s.logger.Info("Starting LGTMCP server", "version", Version)
+	s.logger.Info("Starting LGTMCP server", "version", appinfo.Version)
 
 	return s.serveFunc(s.mcpServer) //nolint:wrapcheck // ServeStdio errors are top-level
 }
