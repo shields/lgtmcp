@@ -167,7 +167,7 @@ index 0000000..2222222 100644
 @@ -1,2 +1,3 @@
  api:
    endpoint: https://api.example.com
-+  token: ` + fakeSecrets.GitHubPAT() + "`"
++  token: ` + fakeSecrets.GitHubPAT()
 
 		getFileContent := func(path string) (string, error) {
 			if path == "config.yaml" {
@@ -219,7 +219,7 @@ index 3333333..0000000
 	})
 }
 
-// TestReviewIntegration tests review functionality (will skip without API key).
+// TestReviewIntegration tests review functionality with a stub reviewer.
 func TestReviewIntegration(t *testing.T) {
 	t.Parallel()
 
@@ -359,7 +359,7 @@ func main() {
 
 		// 7. Verify no more changes.
 		_, err = gitClient.GetDiff(ctx)
-		require.Error(t, err) // Should return ErrNoChanges.
+		require.ErrorIs(t, err, git.ErrNoChanges)
 	})
 
 	t.Run("workflow with secrets detection", func(t *testing.T) {
@@ -392,16 +392,10 @@ DATABASE_URL=postgres://localhost/mydb`
 
 		findings, err := scanner.ScanDiff(ctx, diff, getFileContent)
 		require.NoError(t, err)
+		require.NotEmpty(t, findings)
 
-		// So we'll test both cases: if secrets are detected or not.
-		if len(findings) > 0 {
-			// Verify findings format if secrets were detected.
-			formatted := security.FormatFindings(findings)
-			assert.Contains(t, formatted, "potential secret")
-			assert.Contains(t, formatted, "config.env")
-		} else {
-			// If no secrets detected, that's also acceptable for this test.
-			t.Log("No secrets detected by scanner (this may be expected depending on gitleaks rules)")
-		}
+		formatted := security.FormatFindings(findings)
+		assert.Contains(t, formatted, "potential secret")
+		assert.Contains(t, formatted, "config.env")
 	})
 }
