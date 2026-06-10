@@ -108,10 +108,6 @@ func (g *Git) findFiles(filename string, changedFiles []string) ([]InstructionFi
 			continue
 		}
 
-		if _, exists := found[relPath]; exists {
-			continue
-		}
-
 		content, err := os.ReadFile(resolved)
 		if err != nil {
 			continue // Skip unreadable files rather than failing entirely

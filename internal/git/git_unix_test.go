@@ -66,6 +66,35 @@ func TestGetDiff_ExecutableUntrackedFile(t *testing.T) {
 	assert.Contains(t, diff, "diff --git a/notes.txt b/notes.txt\nnew file mode 100644")
 }
 
+// TestGetDiff_SpecialCharacterFilenames exercises names that are legal on unix
+// but not Windows: untracked files containing a double quote or a newline must
+// be read via the raw -z listing and rendered with C-quoted headers exactly as
+// git does, instead of being silently dropped (quote) or corrupting the
+// synthesized header lines (newline).
+func TestGetDiff_SpecialCharacterFilenames(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+
+	testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	testutil.CreateFile(t, tmpDir, `with"quote.txt`, "quoted name\n")
+	testutil.CreateFile(t, tmpDir, "new\nline.txt", "newline name\n")
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	diff, err := g.GetDiff(t.Context())
+	require.NoError(t, err)
+	assert.Contains(t, diff, `diff --git "a/with\"quote.txt" "b/with\"quote.txt"`)
+	assert.Contains(t, diff, "+quoted name")
+	assert.Contains(t, diff, `diff --git "a/new\nline.txt" "b/new\nline.txt"`)
+	assert.Contains(t, diff, "+newline name")
+	// The raw newline byte must never reach a header line.
+	assert.NotContains(t, diff, "a/new\nline.txt")
+}
+
 func TestGetDiff_SymlinkUntracked(t *testing.T) {
 	t.Parallel()
 	tmpDir := testutil.CreateTempGitRepo(t)

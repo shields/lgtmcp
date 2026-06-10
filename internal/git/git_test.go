@@ -88,6 +88,85 @@ func TestWriteNewFileDiffMode(t *testing.T) {
 	})
 }
 
+func TestWriteNewFileDiffSingleLineHunkHeader(t *testing.T) {
+	t.Parallel()
+	// git omits the ",1" count for a single-line hunk: "@@ -0,0 +1 @@".
+	var buf bytes.Buffer
+	writeNewFileDiff(&buf, "one.txt", "only line\n", 0o644)
+	out := buf.String()
+	assert.Contains(t, out, "@@ -0,0 +1 @@\n")
+	assert.NotContains(t, out, "+1,1")
+}
+
+func TestWriteNewFileDiffBinaryContent(t *testing.T) {
+	t.Parallel()
+	t.Run("binary content yields a Binary files marker", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, "blob.bin", "\x00\x01binary", 0o644)
+		out := buf.String()
+		assert.Contains(t, out, "diff --git a/blob.bin b/blob.bin\n")
+		assert.Contains(t, out, "new file mode 100644\n")
+		assert.Contains(t, out, "Binary files /dev/null and b/blob.bin differ\n")
+		// No hunks and no raw bytes, matching git.
+		assert.NotContains(t, out, "@@")
+		assert.NotContains(t, out, "\x00")
+	})
+
+	t.Run("NUL past the detection limit stays text, like git", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		content := strings.Repeat("a", binaryDetectionLimit) + "\x00\n"
+		writeNewFileDiff(&buf, "late-nul.txt", content, 0o644)
+		assert.NotContains(t, buf.String(), "Binary files")
+	})
+
+	t.Run("binary marker path is quoted when needed", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, `bin"q.dat`, "\x00bin", 0o644)
+		assert.Contains(t, buf.String(), "Binary files /dev/null and \"b/bin\\\"q.dat\" differ\n")
+	})
+}
+
+func TestWriteNewFileDiffQuotedPath(t *testing.T) {
+	t.Parallel()
+	// Special bytes in the name must be C-quoted in every path-bearing line,
+	// exactly as git renders them, so a hostile filename cannot corrupt or
+	// spoof header lines.
+	var buf bytes.Buffer
+	writeNewFileDiff(&buf, "new\nline.txt", "x\n", 0o644)
+	out := buf.String()
+	assert.Contains(t, out, "diff --git \"a/new\\nline.txt\" \"b/new\\nline.txt\"\n")
+	assert.Contains(t, out, "+++ \"b/new\\nline.txt\"\n")
+	assert.NotContains(t, out, "a/new\nline.txt")
+}
+
+func TestGitQuotePath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{"plain ascii is unquoted", "dir/file.txt", "a/dir/file.txt"},
+		{"space does not need quoting", "my file.txt", "a/my file.txt"},
+		{"non-ASCII bytes use octal", "héllo.txt", `"a/h\303\251llo.txt"`},
+		{"double quote is escaped", `with"quote.txt`, `"a/with\"quote.txt"`},
+		{"backslash is escaped", `back\slash`, `"a/back\\slash"`},
+		{"newline uses named escape", "new\nline", `"a/new\nline"`},
+		{"tab uses named escape", "tab\there", `"a/tab\there"`},
+		{"other control chars use octal", "ctl\x01char", `"a/ctl\001char"`},
+		{"DEL uses octal", "del\x7fchar", `"a/del\177char"`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, gitQuotePath("a/", tt.path))
+		})
+	}
+}
+
 func TestGitFileMode(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -342,6 +421,110 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		require.NoError(t, err)
 		assert.Contains(t, diff, "+alpha\n+beta\n")
 		assert.Contains(t, diff, "\\ No newline at end of file")
+	})
+
+	t.Run("untracked file with non-ASCII name is included with quoted header", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// Parsing the default (quoted) ls-files output used to treat the
+		// C-quoted form as a literal path, fail the stat, and silently drop
+		// the file from the diff. With -z the raw name is read and the header
+		// is rendered C-quoted exactly as git itself would.
+		testutil.CreateFile(t, tmpDir, "héllo.txt", "café contents\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, `diff --git "a/h\303\251llo.txt" "b/h\303\251llo.txt"`)
+		assert.Contains(t, diff, "+café contents")
+	})
+
+	t.Run("initial commit includes non-ASCII file name", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "héllo.txt", "café contents\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, `diff --git "a/h\303\251llo.txt" "b/h\303\251llo.txt"`)
+		assert.Contains(t, diff, "+café contents")
+	})
+
+	t.Run("untracked binary file gets a Binary files marker", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.CreateFile(t, tmpDir, "blob.bin", "\x00\x01raw-binary-bytes")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "diff --git a/blob.bin b/blob.bin")
+		assert.Contains(t, diff, "Binary files /dev/null and b/blob.bin differ")
+		assert.NotContains(t, diff, "raw-binary-bytes")
+		assert.NotContains(t, diff, "\x00")
+	})
+
+	t.Run("single-line untracked file omits the hunk count like git", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "existing.txt", "existing")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.CreateFile(t, tmpDir, "one.txt", "only line\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "@@ -0,0 +1 @@")
+		assert.NotContains(t, diff, "+1,1")
+	})
+
+	t.Run("external diff and forced color config cannot corrupt the diff", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "main.txt", "initial\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		// diff.external replaces the unified format with arbitrary tool
+		// output, and color.diff=always injects ANSI escapes; both would
+		// break downstream parsing, so GetDiff must override them.
+		testutil.RunGitCmd(t, tmpDir, "config", "diff.external", "echo PWNED")
+		testutil.RunGitCmd(t, tmpDir, "config", "color.diff", "always")
+
+		testutil.CreateFile(t, tmpDir, "main.txt", "modified\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, "--- a/main.txt")
+		assert.Contains(t, diff, "+modified")
+		assert.NotContains(t, diff, "PWNED")
+		assert.NotContains(t, diff, "\x1b")
 	})
 
 	t.Run("forces a/ b/ prefixes even with diff.mnemonicPrefix set", func(t *testing.T) {
