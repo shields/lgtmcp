@@ -42,10 +42,14 @@ func (FakeSecrets) GitHubPAT() string {
 	return rot13("tuc_1234567890nopqrs1234567890nopqrs123456")
 }
 
-// AWSAccessKey returns a test AWS Access Key ID.
+// AWSAccessKey returns a test AWS Access Key ID that gitleaks detects.
+// The decoded value must not end in "EXAMPLE": the gitleaks aws-access-token
+// rule allowlists matches ending in EXAMPLE (such as AWS's documentation key
+// AKIAIOSFODNN7EXAMPLE, which an earlier version of this fixture decoded to),
+// and an allowlisted value can never exercise detection.
 func (FakeSecrets) AWSAccessKey() string {
 	// ROT13 encoded test AWS key.
-	return rot13("NXVNVBFSBQAA7RKNZCYR")
+	return rot13("NXVNVBFSBQAA7GEVTTRE")
 }
 
 // PrivateKeyHeader returns a test private key header.
