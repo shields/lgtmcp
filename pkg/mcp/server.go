@@ -640,8 +640,12 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	// This narrows but does not eliminate the TOCTOU window: `git add` reads
 	// the working-tree contents of these files at stage time, so a concurrent
 	// modification to one of them between scan and stage would still go in.
-	// Fully closing that window requires capturing blobs at scan time and
-	// constructing the tree from them, which is a larger refactor tracked
+	// A non-concurrent variant also exists: content staged into the index
+	// before the review, for a path whose working tree matches HEAD, is
+	// invisible to the diff (HEAD vs worktree) yet committed, because Commit
+	// commits the whole index. Fully closing both requires capturing blobs at
+	// scan time and constructing the tree from them (or resetting index
+	// entries outside the reviewed list), a larger refactor tracked
 	// separately. This change still removes the most exploitable vector
 	// (creating an entirely new unscanned file during the review window).
 	stageStart := time.Now()

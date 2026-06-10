@@ -168,7 +168,8 @@ type Reviewer struct {
 const (
 	defaultModel      = "gemini-3.1-pro-preview"
 	errorKey          = "error"
-	errDeletedFileMsg = "file was deleted in this change; its full removed content is shown in the diff"
+	errDeletedFileMsg = "file was deleted or renamed away in this change; the diff records the removal, " +
+		"and a renamed file's content lives at its new path"
 
 	// maxToolTurns bounds the Phase 1 tool-calling loop. Each turn can fetch
 	// several files (parallel function calls), so this is generous for a code

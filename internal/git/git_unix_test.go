@@ -166,6 +166,24 @@ func TestGetDiff_DanglingSymlinkSurfaced(t *testing.T) {
 	assert.Contains(t, diff, "+does-not-exist.txt")
 }
 
+// TestRunGit_SignalKilledSurfacesSignal pins the error when git dies from a
+// signal instead of exiting: the signal name must reach the caller rather
+// than being collapsed into an opaque "exit status -1" (seen in the wild as
+// intermittent git crashes whose cause the old message hid).
+func TestRunGit_SignalKilledSurfacesSignal(t *testing.T) {
+	// No t.Parallel(): t.Setenv forbids it.
+	binDir := t.TempDir()
+	fakeGit := filepath.Join(binDir, "git")
+	//nolint:gosec // The fake git must be executable.
+	require.NoError(t, os.WriteFile(fakeGit, []byte("#!/bin/sh\nkill -SEGV $$\n"), 0o755))
+	t.Setenv("PATH", binDir)
+
+	res, err := runGit(t.Context(), t.TempDir(), nil, nil, "status")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "signal")
+	assert.Equal(t, -1, res.exitCode)
+}
+
 func TestGetFileContent_SymlinkChainEscapesRepo(t *testing.T) {
 	t.Parallel()
 	tmpDir := testutil.CreateTempGitRepo(t)

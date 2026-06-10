@@ -416,7 +416,9 @@ similarity index 100%
 rename from old.txt
 rename to new.txt`
 		files := ExtractChangedFiles(diff)
-		assert.Equal(t, []string{"new.txt"}, files)
+		// Both halves: the source is removed by the rename, so staging
+		// derived from this list must cover it too.
+		assert.Equal(t, []string{"old.txt", "new.txt"}, files)
 	})
 
 	t.Run("filename with single space", func(t *testing.T) {
@@ -467,7 +469,7 @@ similarity index 100%
 rename from old name.txt
 rename to new name.txt`
 		files := ExtractChangedFiles(diff)
-		assert.Equal(t, []string{"new name.txt"}, files)
+		assert.Equal(t, []string{"old name.txt", "new name.txt"}, files)
 	})
 
 	t.Run("renamed file across directories with spaces", func(t *testing.T) {
@@ -477,7 +479,7 @@ similarity index 90%
 rename from dir one/old file.go
 rename to dir two/new file.go`
 		files := ExtractChangedFiles(diff)
-		assert.Equal(t, []string{"dir two/new file.go"}, files)
+		assert.Equal(t, []string{"dir one/old file.go", "dir two/new file.go"}, files)
 	})
 
 	t.Run("copied file with spaces", func(t *testing.T) {
@@ -510,7 +512,7 @@ copy to copied file.go`
 			"rename from old name.txt\r\n" +
 			"rename to new name.txt\r\n"
 		files := ExtractChangedFiles(diff)
-		assert.Equal(t, []string{"new name.txt"}, files)
+		assert.Equal(t, []string{"old name.txt", "new name.txt"}, files)
 	})
 
 	t.Run("noprefix header", func(t *testing.T) {
@@ -612,7 +614,7 @@ index 0000000..1111111 100644
 			"rename from \"old\\303\\251.txt\"\n" +
 			"rename to \"new\\303\\251.txt\"\n"
 		files := ExtractChangedFiles(diff)
-		assert.Equal(t, []string{"newé.txt"}, files)
+		assert.Equal(t, []string{"oldé.txt", "newé.txt"}, files)
 	})
 
 	t.Run("noprefix header for path that begins with literal a slash and contains b slash", func(t *testing.T) {
@@ -803,15 +805,46 @@ index 4444444..0000000
 		assert.Equal(t, []string{"gone1.txt", "gone2.txt"}, cf.Deleted)
 	})
 
-	t.Run("rename is not a deletion", func(t *testing.T) {
+	t.Run("rename records source as deleted", func(t *testing.T) {
 		t.Parallel()
 		diff := `diff --git a/old.txt b/new.txt
 similarity index 100%
 rename from old.txt
 rename to new.txt`
 		cf := ExtractChangedFilesDetailed(diff)
-		assert.Equal(t, []string{"new.txt"}, cf.All)
-		assert.Empty(t, cf.Deleted)
+		assert.Equal(t, []string{"old.txt", "new.txt"}, cf.All)
+		// The rename removes the source path even though no "deleted file
+		// mode" line appears; the destination is not a deletion.
+		assert.Equal(t, []string{"old.txt"}, cf.Deleted)
+	})
+
+	t.Run("rename source resets between blocks", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/old.txt b/new.txt
+similarity index 100%
+rename from old.txt
+rename to new.txt
+diff --git a/other.txt b/other.txt
+index 1111111..2222222 100644
+--- a/other.txt
++++ b/other.txt
+@@ -1 +1 @@
+-old
++new`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"old.txt", "new.txt", "other.txt"}, cf.All)
+		assert.Equal(t, []string{"old.txt"}, cf.Deleted)
+	})
+
+	t.Run("C-quoted rename from is unquoted", func(t *testing.T) {
+		t.Parallel()
+		diff := "diff --git \"a/old\\303\\251.txt\" \"b/new\\303\\251.txt\"\n" +
+			"similarity index 100%\n" +
+			"rename from \"old\\303\\251.txt\"\n" +
+			"rename to \"new\\303\\251.txt\"\n"
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"oldé.txt", "newé.txt"}, cf.All)
+		assert.Equal(t, []string{"oldé.txt"}, cf.Deleted)
 	})
 
 	t.Run("copy is not a deletion", func(t *testing.T) {

@@ -96,10 +96,11 @@ logging:
   # Output destination (default: directory)
   # Options:
   #   - "none": Disable logging
-  #   - "stdout": Log to standard output
   #   - "stderr": Log to standard error
   #   - "directory": Log to files in directory (default if empty/missing)
   #   - "mcp": Send logs to MCP client (future feature)
+  # "stdout" is rejected: stdout carries the MCP stdio protocol, and log
+  # lines written there would corrupt the JSON-RPC stream.
   output: "directory"
 
   # Directory for log files (optional when output is "directory")

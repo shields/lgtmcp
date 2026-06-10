@@ -174,7 +174,7 @@ Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-speci
 
 ## Deleted-File Handling
 
-When the diff contains deleted files, lgtmcp lists them in a dedicated "Files deleted by this change" section in both prompts, and the `get_file_content` tool short-circuits requests for those paths with the dedicated `errDeletedFileMsg` instead of returning a generic ENOENT. The diff already carries the full removed content, so the model has everything it needs without a follow-up fetch. The deletion set comes from `security.ChangedFiles.Deleted` (returned by `ExtractChangedFilesDetailed`) and is threaded through `review.WithDeletedFiles`. Staging still receives the full path list so deletions are committed; the broader stage-time TOCTOU window (re-created files, modification swap) is documented at the `StageFiles` callsite in `pkg/mcp/server.go` and tracked separately.
+When the diff contains deleted files, lgtmcp lists them in a dedicated "Files deleted by this change" section in both prompts, and the `get_file_content` tool short-circuits requests for those paths with the dedicated `errDeletedFileMsg` instead of returning a generic ENOENT. The diff already carries the full removed content, so the model has everything it needs without a follow-up fetch. The deletion set comes from `security.ChangedFiles.Deleted` (returned by `ExtractChangedFilesDetailed`) and is threaded through `review.WithDeletedFiles`. Rename blocks contribute both halves: the "rename from" source goes into `All` and `Deleted` (the rename removes that path), so a partially staged rename commits the source's deletion instead of silently keeping the old file; `git.StageFiles` skips paths that exist only in HEAD (a fully staged `git mv` source — an already-staged deletion with nothing left to stage) rather than failing on a no-match pathspec, and errors on paths git does not know at all. Staging still receives the full path list so deletions are committed; the broader stage-time TOCTOU window (re-created files, modification swap, pre-staged index content) is documented at the `StageFiles` callsite in `pkg/mcp/server.go` and tracked separately.
 
 ## New-File Diff Synthesis
 
@@ -183,6 +183,7 @@ Untracked files and initial-commit files have no blob to diff against, so `GetDi
 - `gitFileMode` chooses the mode: `120000` for symlinks (checked first, since a symlink's permission bits often include execute bits), `100755` when a regular file's owner-execute bit is set, else `100644`. This mirrors git's `ce_permissions`, which keys off `0o100` alone and ignores group/other execute bits. On Windows, Go never reports execute bits, so regular files resolve to `100644` (consistent with git's default `core.fileMode=false`).
 - `newFileForDiff` supplies the content and mode. For a symlink it returns the link target via `os.Readlink` (which reads only the link text and never dereferences the link, so a target outside the repo is never read) and the symlink mode; escaping or dangling symlinks are therefore surfaced to the reviewer as `120000` entries rather than being silently dropped. Regular files delegate to `readRepoFile`, the shared reader that also backs the public `GetFileContent`/`get_file_content` tool — whose follow-the-symlink-and-reject-escapes security contract is unchanged.
 - Newly added **empty** files (e.g. `__init__.py`, `.gitkeep`) are surfaced as a header-only block (`writeNewFileDiff` writes the headers and returns), matching git. The `GetDiff` callsites guard only on the read error, not on empty content, so an empty new file is neither dropped from the review nor (for `review_and_commit`, whose staged-file list is derived from the diff) silently omitted from the commit.
+- Synthesized `+++` lines carry git's trailing tab when the rendered path contains a literal space (so patch parsers can find where the filename ends), and synthesized new-file blocks are concatenated directly after the tracked diff with no blank separator line — both matching real `git diff` byte-for-byte.
 
 ## Context Caching
 
@@ -201,6 +202,7 @@ The review measures and reports caching effectiveness (`internal/review/review.g
   - Prevents accidental exposure of sensitive files like `.env`, API keys, secrets
   - Respects nested `.gitignore` files throughout the repository hierarchy
   - Uses `git check-ignore` (via the `git.IsIgnored` helper in `internal/git`) for accurate gitignore rule evaluation; the helper strips inherited `GIT_*` variables so a leaked `GIT_DIR`/`GIT_CONFIG_GLOBAL` cannot redirect the check at another repository
+  - Symlinks are resolved and the resolved target is re-checked against `.gitignore`, failing closed on errors, so a link like `config-link -> .env` cannot launder ignored content past the check (symlinks to non-ignored files are still followed)
 
 ## Technical Choices
 

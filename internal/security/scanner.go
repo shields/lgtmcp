@@ -132,15 +132,13 @@ func ExtractChangedFiles(diff string) []string {
 // in the same block, so the deletion flag is reset only at the start of each
 // new "diff --git" block.
 //
-// Known limitation: a rename block contributes only its destination, not its
-// "rename from" source, even though the source path is removed by the change.
-// For a partially staged rename ("mv old new && git add new") the staging list
-// derived from All therefore omits old, and the commit silently keeps it.
-// Recording the source here is not enough to fix that: for a fully staged
-// rename ("git mv") the source exists in neither the worktree nor the index,
-// and git.StageFiles's "git add -A" fails fatally on a pathspec that matches
-// nothing. Fixing this requires a coordinated change in StageFiles to drop
-// nothing-to-do paths.
+// A rename block contributes both halves: the "rename from" source (recorded
+// in Deleted as well, since the rename removes that path even though no
+// "deleted file mode" line appears) and the "rename to" destination. Copy
+// sources are excluded because a copy leaves its source unchanged. For a
+// fully staged rename ("git mv") the source exists in neither the worktree
+// nor the index; git.StageFiles skips such nothing-left-to-stage paths
+// rather than failing on a pathspec that matches nothing.
 //
 // The diff must use git's standard "a/" and "b/" path prefixes (or no prefix,
 // when diff.noprefix is set). The parser deliberately does not strip git's
@@ -155,20 +153,28 @@ func ExtractChangedFilesDetailed(diff string) ChangedFiles {
 	var deleted []string
 	seen := make(map[string]bool)
 
+	add := func(path string, isDeleted bool) {
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		all = append(all, path)
+		if isDeleted {
+			deleted = append(deleted, path)
+		}
+	}
+
 	// pending holds the best-effort path from the most recent "diff --git"
 	// header. It is committed on the next header or at end of stream, and
 	// may be overridden by an authoritative "rename to"/"copy to" line.
+	// renameSource holds the block's "rename from" path, committed as a
+	// deletion since the rename removes it.
 	var pending string
 	var pendingDeleted bool
+	var renameSource string
 	commit := func() {
-		if pending == "" || seen[pending] {
-			return
-		}
-		seen[pending] = true
-		all = append(all, pending)
-		if pendingDeleted {
-			deleted = append(deleted, pending)
-		}
+		add(renameSource, true)
+		add(pending, pendingDeleted)
 	}
 
 	for rawLine := range strings.SplitSeq(diff, "\n") {
@@ -177,6 +183,7 @@ func ExtractChangedFilesDetailed(diff string) ChangedFiles {
 			commit()
 			pending = parseGitDiffHeader(line)
 			pendingDeleted = false
+			renameSource = ""
 
 			continue
 		}
@@ -185,7 +192,9 @@ func ExtractChangedFilesDetailed(diff string) ChangedFiles {
 
 			continue
 		}
-		if path, ok := strings.CutPrefix(line, "rename to "); ok {
+		if path, ok := strings.CutPrefix(line, "rename from "); ok {
+			renameSource = unquoteIfQuoted(path)
+		} else if path, ok := strings.CutPrefix(line, "rename to "); ok {
 			pending = unquoteIfQuoted(path)
 		} else if path, ok := strings.CutPrefix(line, "copy to "); ok {
 			pending = unquoteIfQuoted(path)

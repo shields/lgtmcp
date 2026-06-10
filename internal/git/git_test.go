@@ -958,6 +958,80 @@ func TestStageFiles(t *testing.T) {
 		assert.Contains(t, status, "-dashed.txt")
 		assert.NotContains(t, status, "??")
 	})
+
+	t.Run("skips fully staged rename source with nothing left to stage", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "old.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.RunGitCmd(t, tmpDir, "mv", "old.txt", "new.txt")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		// The diff-derived list includes the rename source, which exists in
+		// neither the worktree nor the index; staging must skip it instead
+		// of failing on a pathspec that matches nothing.
+		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"})
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "R  old.txt -> new.txt")
+	})
+
+	t.Run("stages deletion of partially staged rename source", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "old.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// Rename with only the destination staged: the source's unstaged
+		// deletion must be staged too, or the commit keeps the old file.
+		require.NoError(t, os.Rename(
+			filepath.Join(tmpDir, "old.txt"), filepath.Join(tmpDir, "new.txt"),
+		))
+		testutil.RunGitCmd(t, tmpDir, "add", "new.txt")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"})
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "R  old.txt -> new.txt")
+	})
+
+	t.Run("rejects path escaping the repository", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"../outside.txt"})
+		require.ErrorIs(t, err, ErrPathOutsideRepo)
+	})
+
+	t.Run("errors on path unknown to worktree, index, and HEAD", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "real.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		// A path git has never heard of is a parsing bug or a mid-review
+		// deletion; staging must fail closed instead of silently dropping it.
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"ghost.txt"})
+		require.ErrorIs(t, err, ErrFileNotFound)
+	})
 }
 
 func TestCommit(t *testing.T) {

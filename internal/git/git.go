@@ -88,9 +88,24 @@ func New(repoPath string, cfg *config.GitConfig) (*Git, error) {
 
 // GetDiff returns the diff of all changes in the repository.
 func (g *Git) GetDiff(ctx context.Context) (string, error) {
-	// Check if this is an initial commit (no HEAD exists).
-	_, err := g.runGitCommand(ctx, "rev-parse", "HEAD")
-	isInitialCommit := err != nil
+	// Check if this is an initial commit (no HEAD exists). --verify --quiet
+	// makes the check precise: exit 0 means HEAD resolves, exit 1 means it
+	// does not (unborn branch). Anything else — a real git failure, not an
+	// initial commit — must surface as an error rather than mislabel the
+	// whole repository as new files.
+	res, err := runGit(ctx, g.repoPath, nil, nil, "rev-parse", "--verify", "--quiet", "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("failed to check for HEAD: %w", err)
+	}
+	if res.exitCode != 0 && res.exitCode != 1 {
+		msg := strings.TrimSpace(res.stderr)
+		if msg == "" {
+			msg = fmt.Sprintf("exit status %d", res.exitCode)
+		}
+
+		return "", fmt.Errorf("failed to check for HEAD: %w: %s", ErrCommandFailed, msg)
+	}
+	isInitialCommit := res.exitCode == 1
 
 	var diff string
 
@@ -317,6 +332,12 @@ func (g *Git) StageAll(ctx context.Context) error {
 // StageFiles stages only the specified files (additions, modifications, and
 // deletions). Limiting staging to a known list avoids picking up files that
 // appeared in the working directory after the security scan but before commit.
+//
+// Paths that exist in neither the working tree nor the index but are present
+// in HEAD are skipped: such a path is an already-staged deletion (e.g. the
+// source of a fully staged "git mv") with nothing left to stage, and
+// "git add" would otherwise fail fatally on a pathspec that matches nothing.
+// A path unknown to the working tree, the index, and HEAD is an error.
 func (g *Git) StageFiles(ctx context.Context, files []string) error {
 	if len(files) == 0 {
 		return nil
@@ -324,6 +345,14 @@ func (g *Git) StageFiles(ctx context.Context, files []string) error {
 
 	if slices.Contains(files, "") {
 		return fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
+	files, err := g.stageablePaths(ctx, files)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return nil
 	}
 
 	// Pass paths via stdin (NUL-separated) so we never hit ARG_MAX, and set
@@ -413,6 +442,69 @@ func (g *Git) repoPathFor(relativePath string) (string, error) {
 	}
 
 	return fullPath, nil
+}
+
+// stageablePaths returns the subset of files with something left to stage:
+// paths present in the working tree (additions, modifications) or in the
+// index (deletions not yet staged). A path present only in HEAD is an
+// already-staged deletion (e.g. the source of a fully staged "git mv") with
+// nothing left to stage, and is dropped. A path in none of the three is
+// unknown to git — a parsing bug or a file that vanished mid-review — and is
+// an error, keeping staging fail-closed. The index and HEAD listings are
+// fetched lazily, only once some path is missing from the working tree.
+func (g *Git) stageablePaths(ctx context.Context, files []string) ([]string, error) {
+	var keep []string
+	var indexed, inHead map[string]bool
+	for _, f := range files {
+		fullPath, err := g.repoPathFor(f)
+		if err != nil {
+			return nil, err
+		}
+		if _, lstatErr := os.Lstat(fullPath); lstatErr == nil {
+			keep = append(keep, f)
+
+			continue
+		} else if !os.IsNotExist(lstatErr) {
+			return nil, fmt.Errorf("failed to stat %s: %w", f, lstatErr)
+		}
+		if indexed == nil {
+			if indexed, err = g.listedPaths(ctx, "ls-files", "--cached", "-z"); err != nil {
+				return nil, fmt.Errorf("failed to list index: %w", err)
+			}
+		}
+		if indexed[f] {
+			keep = append(keep, f)
+
+			continue
+		}
+		if inHead == nil {
+			if inHead, err = g.listedPaths(ctx, "ls-tree", "-r", "-z", "--name-only", "HEAD"); err != nil {
+				return nil, fmt.Errorf("failed to list HEAD: %w", err)
+			}
+		}
+		if !inHead[f] {
+			return nil, fmt.Errorf("%w: %s: not in working tree, index, or HEAD", ErrFileNotFound, f)
+		}
+	}
+
+	return keep, nil
+}
+
+// listedPaths runs a git command that emits NUL-separated paths and returns
+// them as a set.
+func (g *Git) listedPaths(ctx context.Context, args ...string) (map[string]bool, error) {
+	out, err := g.runGitCommand(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool)
+	for p := range strings.SplitSeq(out, "\x00") {
+		if p != "" {
+			set[p] = true
+		}
+	}
+
+	return set, nil
 }
 
 // readRepoFile reads a repo-relative file and returns its content together with
@@ -583,10 +675,11 @@ type gitResult struct {
 // timeout, returning the command's stdout, stderr, and process exit code. All
 // GIT_* variables are stripped so the command operates on repoPath rather than
 // being redirected by an inherited GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_* (which
-// happens when lgtmcp is exercised from inside a git pre-commit hook). A non-zero
-// exit is reported via the result's exitCode with a nil error; err is non-nil
-// only when the command could not be run to completion — ErrCommandTimeout on
-// deadline, otherwise the underlying exec error such as git not being found.
+// happens when lgtmcp is exercised from inside a git pre-commit hook). A
+// non-zero exit is reported via the result's exitCode with a nil error; err is
+// non-nil only when the command did not run to completion — ErrCommandTimeout
+// on deadline, the underlying exec error when git cannot be started, or the
+// signal error when git is killed instead of exiting (exitCode -1).
 func runGit(
 	ctx context.Context, repoPath string, stdin io.Reader, extraEnv []string, args ...string,
 ) (gitResult, error) {
@@ -616,6 +709,13 @@ func runGit(
 
 		if exitErr, ok := errors.AsType[*exec.ExitError](runErr); ok {
 			res.exitCode = exitErr.ExitCode()
+			// A negative exit code means git did not exit but was killed by
+			// a signal (e.g. SIGSEGV). Report that as a run failure so the
+			// signal name reaches the caller instead of an opaque
+			// "exit status -1".
+			if res.exitCode < 0 {
+				return res, runErr
+			}
 
 			return res, nil
 		}
