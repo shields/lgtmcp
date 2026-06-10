@@ -132,6 +132,16 @@ func ExtractChangedFiles(diff string) []string {
 // in the same block, so the deletion flag is reset only at the start of each
 // new "diff --git" block.
 //
+// Known limitation: a rename block contributes only its destination, not its
+// "rename from" source, even though the source path is removed by the change.
+// For a partially staged rename ("mv old new && git add new") the staging list
+// derived from All therefore omits old, and the commit silently keeps it.
+// Recording the source here is not enough to fix that: for a fully staged
+// rename ("git mv") the source exists in neither the worktree nor the index,
+// and git.StageFiles's "git add -A" fails fatally on a pathspec that matches
+// nothing. Fixing this requires a coordinated change in StageFiles to drop
+// nothing-to-do paths.
+//
 // The diff must use git's standard "a/" and "b/" path prefixes (or no prefix,
 // when diff.noprefix is set). The parser deliberately does not strip git's
 // mnemonic prefixes ("c/ i/ w/ o/", emitted when diff.mnemonicPrefix is set):
@@ -212,10 +222,8 @@ func parseGitDiffHeader(line string) string {
 		if path, ok := splitDiffPathsExact(afterA, " b/"); ok {
 			return path
 		}
-	}
-	// Mismatched halves: try the prefixed fallback first since unquoted
-	// "diff --git" headers normally use the "a/"/"b/" prefixes.
-	if afterA, ok := strings.CutPrefix(rest, "a/"); ok {
+		// Mismatched halves: try the prefixed fallback first since unquoted
+		// "diff --git" headers normally use the "a/"/"b/" prefixes.
 		if path := splitDiffPathsFallback(afterA, " b/"); path != "" {
 			return path
 		}

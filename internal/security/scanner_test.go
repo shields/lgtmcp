@@ -134,7 +134,7 @@ index 0000000..1111111 100644
 @@ -1,2 +1,3 @@
  config:
    setting: value
-+  token: ` + fakeSecrets.GitHubPAT() + "`"
++  token: ` + fakeSecrets.GitHubPAT()
 
 		getFileContent := func(path string) (string, error) {
 			if path == "config.txt" {
@@ -147,10 +147,8 @@ index 0000000..1111111 100644
 		findings, err := scanner.ScanDiff(t.Context(), diff, getFileContent)
 		require.NoError(t, err)
 		// Should detect GitHub token in the actual file content.
-		assert.NotEmpty(t, findings)
-		if len(findings) > 0 {
-			assert.Equal(t, "config.txt", findings[0].File)
-		}
+		require.NotEmpty(t, findings)
+		assert.Equal(t, "config.txt", findings[0].File)
 	})
 
 	t.Run("diff with private key", func(t *testing.T) {
@@ -321,7 +319,7 @@ index 0000000..2222222 100644
 +++ b/file2.txt
 @@ -1 +1 @@
 -old
-+token=` + fakeSecrets.GitHubPAT() + "`"
++token=` + fakeSecrets.GitHubPAT()
 
 		getFileContent := func(path string) (string, error) {
 			switch path {
@@ -351,7 +349,7 @@ index 0000000..1111111 100644
 +++ b/` + filename + `
 @@ -1 +1 @@
 -old
-+token=` + fakeSecrets.GitHubPAT() + "`"
++token=` + fakeSecrets.GitHubPAT()
 
 		getFileContent := func(path string) (string, error) {
 			if path == filename {
@@ -961,10 +959,8 @@ func main() {
 		content := `token: ` + fakeSecrets.GitHubPAT()
 		findings := scanner.scanContent(content, "config.yml")
 		// Gitleaks should detect GitHub tokens.
-		assert.NotNil(t, findings)
-		if len(findings) > 0 {
-			assert.Equal(t, "config.yml", findings[0].File)
-		}
+		require.NotEmpty(t, findings)
+		assert.Equal(t, "config.yml", findings[0].File)
 	})
 
 	t.Run("content without filename", func(t *testing.T) {
@@ -1141,6 +1137,22 @@ func TestFakeSecrets_AWSAccessKey(t *testing.T) {
 	key := fakeSecrets.AWSAccessKey()
 	assert.NotEmpty(t, key)
 	assert.True(t, strings.HasPrefix(key, "AKIA"), "AWS access key should start with AKIA")
+
+	// The fixture must actually trip the detector: gitleaks allowlists AWS
+	// keys ending in EXAMPLE, and an earlier fixture value decoded to the
+	// allowlisted documentation key AKIAIOSFODNN7EXAMPLE, making it useless
+	// for detection tests.
+	scanner, err := New("")
+	require.NoError(t, err)
+	findings := scanner.scanContent(`aws_access_key_id = "`+key+`"`, "config.txt")
+	require.NotEmpty(t, findings, "AWS fixture must be detected by gitleaks")
+	// Finding order is not deterministic when several rules match, so check
+	// the rule set rather than findings[0].
+	ruleIDs := make([]string, len(findings))
+	for i, f := range findings {
+		ruleIDs[i] = f.RuleID
+	}
+	assert.Contains(t, ruleIDs, "aws-access-token")
 }
 
 func TestHasFindings(t *testing.T) {
