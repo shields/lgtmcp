@@ -54,11 +54,19 @@ func CreateFile(t *testing.T, dir, name, content string) {
 // this, running tests under a git pre-commit hook (which sets GIT_DIR,
 // GIT_INDEX_FILE, GIT_AUTHOR_*, etc.) would silently make every test git
 // invocation operate on the surrounding repository — corrupting it.
+//
+// The developer's global and system git config are also ignored so that
+// settings like commit.gpgsign, core.hooksPath, or commit.template cannot
+// make tests behave differently from machine to machine.
 func RunGitCmd(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...) //nolint:gosec // Test helper with controlled args
 	cmd.Dir = dir
-	cmd.Env = scrubGitEnv(os.Environ())
+	cmd.Env = append(
+		scrubGitEnv(os.Environ()),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git command failed: %v\nOutput: %s", err, output)
@@ -79,11 +87,18 @@ func scrubGitEnv(env []string) []string {
 }
 
 // CreateTempGitRepo creates a temporary git repository with user config for commits.
+//
+// The branch name is pinned so it does not depend on the git version's
+// compiled-in default, and commit signing is disabled repo-locally: the
+// production git helpers deliberately honor the user's global config
+// (signing is a feature), so a developer's commit.gpgsign=true would
+// otherwise make code-under-test commits in this repo try to sign.
 func CreateTempGitRepo(t *testing.T) string {
 	t.Helper()
 	tmpDir := t.TempDir()
-	RunGitCmd(t, tmpDir, "init")
+	RunGitCmd(t, tmpDir, "init", "-b", "main")
 	RunGitCmd(t, tmpDir, "config", "user.email", "test@example.com")
 	RunGitCmd(t, tmpDir, "config", "user.name", "Test User")
+	RunGitCmd(t, tmpDir, "config", "commit.gpgsign", "false")
 	return tmpDir
 }

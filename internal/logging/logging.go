@@ -41,7 +41,8 @@ type Config struct {
 	// - "stdout": Write to standard output
 	// - "stderr": Write to standard error
 	// - "directory": Write to files in specified directory (default)
-	// - "mcp": Send logs to MCP client
+	// - "mcp": Send logs to MCP client (requires MCPSender; the lgtmcp
+	//   server binary does not wire one up, so this errors at startup)
 	// - "buffer": Internal use for testing.
 	Output string `json:"output"`
 
@@ -134,9 +135,11 @@ func newDirectoryLogger(config Config) (Logger, error) {
 				logDir = filepath.Join(home, "AppData", "Local", "lgtmcp", "logs")
 			}
 		default:
-			// Linux and others: ~/.local/share/lgtmcp/logs/
+			// Linux and others: ~/.local/share/lgtmcp/logs/. The XDG spec
+			// requires absolute paths in these variables; ignore relative
+			// values rather than resolving them against the working directory.
 			dataHome := os.Getenv("XDG_DATA_HOME")
-			if dataHome == "" {
+			if !filepath.IsAbs(dataHome) {
 				dataHome = filepath.Join(home, ".local", "share")
 			}
 			logDir = filepath.Join(dataHome, "lgtmcp", "logs")
@@ -222,7 +225,8 @@ func formatMessage(msg string, args ...any) string {
 			value := fmt.Sprintf("%v", args[i+1])
 			pairs = append(pairs, fmt.Sprintf("%s=%s", key, value))
 		}
-		// Ignore unpaired argument (matches slog behavior)
+		// Ignore a trailing unpaired argument (slog instead reports it
+		// under a !BADKEY attribute; dropping it is fine for MCP logs).
 	}
 
 	if len(pairs) > 0 {
