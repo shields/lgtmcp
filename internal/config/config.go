@@ -75,10 +75,12 @@ type LoggingConfig struct {
 
 	// Output specifies where logs should be written:
 	// - "none": Disable logging
-	// - "stdout": Write to standard output
 	// - "stderr": Write to standard error
 	// - "directory": Write to files in specified directory (default if empty)
-	// - "mcp": Send logs to MCP client (if supported).
+	// - "mcp": Send logs to MCP client (not yet wired up in the server
+	//   binary; selecting it currently fails at startup).
+	// "stdout" is rejected at startup: stdout carries the MCP stdio
+	// protocol, so logging there would corrupt the transport.
 	Output string `json:"output,omitempty"`
 
 	// Directory is the directory for log files (when Output is "directory").
@@ -224,8 +226,12 @@ func configPermissionWarning(path string) string {
 
 // GetConfigPath returns the path to the configuration file.
 func GetConfigPath() string {
-	// Check XDG_CONFIG_HOME first.
-	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); xdgConfigHome != "" {
+	// Check XDG_CONFIG_HOME first. The XDG Base Directory spec requires these
+	// variables to hold absolute paths and says relative values must be
+	// ignored (os.UserConfigDir errors on them); honoring one would resolve
+	// the config — and the [Dir] base used to validate config-supplied paths —
+	// against whatever the process working directory happens to be.
+	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdgConfigHome) {
 		return filepath.Join(xdgConfigHome, "lgtmcp", "config.yaml")
 	}
 

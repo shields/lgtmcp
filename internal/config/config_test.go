@@ -358,6 +358,18 @@ func TestGetConfigPath(t *testing.T) {
 		expected := filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml")
 		assert.Equal(t, expected, path)
 	})
+
+	t.Run("ignores relative XDG_CONFIG_HOME", func(t *testing.T) {
+		// The XDG spec requires absolute paths; relative values must be
+		// ignored rather than resolved against the working directory.
+		t.Setenv("XDG_CONFIG_HOME", "relative/config")
+
+		path := GetConfigPath()
+		homeDir, err := os.UserHomeDir()
+		require.NoError(t, err)
+		expected := filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml")
+		assert.Equal(t, expected, path)
+	})
 }
 
 func TestDir(t *testing.T) {

@@ -31,6 +31,13 @@ import (
 // ErrMCPSenderRequired is returned when MCP logging is requested without a sender.
 var ErrMCPSenderRequired = errors.New("MCP sender required for MCP logging")
 
+// ErrStdoutNotAllowed is returned when stdout logging is requested. The server
+// speaks MCP over stdio, so anything else written to stdout corrupts the
+// protocol stream.
+var ErrStdoutNotAllowed = errors.New(
+	`logging output "stdout" would corrupt the MCP stdio transport; use "stderr" or "directory"`,
+)
+
 // Config represents logging configuration.
 type Config struct {
 	// Level is the minimum log level (debug, info, warn, error).
@@ -38,11 +45,12 @@ type Config struct {
 
 	// Output specifies where logs should be written:
 	// - "none": Disable logging
-	// - "stdout": Write to standard output
 	// - "stderr": Write to standard error
 	// - "directory": Write to files in specified directory (default)
-	// - "mcp": Send logs to MCP client
-	// - "buffer": Internal use for testing.
+	// - "mcp": Send logs to MCP client (requires MCPSender; the lgtmcp
+	//   server binary does not wire one up, so this errors at startup)
+	// "stdout" is rejected with [ErrStdoutNotAllowed]: stdout carries the
+	// MCP stdio protocol, so logging there would corrupt the transport.
 	Output string `json:"output"`
 
 	// Directory is the directory for log files (when Output is "directory").
@@ -79,16 +87,11 @@ func New(config Config) (Logger, error) {
 	case "none":
 		return &nopLogger{}, nil
 	case "stdout":
-		return newStdLogger(os.Stdout, config.Level)
+		return nil, ErrStdoutNotAllowed
 	case "stderr":
-		return newStdLogger(os.Stderr, config.Level)
+		return newStdLogger(os.Stderr, config.Level), nil
 	case "mcp":
 		return newMCPLogger(config)
-	case "buffer":
-		// For testing.
-		return newBufferLogger(config.Level)
-	case "directory", "":
-		fallthrough
 	default:
 		// Default to directory logging for empty, "directory", or unrecognized output types.
 		return newDirectoryLogger(config)
@@ -97,19 +100,14 @@ func New(config Config) (Logger, error) {
 
 // standardLogger implements Logger using slog.
 type standardLogger struct {
-	handler slog.Handler
-	logger  *slog.Logger
-	closer  io.Closer
+	logger *slog.Logger
+	closer io.Closer
 }
 
-func newStdLogger(w io.Writer, level string) (Logger, error) {
-	handler := newTextHandler(w, level)
-
+func newStdLogger(w io.Writer, level string) *standardLogger {
 	return &standardLogger{
-		handler: handler,
-		logger:  slog.New(handler),
-		closer:  io.NopCloser(nil),
-	}, nil
+		logger: slog.New(newTextHandler(w, level)),
+	}
 }
 
 func newDirectoryLogger(config Config) (Logger, error) {
@@ -134,9 +132,11 @@ func newDirectoryLogger(config Config) (Logger, error) {
 				logDir = filepath.Join(home, "AppData", "Local", "lgtmcp", "logs")
 			}
 		default:
-			// Linux and others: ~/.local/share/lgtmcp/logs/
+			// Linux and others: ~/.local/share/lgtmcp/logs/. The XDG spec
+			// requires absolute paths in these variables; ignore relative
+			// values rather than resolving them against the working directory.
 			dataHome := os.Getenv("XDG_DATA_HOME")
-			if dataHome == "" {
+			if !filepath.IsAbs(dataHome) {
 				dataHome = filepath.Join(home, ".local", "share")
 			}
 			logDir = filepath.Join(dataHome, "lgtmcp", "logs")
@@ -167,12 +167,9 @@ func newDirectoryLogger(config Config) (Logger, error) {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
-	handler := newTextHandler(file, config.Level)
-
 	return &standardLogger{
-		handler: handler,
-		logger:  slog.New(handler),
-		closer:  file,
+		logger: slog.New(newTextHandler(file, config.Level)),
+		closer: file,
 	}, nil
 }
 
@@ -222,7 +219,8 @@ func formatMessage(msg string, args ...any) string {
 			value := fmt.Sprintf("%v", args[i+1])
 			pairs = append(pairs, fmt.Sprintf("%s=%s", key, value))
 		}
-		// Ignore unpaired argument (matches slog behavior)
+		// Ignore a trailing unpaired argument (slog instead reports it
+		// under a !BADKEY attribute; dropping it is fine for MCP logs).
 	}
 
 	if len(pairs) > 0 {
@@ -252,9 +250,7 @@ func (l *standardLogger) With(args ...any) Logger {
 	// Create a new logger with additional context.
 	// Don't share the closer - only the original logger should close resources.
 	return &standardLogger{
-		handler: l.handler,
-		logger:  l.logger.With(args...),
-		closer:  nil,
+		logger: l.logger.With(args...),
 	}
 }
 
@@ -340,18 +336,13 @@ func (b *bufferLogger) String() string {
 	return b.buffer.String()
 }
 
-func newBufferLogger(level string) (Logger, error) {
+func newBufferLogger(level string) *bufferLogger {
 	buf := &strings.Builder{}
-	handler := newTextHandler(buf, level)
 
 	return &bufferLogger{
-		standardLogger: &standardLogger{
-			handler: handler,
-			logger:  slog.New(handler),
-			closer:  io.NopCloser(nil),
-		},
-		buffer: buf,
-	}, nil
+		standardLogger: newStdLogger(buf, level),
+		buffer:         buf,
+	}
 }
 
 func (*nopLogger) Debug(_ string, _ ...any) {}

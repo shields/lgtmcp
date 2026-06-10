@@ -45,12 +45,12 @@ func TestNew(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "stdout logging",
+			name: "stdout logging is rejected to protect the MCP stdio transport",
 			config: Config{
 				Output: "stdout",
 				Level:  "info",
 			},
-			expectError: false,
+			expectError: true,
 		},
 		{
 			name: "stderr logging",
@@ -85,7 +85,7 @@ func TestNew(t *testing.T) {
 		{
 			name: "invalid log level",
 			config: Config{
-				Output: "stdout",
+				Output: "stderr",
 				Level:  "invalid",
 			},
 			expectError: false, // Falls back to info.
@@ -130,18 +130,8 @@ func TestNew(t *testing.T) {
 func TestLogger_LogLevels(t *testing.T) {
 	t.Parallel()
 	// Create a logger with debug level to capture all logs.
-	config := Config{
-		Output: "buffer",
-		Level:  "debug",
-	}
-
-	logger, err := New(config)
-	require.NoError(t, err)
+	logger := newBufferLogger("debug")
 	defer logger.Close() //nolint:errcheck // Test cleanup
-
-	// Cast to access the buffer.
-	bufLogger, ok := logger.(*bufferLogger)
-	require.True(t, ok)
 
 	// Log messages at different levels.
 	logger.Debug("debug message", "key", "value")
@@ -150,7 +140,7 @@ func TestLogger_LogLevels(t *testing.T) {
 	logger.Error("error message", "key", "value")
 
 	// Check that all messages were logged.
-	output := bufLogger.String()
+	output := logger.String()
 	assert.Contains(t, output, "debug message")
 	assert.Contains(t, output, "info message")
 	assert.Contains(t, output, "warn message")
@@ -204,17 +194,8 @@ func TestLogger_LogLevelFiltering(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			config := Config{
-				Output: "buffer",
-				Level:  tt.level,
-			}
-
-			logger, err := New(config)
-			require.NoError(t, err)
+			logger := newBufferLogger(tt.level)
 			defer logger.Close() //nolint:errcheck // Test cleanup
-
-			bufLogger, ok := logger.(*bufferLogger)
-			require.True(t, ok)
 
 			// Log at all levels.
 			logger.Debug("debug message")
@@ -222,7 +203,7 @@ func TestLogger_LogLevelFiltering(t *testing.T) {
 			logger.Warn("warn message")
 			logger.Error("error message")
 
-			output := bufLogger.String()
+			output := logger.String()
 
 			if tt.expectDebug {
 				assert.Contains(t, output, "debug message")
@@ -364,13 +345,7 @@ func TestWith(t *testing.T) {
 
 	t.Run("buffer logger", func(t *testing.T) {
 		t.Parallel()
-		config := Config{
-			Output: "buffer",
-			Level:  "info",
-		}
-
-		logger, err := New(config)
-		require.NoError(t, err)
+		logger := newBufferLogger("info")
 		defer logger.Close() //nolint:errcheck // Test cleanup
 
 		// Create context logger.
@@ -380,9 +355,7 @@ func TestWith(t *testing.T) {
 		ctxLogger.Info("test message")
 
 		// Check output.
-		bufLogger, ok := logger.(*bufferLogger)
-		require.True(t, ok)
-		output := bufLogger.String()
+		output := logger.String()
 		assert.Contains(t, output, "test message")
 		assert.Contains(t, output, "request_id")
 		assert.Contains(t, output, "123")
@@ -470,16 +443,18 @@ func TestMCPLogger_LevelFiltering(t *testing.T) {
 
 func TestStandardLogger_ChildClose(t *testing.T) {
 	t.Parallel()
-	config := Config{
-		Output: "buffer",
-		Level:  "info",
-	}
-	logger, err := New(config)
-	require.NoError(t, err)
+	logger := newBufferLogger("info")
 	defer logger.Close() //nolint:errcheck // Test cleanup
 
 	child := logger.With("key", "value")
 	assert.NoError(t, child.Close())
+}
+
+func TestNew_StdoutRejected(t *testing.T) {
+	t.Parallel()
+	logger, err := New(Config{Output: "stdout", Level: "info"})
+	require.ErrorIs(t, err, ErrStdoutNotAllowed)
+	assert.Nil(t, logger)
 }
 
 func TestFormatMessage_EmptyArgs(t *testing.T) {

@@ -22,9 +22,11 @@ import (
 	"strings"
 )
 
-// Version is set via ldflags during build.
 var (
-	Version         = "dev"
+	// Version is set via ldflags during build.
+	Version = "dev"
+
+	// readBuildInfoFn lets tests stub out debug.ReadBuildInfo.
 	readBuildInfoFn = debug.ReadBuildInfo
 )
 
