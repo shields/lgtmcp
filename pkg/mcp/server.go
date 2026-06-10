@@ -92,7 +92,7 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 		serveFunc: server.ServeStdio,
 	}
 
-	// Register the review_and_commit tool.
+	// Register the review_only and review_and_commit tools.
 	s.registerTools()
 
 	return s, nil

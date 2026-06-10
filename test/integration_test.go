@@ -83,8 +83,9 @@ func main() {
 		require.NoError(t, err)
 		assert.Equal(t, modifiedContent, content)
 
-		// Test staging and committing.
-		err = gitClient.StageAll(ctx)
+		// Test staging and committing via the diff-derived file list, the
+		// path production uses (HandleReviewAndCommit never calls StageAll).
+		err = gitClient.StageFiles(ctx, security.ExtractChangedFiles(diff))
 		require.NoError(t, err)
 
 		_, err = gitClient.Commit(ctx, "Update greeting message")
@@ -213,9 +214,11 @@ index 3333333..0000000
 @@ -1 +0,0 @@
 -deleted content`
 
-		files := security.ExtractChangedFiles(diff)
+		cf := security.ExtractChangedFilesDetailed(diff)
 		expected := []string{"src/main.go", "docs/README.md", "old.txt"}
-		assert.Equal(t, expected, files)
+		assert.Equal(t, expected, cf.All)
+		assert.Equal(t, []string{"old.txt"}, cf.Deleted,
+			"deleted files must stay in the staged-file list but be flagged as deletions")
 	})
 }
 
@@ -350,8 +353,12 @@ func main() {
 		require.NoError(t, err)
 		assert.Empty(t, findings) // Should be no secrets.
 
-		// 6. Stage and commit.
-		err = gitClient.StageAll(ctx)
+		// 6. Stage exactly the diff-derived file list, mirroring
+		// HandleReviewAndCommit's staging step (which deliberately avoids
+		// StageAll so files created after the security scan are excluded).
+		cf := security.ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"main.go"}, cf.All)
+		err = gitClient.StageFiles(ctx, cf.All)
 		require.NoError(t, err)
 
 		_, err = gitClient.Commit(ctx, "Improve greeting message")
