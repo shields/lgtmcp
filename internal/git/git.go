@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	// GitCommandTimeout is the maximum duration for a git command to complete.
+	// gitCommandTimeout is the maximum duration for a git command to complete.
 	gitCommandTimeout = 30 * time.Second
 )
 
@@ -95,34 +95,31 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	var diff string
 
 	if isInitialCommit {
-		// For initial commit, get all files and show them as new.
-		files, filesErr := g.runGitCommand(ctx, "ls-files", "--others", "--exclude-standard")
+		// For initial commit, get all files and show them as new. The -z flag
+		// yields raw NUL-terminated paths; without it git C-quotes names with
+		// special or non-ASCII bytes (per core.quotePath), and the quoted form
+		// would fail the stat in newFileForDiff and silently drop the file.
+		files, filesErr := g.runGitCommand(ctx, "ls-files", "-z", "--others", "--exclude-standard")
 		if filesErr != nil {
 			return "", fmt.Errorf("failed to get files for initial commit: %w", filesErr)
 		}
 
 		// Also check for any files that might be staged.
-		stagedFiles, stageErr := g.runGitCommand(ctx, "diff", "--cached", "--name-only")
+		stagedFiles, stageErr := g.runGitCommand(ctx, "diff", "--cached", "--name-only", "-z")
 		if stageErr != nil {
 			// Ignore error, just use untracked files.
 			stagedFiles = ""
 		}
-		if stagedFiles != "" {
-			if files != "" {
-				files = files + "\n" + stagedFiles
-			} else {
-				files = stagedFiles
-			}
-		}
+		// Every entry is NUL-terminated, so plain concatenation is safe.
+		files += stagedFiles
 
 		if files == "" {
 			return "", ErrNoChanges
 		}
 
 		var diffOutput bytes.Buffer
-		fileList := strings.Split(strings.TrimSpace(files), "\n")
 		uniqueFiles := make(map[string]bool)
-		for _, file := range fileList {
+		for file := range strings.SplitSeq(files, "\x00") {
 			if file != "" && !uniqueFiles[file] {
 				uniqueFiles[file] = true
 				content, mode, contentErr := g.newFileForDiff(file)
@@ -136,23 +133,30 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 		// Normal case: diff between HEAD and working directory (including untracked files).
 		// This shows all changes regardless of staging status.
 		// Use the configured context lines (default 20).
-		// Force canonical a/ and b/ prefixes so downstream parsers stay correct
-		// even if the user has diff.mnemonicPrefix=true in their git config.
+		// Pin output to a parseable unified diff regardless of user git config:
+		// force canonical a/ and b/ prefixes (diff.mnemonicPrefix would emit
+		// c/ and w/), disable external diff drivers (diff.external replaces
+		// the unified format with arbitrary tool output), and disable color
+		// (color.diff=always would inject ANSI escapes).
 		contextFlag := fmt.Sprintf("--unified=%d", g.diffContextLines)
-		diff, err = g.runGitCommand(ctx, "diff", contextFlag, "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--", ".")
+		diff, err = g.runGitCommand(ctx, "diff", contextFlag, "--no-color", "--no-ext-diff",
+			"--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--", ".")
 		if err != nil {
 			return "", fmt.Errorf("failed to get diff against HEAD: %w", err)
 		}
 
-		// Also include untracked files.
-		untrackedFiles, err := g.runGitCommand(ctx, "ls-files", "--others", "--exclude-standard")
+		// Also include untracked files. The -z flag yields raw NUL-terminated
+		// paths; the default C-quoting of special or non-ASCII names (per
+		// core.quotePath) would fail the stat in newFileForDiff and silently
+		// drop the file from the diff.
+		untrackedFiles, err := g.runGitCommand(ctx, "ls-files", "-z", "--others", "--exclude-standard")
 		if err != nil {
 			return "", fmt.Errorf("failed to get untracked files: %w", err)
 		}
 
 		if untrackedFiles != "" {
 			var untrackedDiff bytes.Buffer
-			for file := range strings.SplitSeq(strings.TrimSpace(untrackedFiles), "\n") {
+			for file := range strings.SplitSeq(untrackedFiles, "\x00") {
 				if file != "" {
 					content, mode, err := g.newFileForDiff(file)
 					if err == nil {
@@ -160,12 +164,10 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 					}
 				}
 			}
-			if untrackedDiff.Len() > 0 {
-				if diff != "" {
-					diff += "\n"
-				}
-				diff += untrackedDiff.String()
-			}
+			// Append the synthesized blocks directly: git emits file blocks
+			// back to back, and a separating blank line would be a stray
+			// non-diff line in the output.
+			diff += untrackedDiff.String()
 		}
 	}
 
@@ -176,34 +178,112 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	return diff, nil
 }
 
+// binaryDetectionLimit is how many leading bytes are searched for a NUL to
+// classify content as binary, matching git's FIRST_FEW_BYTES heuristic.
+const binaryDetectionLimit = 8000
+
 // writeNewFileDiff renders content as a synthetic "new file" diff block (used
 // for untracked files and initial commits, which have no blob to diff against),
 // mirroring git's own rendering: a "new file mode" line whose value reflects the
-// file on disk (see gitFileMode), a "@@ -0,0 +1,N @@" hunk header, one "+" line
-// per added line, and a "\ No newline at end of file" marker when the content
-// does not end in a newline. A single trailing newline is treated as the
-// terminator of the last line, not as content, so a file ending in "\n" does
-// not gain a phantom empty added line (content ending in "\n\n" keeps a genuine
-// blank final line). An empty file yields only the header lines and no hunk,
-// also matching git, so a newly added empty file is still surfaced to the
-// reviewer rather than dropped.
+// file on disk (see gitFileMode), a "@@ -0,0 +1,N @@" hunk header (",N" omitted
+// for a single line, as git does), one "+" line per added line, and a
+// "\ No newline at end of file" marker when the content does not end in a
+// newline. Paths are C-quoted via gitQuotePath when they contain special bytes,
+// and the "+++" line gets git's trailing tab when the rendered path contains a
+// space, so patch parsers can find where the filename ends.
+// A single trailing newline is treated as the terminator of the last line, not
+// as content, so a file ending in "\n" does not gain a phantom empty added line
+// (content ending in "\n\n" keeps a genuine blank final line). An empty file
+// yields only the header lines and no hunk, also matching git, so a newly added
+// empty file is still surfaced to the reviewer rather than dropped. Binary
+// content (a NUL among the leading bytes, git's heuristic) yields a "Binary
+// files ... differ" line instead of hunks of raw bytes; secret scanning is
+// unaffected, since it reads file contents from disk rather than from the diff.
 func writeNewFileDiff(buf *bytes.Buffer, file, content string, mode os.FileMode) {
-	_, _ = fmt.Fprintf(buf, "diff --git a/%s b/%s\n", file, file)
+	_, _ = fmt.Fprintf(buf, "diff --git %s %s\n", gitQuotePath("a/", file), gitQuotePath("b/", file))
 	_, _ = fmt.Fprintf(buf, "new file mode %s\n", gitFileMode(mode))
 	if content == "" {
 		return
 	}
+	if strings.Contains(content[:min(len(content), binaryDetectionLimit)], "\x00") {
+		_, _ = fmt.Fprintf(buf, "Binary files /dev/null and %s differ\n", gitQuotePath("b/", file))
+
+		return
+	}
 	_, _ = buf.WriteString("--- /dev/null\n")
-	_, _ = fmt.Fprintf(buf, "+++ b/%s\n", file)
+	// git appends a tab to a "---"/"+++" line whose rendered path contains a
+	// literal space — even inside a C-quoted form — so that patch parsers can
+	// find where the filename ends. "--- /dev/null" never contains one.
+	bPath := gitQuotePath("b/", file)
+	if strings.Contains(bPath, " ") {
+		bPath += "\t"
+	}
+	_, _ = fmt.Fprintf(buf, "+++ %s\n", bPath)
 
 	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
-	_, _ = fmt.Fprintf(buf, "@@ -0,0 +1,%d @@\n", len(lines))
+	if len(lines) == 1 {
+		_, _ = buf.WriteString("@@ -0,0 +1 @@\n")
+	} else {
+		_, _ = fmt.Fprintf(buf, "@@ -0,0 +1,%d @@\n", len(lines))
+	}
 	for _, line := range lines {
 		_, _ = fmt.Fprintf(buf, "+%s\n", line)
 	}
 	if !strings.HasSuffix(content, "\n") {
 		_, _ = buf.WriteString("\\ No newline at end of file\n")
 	}
+}
+
+// gitQuotePath renders a prefixed path ("a/<file>" or "b/<file>") for a
+// synthesized diff header the way git's quote_c_style does with the default
+// core.quotePath=true: if the path contains a double quote, backslash, control
+// character, or non-ASCII byte, the whole prefixed path is wrapped in double
+// quotes with those bytes escaped (named C escapes where git has them, octal
+// otherwise). Quoting keeps hostile filenames — e.g. one containing a newline —
+// from corrupting or spoofing header lines, and the diff parser in
+// internal/security already unquotes this form from real git output.
+func gitQuotePath(prefix, path string) string {
+	if !gitPathNeedsQuoting(path) {
+		return prefix + path
+	}
+
+	var b strings.Builder
+	_ = b.WriteByte('"')
+	_, _ = b.WriteString(prefix)
+	for i := range len(path) {
+		c := path[i]
+		switch esc, ok := gitPathEscapes[c]; {
+		case ok:
+			_, _ = b.WriteString(esc)
+		case c < 0x20 || c >= 0x7f:
+			_, _ = fmt.Fprintf(&b, `\%03o`, c)
+		default:
+			_ = b.WriteByte(c)
+		}
+	}
+	_ = b.WriteByte('"')
+
+	return b.String()
+}
+
+// gitPathEscapes holds the named C escapes from git's quote.c table; bytes
+// that need quoting but have no named escape are rendered as octal instead.
+var gitPathEscapes = map[byte]string{
+	'\a': `\a`, '\b': `\b`, '\f': `\f`, '\n': `\n`, '\r': `\r`,
+	'\t': `\t`, '\v': `\v`, '"': `\"`, '\\': `\\`,
+}
+
+// gitPathNeedsQuoting reports whether path contains a byte that git's default
+// quoting (core.quotePath=true) escapes: control characters, DEL, double
+// quote, backslash, or any non-ASCII byte.
+func gitPathNeedsQuoting(path string) bool {
+	for i := range len(path) {
+		if c := path[i]; c < 0x20 || c >= 0x7f || c == '"' || c == '\\' {
+			return true
+		}
+	}
+
+	return false
 }
 
 // gitFileMode renders the git index mode for a synthesized new-file block.
