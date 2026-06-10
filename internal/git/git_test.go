@@ -142,6 +142,34 @@ func TestWriteNewFileDiffQuotedPath(t *testing.T) {
 	assert.NotContains(t, out, "a/new\nline.txt")
 }
 
+func TestWriteNewFileDiffSpaceNameTrailingTab(t *testing.T) {
+	t.Parallel()
+	t.Run("space in name appends git's trailing tab on +++", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, "sp ace.txt", "x\n", 0o644)
+		out := buf.String()
+		assert.Contains(t, out, "+++ b/sp ace.txt\t\n")
+		// The tab applies only to the ---/+++ lines, not the diff --git header.
+		assert.Contains(t, out, "diff --git a/sp ace.txt b/sp ace.txt\n")
+	})
+
+	t.Run("space inside a C-quoted form also gets the tab", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, `sp "ace.txt`, "x\n", 0o644)
+		assert.Contains(t, buf.String(), "+++ \"b/sp \\\"ace.txt\"\t\n")
+	})
+
+	t.Run("escaped tab in name has no literal space, so no trailing tab", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		writeNewFileDiff(&buf, "ta\tb.txt", "x\n", 0o644)
+		assert.Contains(t, buf.String(), "+++ \"b/ta\\tb.txt\"\n")
+		assert.NotContains(t, buf.String(), "\t\n")
+	})
+}
+
 func TestGitQuotePath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -294,6 +322,27 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		assert.Contains(t, diff, "file1.txt")
 		assert.Contains(t, diff, "-initial")
 		assert.Contains(t, diff, "+modified")
+	})
+
+	t.Run("synthesized blocks directly follow the tracked diff like git", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		testutil.CreateFile(t, tmpDir, "file1.txt", "initial\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.CreateFile(t, tmpDir, "file1.txt", "modified\n")
+		testutil.CreateFile(t, tmpDir, "untracked.txt", "new\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		// git emits file blocks back to back; a blank separator line would be
+		// a stray non-diff line that strict parsers could misread.
+		assert.Contains(t, diff, "+modified\ndiff --git a/untracked.txt b/untracked.txt")
 	})
 
 	t.Run("untracked files with existing commits", func(t *testing.T) {

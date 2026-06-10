@@ -164,12 +164,10 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 					}
 				}
 			}
-			if untrackedDiff.Len() > 0 {
-				if diff != "" {
-					diff += "\n"
-				}
-				diff += untrackedDiff.String()
-			}
+			// Append the synthesized blocks directly: git emits file blocks
+			// back to back, and a separating blank line would be a stray
+			// non-diff line in the output.
+			diff += untrackedDiff.String()
 		}
 	}
 
@@ -190,7 +188,9 @@ const binaryDetectionLimit = 8000
 // file on disk (see gitFileMode), a "@@ -0,0 +1,N @@" hunk header (",N" omitted
 // for a single line, as git does), one "+" line per added line, and a
 // "\ No newline at end of file" marker when the content does not end in a
-// newline. Paths are C-quoted via gitQuotePath when they contain special bytes.
+// newline. Paths are C-quoted via gitQuotePath when they contain special bytes,
+// and the "+++" line gets git's trailing tab when the rendered path contains a
+// space, so patch parsers can find where the filename ends.
 // A single trailing newline is treated as the terminator of the last line, not
 // as content, so a file ending in "\n" does not gain a phantom empty added line
 // (content ending in "\n\n" keeps a genuine blank final line). An empty file
@@ -211,7 +211,14 @@ func writeNewFileDiff(buf *bytes.Buffer, file, content string, mode os.FileMode)
 		return
 	}
 	_, _ = buf.WriteString("--- /dev/null\n")
-	_, _ = fmt.Fprintf(buf, "+++ %s\n", gitQuotePath("b/", file))
+	// git appends a tab to a "---"/"+++" line whose rendered path contains a
+	// literal space — even inside a C-quoted form — so that patch parsers can
+	// find where the filename ends. "--- /dev/null" never contains one.
+	bPath := gitQuotePath("b/", file)
+	if strings.Contains(bPath, " ") {
+		bPath += "\t"
+	}
+	_, _ = fmt.Fprintf(buf, "+++ %s\n", bPath)
 
 	lines := strings.Split(strings.TrimSuffix(content, "\n"), "\n")
 	if len(lines) == 1 {
