@@ -104,6 +104,8 @@ prompts:
 
 **Model Fallback**: When the primary model's daily quota is exhausted (HTTP 429 with QuotaFailure), the review automatically falls back to `gemini-2.5-pro`. This is distinct from rate limiting, which retries with backoff.
 
+When a fallback occurs, the reported token totals and cost cover **both** attempts, not just the model that finally answered. `ReviewDiff` accumulates a `modelSpend` (model name + `tokenUsage`) for every model it tries — `reviewDiffWithModel` reports its spend through a `recordSpend` callback in its exit `defer`, so a primary model that consumes tokens before hitting quota still has that spend counted. `applyAggregateSpend` then sums the token counts for the at-a-glance totals and computes cost/savings **per model** (primary and fallback can price differently), folding the result onto `Result.CostUSD`/`CacheSavingsUSD`/`TokenUsage`. With a single attempt (the common case) this reproduces that one model's own figures, so there is no behavior change when no fallback fires. `Result.Model` remains the model that produced the verdict (the fallback), while the per-model breakdown stays visible in the `Token usage` logs emitted by each attempt.
+
 ## Development
 
 ```bash

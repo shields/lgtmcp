@@ -569,6 +569,53 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 	return fmt.Errorf("operation %s failed after %d attempts: %w", operationName, maxRetries+1, lastErr)
 }
 
+// modelSpend records the token usage attributed to a single model attempt.
+// ReviewDiff accumulates one per model it tries so cost can be computed with
+// each model's own pricing.
+type modelSpend struct {
+	model string
+	usage tokenUsage
+}
+
+// applyAggregateSpend folds the spend from every attempted model onto result.
+// Token counts are summed for the at-a-glance totals; cost and savings are
+// computed per model, because a quota fallback runs a second model that may
+// price differently from the primary. With a single attempt (the common case)
+// this reproduces that model's own figures.
+func applyAggregateSpend(result *Result, spends []modelSpend) {
+	var combined tokenUsage
+	var cost, savings float64
+	var costKnown bool
+	for _, s := range spends {
+		combined.PromptTokens += s.usage.PromptTokens
+		combined.CandidatesTokens += s.usage.CandidatesTokens
+		combined.CachedTokens += s.usage.CachedTokens
+		combined.ThoughtsTokens += s.usage.ThoughtsTokens
+		combined.ToolUseTokens += s.usage.ToolUseTokens
+		if c := s.usage.cost(s.model); c >= 0 {
+			cost += c
+			savings += s.usage.savings(s.model)
+			costKnown = true
+		}
+	}
+
+	result.TokenUsage = &TokenUsage{
+		PromptTokens:     combined.PromptTokens,
+		CandidatesTokens: combined.CandidatesTokens,
+		TotalTokens:      combined.total(),
+		CachedTokens:     combined.CachedTokens,
+		ThoughtsTokens:   combined.ThoughtsTokens,
+		ToolUseTokens:    combined.ToolUseTokens,
+	}
+	if costKnown {
+		result.CostUSD = cost
+		result.CacheSavingsUSD = savings
+	} else {
+		result.CostUSD = 0
+		result.CacheSavingsUSD = 0
+	}
+}
+
 // ReviewDiff performs a code review on the provided diff.
 // If the primary model's quota is exhausted, it falls back to the fallback model.
 func (r *Reviewer) ReviewDiff(
@@ -581,7 +628,15 @@ func (r *Reviewer) ReviewDiff(
 		opt(options)
 	}
 
-	result, err := r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.modelName, options)
+	// Collect the token spend of every model attempted (primary plus any
+	// fallback) so the reported cost and totals account for the full run, not
+	// just the model that finally answered.
+	var spends []modelSpend
+	record := func(model string, usage tokenUsage) {
+		spends = append(spends, modelSpend{model: model, usage: usage})
+	}
+
+	result, err := r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.modelName, options, record)
 
 	// On quota exhaustion, try fallback model once. An empty fallback model
 	// (possible on a hand-constructed Reviewer; config.Load defaults it)
@@ -591,12 +646,14 @@ func (r *Reviewer) ReviewDiff(
 		r.logger.Warn("Primary model quota exhausted, falling back",
 			"primary_model", r.modelName,
 			"fallback_model", r.fallbackModel)
-		result, err = r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.fallbackModel, options)
+		result, err = r.reviewDiffWithModel(ctx, diff, changedFiles, repoPath, r.fallbackModel, options, record)
 	}
 
-	// Update duration to reflect total wall-clock time including any fallback attempt.
+	// Fold the spend from every attempt onto the result and update duration to
+	// reflect total wall-clock time including any fallback attempt.
 	if result != nil {
 		result.DurationMS = time.Since(startTime).Milliseconds()
+		applyAggregateSpend(result, spends)
 	}
 
 	return result, err
@@ -606,7 +663,8 @@ func (r *Reviewer) ReviewDiff(
 //
 //nolint:maintidx // Complex multi-phase review process; refactoring would hurt readability.
 func (r *Reviewer) reviewDiffWithModel(
-	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string, opts *Options,
+	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string,
+	opts *Options, recordSpend func(model string, usage tokenUsage),
 ) (*Result, error) {
 	startTime := time.Now()
 	// Validate inputs.
@@ -619,6 +677,13 @@ func (r *Reviewer) reviewDiffWithModel(
 
 	// Log token usage when function exits (success or failure).
 	defer func() {
+		// Report this model's spend to the caller so ReviewDiff can aggregate
+		// across the primary attempt and any fallback. This runs on every exit
+		// path, so a model that consumed tokens before erroring (e.g. quota
+		// exhausted mid-review) still has its spend counted.
+		if recordSpend != nil {
+			recordSpend(modelName, *usage)
+		}
 		if usage.total() > 0 {
 			logArgs := []any{
 				"prompt_tokens", usage.PromptTokens,

@@ -1852,6 +1852,82 @@ func TestReviewDiff_FallbackOnQuota(t *testing.T) {
 	assert.Equal(t, 2, callCount)
 }
 
+// TestReviewDiff_FallbackAggregatesSpend verifies that when the primary model
+// is exhausted mid-review, the tokens it consumed before failing are folded
+// into the reported totals and cost alongside the fallback model's spend, each
+// priced at its own rate.
+func TestReviewDiff_FallbackAggregatesSpend(t *testing.T) {
+	t.Parallel()
+	genCalls := 0
+	client := &StubGeminiClient{
+		// Phase 1 (context gathering) runs for both the primary and the
+		// fallback attempt and accrues 100 prompt tokens each time.
+		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
+			return &StubGeminiChat{
+				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: &genai.Content{
+							Parts: []*genai.Part{{Text: "Analysis"}},
+						}}},
+						UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+							PromptTokenCount: 100,
+						},
+					}, nil
+				},
+			}, nil
+		},
+		GenerateContentFunc: func(
+			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			genCalls++
+			if genCalls == 1 {
+				// Primary model's review phase hits the daily quota.
+				return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+					Code:    http.StatusTooManyRequests,
+					Message: "Quota exceeded",
+					Details: []map[string]any{{"@type": quotaFailureType}},
+				})
+			}
+			// Fallback model succeeds.
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{Content: &genai.Content{
+					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
+				}}},
+				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
+					PromptTokenCount:     200,
+					CandidatesTokenCount: 80,
+				},
+			}, nil
+		},
+	}
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "gemini-3.1-pro-preview",
+		fallbackModel: "gemini-2.5-pro",
+		temperature:   0.2,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+	require.NoError(t, err)
+	require.NotNil(t, result.TokenUsage)
+
+	// Prompt tokens span both attempts: primary Phase 1 (100) plus fallback
+	// Phase 1 (100) and Phase 2 (200); candidates come from the fallback only.
+	assert.Equal(t, int32(400), result.TokenUsage.PromptTokens)
+	assert.Equal(t, int32(80), result.TokenUsage.CandidatesTokens)
+	assert.Equal(t, "gemini-2.5-pro", result.Model)
+
+	// Cost folds the primary attempt's spend (priced at the primary model's
+	// rate) into the fallback's, so it exceeds the fallback-only cost.
+	primaryOnly := (&tokenUsage{PromptTokens: 100}).cost("gemini-3.1-pro-preview")
+	fallbackOnly := (&tokenUsage{PromptTokens: 300, CandidatesTokens: 80}).cost("gemini-2.5-pro")
+	assert.InDelta(t, primaryOnly+fallbackOnly, result.CostUSD, 1e-9)
+	assert.Greater(t, result.CostUSD, fallbackOnly)
+}
+
 func TestReviewDiff_FallbackNone(t *testing.T) {
 	t.Parallel()
 	client := newStubClientWithGenerateContent(func(
