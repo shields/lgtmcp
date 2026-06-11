@@ -74,6 +74,16 @@ func run() int {
 		Directory: cfg.Logging.Directory,
 	}
 
+	// The "mcp" output delivers logs to the client as notifications/message via
+	// the MCP server, which does not exist yet (the logger is built first).
+	// Create the sender unbound now, give it to the logger, and bind it to the
+	// server below — lazy injection. Records logged before binding are dropped.
+	var logSender *mcpserver.LogSender
+	if cfg.Logging.Output == "mcp" {
+		logSender = mcpserver.NewLogSender()
+		logConfig.MCPSender = logSender
+	}
+
 	appLogger, err := logging.New(logConfig)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Error initializing logger: %v\n", err)
@@ -92,6 +102,11 @@ func run() int {
 		appLogger.Error("Error creating server", "error", err)
 
 		return 1
+	}
+
+	// Complete lazy injection: route the "mcp" logger through the live server.
+	if logSender != nil {
+		server.BindLogSender(logSender)
 	}
 
 	// Run server in goroutine.

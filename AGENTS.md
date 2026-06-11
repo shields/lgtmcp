@@ -175,6 +175,14 @@ The tool handlers in `pkg/mcp/server.go` distinguish two failure classes, follow
 
 Results are built with the mcp-go helpers throughout — `mcp.NewToolResultError`/`NewToolResultErrorf` for the in-band errors above and `mcp.NewToolResultText` for non-error results. Two non-error results are worth calling out: a secret detected by the security scan is a **non-approval, not a failure** — the scan succeeded and is reporting a finding, so it returns `mcp.NewToolResultText` (`IsError` unset) with a `NOT APPROVED` message, mirroring a rejected review rather than carrying `IsError`; "No changes to review" is likewise a normal non-error result. Tests assert the protocol-vs-in-band split via the `assertInBandToolError` helper.
 
+## MCP Logging Output
+
+The `logging.output: "mcp"` setting routes application logs to the MCP client as `notifications/message` (previously this errored at startup because nothing supplied an `MCPLogSender`). The wiring uses **lazy injection** because the application logger is built before the MCP server it must send through:
+
+- `pkg/mcp/logsender.go` defines `LogSender`, which implements `logging.MCPLogSender`. `main` creates it unbound, hands it to `logging.New` via `logConfig.MCPSender`, constructs the server, then calls `server.BindLogSender(ls)` to attach the live `*server.MCPServer`. Records logged before binding are dropped (there is no transport yet).
+- `SendLog` emits via `SendNotificationToAllClients(notifications/message, …)`, which broadcasts to every initialized session (a stdio server has exactly one) and needs no request context. The server advertises the logging capability (`server.WithLogging()`) **only** when `output == "mcp"`, so it never claims a capability it won't use.
+- Level names are mapped slog→MCP by `mcpLogLevel` (`warn`→`warning`; others coincide). The configured logger level gates output; per-client `logging/setLevel` filtering is not applied because `logging.Logger` carries no request context to resolve the session.
+
 ## AGENTS.md and REVIEW.md Support
 
 Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-specific review guidelines. LGTMCP automatically discovers these files by walking from each changed file's directory up to the repo root. The instructions are injected into both the context-gathering and review prompts.

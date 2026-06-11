@@ -101,7 +101,7 @@ logging:
   #   - "none": Disable logging
   #   - "stderr": Log to standard error
   #   - "directory": Log to files in directory (default if empty/missing)
-  #   - "mcp": Send logs to MCP client (future feature)
+  #   - "mcp": Send logs to the MCP client as notifications/message
   # "stdout" is rejected: stdout carries the MCP stdio protocol, and log
   # lines written there would corrupt the JSON-RPC stream.
   # An unrecognized output likewise fails at startup rather than silently

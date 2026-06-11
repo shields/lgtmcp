@@ -61,8 +61,8 @@ type Config struct {
 	// - "none": Disable logging
 	// - "stderr": Write to standard error
 	// - "directory": Write to files in specified directory (default)
-	// - "mcp": Send logs to MCP client (requires MCPSender; the lgtmcp
-	//   server binary does not wire one up, so this errors at startup)
+	// - "mcp": Send logs to the MCP client as notifications/message (requires
+	//   MCPSender; the server binary wires up one backed by the MCP transport)
 	// "stdout" is rejected with [ErrStdoutNotAllowed]: stdout carries the
 	// MCP stdio protocol, so logging there would corrupt the transport.
 	Output string `json:"output"`

@@ -67,9 +67,19 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 	// Create MCP server with stdio transport. The version reported during MCP
 	// initialization is the build version injected via ldflags, matching
 	// the --version flag.
+	//
+	// Advertise the logging capability only when logs are routed to the client
+	// ("mcp" output); otherwise the server emits no notifications/message and
+	// claiming the capability would mislead the client. main builds the matching
+	// LogSender and binds it via BindLogSender once this server exists.
+	var opts []server.ServerOption
+	if cfg.Logging.Output == "mcp" {
+		opts = append(opts, server.WithLogging())
+	}
 	mcpServer := server.NewMCPServer(
 		"lgtmcp",
 		appinfo.Version,
+		opts...,
 	)
 
 	// Initialize components.
@@ -113,6 +123,14 @@ func newForTesting(cfg *config.Config, logger logging.Logger, reviewer *review.R
 	}
 	s.registerTools()
 	return s
+}
+
+// BindLogSender binds ls to this server's MCP transport so the "mcp" logging
+// output can deliver records to the connected client as notifications/message.
+// The logger (and its sender) are created before the server, so startup calls
+// this once after New to complete the wiring; see [NewLogSender].
+func (s *Server) BindLogSender(ls *LogSender) {
+	ls.Bind(s.mcpServer)
 }
 
 // registerTools registers all MCP tools.

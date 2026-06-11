@@ -77,8 +77,7 @@ type LoggingConfig struct {
 	// - "none": Disable logging
 	// - "stderr": Write to standard error
 	// - "directory": Write to files in specified directory (default if empty)
-	// - "mcp": Send logs to MCP client (not yet wired up in the server
-	//   binary; selecting it currently fails at startup).
+	// - "mcp": Send logs to the MCP client as notifications/message.
 	// "stdout" is rejected at startup: stdout carries the MCP stdio
 	// protocol, so logging there would corrupt the transport.
 	Output string `json:"output,omitempty"`
