@@ -495,6 +495,32 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 		assert.Contains(t, diff, "+café contents")
 	})
 
+	t.Run("tracked non-ASCII path stays quoted despite core.quotePath=false", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		// A user setting core.quotePath=false makes git emit raw UTF-8 path
+		// bytes, which would disagree with the C-quoted form GetDiff synthesizes
+		// for untracked blocks. GetDiff pins core.quotePath=true so the tracked
+		// diff is quoted regardless of this config.
+		testutil.RunGitCmd(t, tmpDir, "config", "core.quotePath", "false")
+
+		testutil.CreateFile(t, tmpDir, "héllo.txt", "one\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		// Modify the committed file so it shows up in `git diff HEAD`.
+		testutil.CreateFile(t, tmpDir, "héllo.txt", "two\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		diff, err := g.GetDiff(t.Context())
+		require.NoError(t, err)
+		assert.Contains(t, diff, `diff --git "a/h\303\251llo.txt" "b/h\303\251llo.txt"`)
+		// The raw, unquoted UTF-8 path must not leak through.
+		assert.NotContains(t, diff, "a/héllo.txt")
+	})
+
 	t.Run("initial commit includes non-ASCII file name", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := testutil.CreateTempGitRepo(t)

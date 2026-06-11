@@ -152,10 +152,14 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 		// force canonical a/ and b/ prefixes (diff.mnemonicPrefix would emit
 		// c/ and w/), disable external diff drivers (diff.external replaces
 		// the unified format with arbitrary tool output), and disable color
-		// (color.diff=always would inject ANSI escapes).
+		// (color.diff=always would inject ANSI escapes). Pin core.quotePath=true
+		// so non-ASCII path bytes are C-quoted in the headers: that is git's
+		// default and the form writeNewFileDiff/gitQuotePath synthesize for the
+		// untracked-file blocks appended below, so a user's core.quotePath=false
+		// cannot make the tracked and synthesized halves of the diff disagree.
 		contextFlag := fmt.Sprintf("--unified=%d", g.diffContextLines)
-		diff, err = g.runGitCommand(ctx, "diff", contextFlag, "--no-color", "--no-ext-diff",
-			"--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--", ".")
+		diff, err = g.runGitCommand(ctx, "-c", "core.quotePath=true", "diff", contextFlag,
+			"--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/", "HEAD", "--", ".")
 		if err != nil {
 			return "", fmt.Errorf("failed to get diff against HEAD: %w", err)
 		}
