@@ -313,11 +313,7 @@ func (s *Server) prepareReview(
 	if err != nil {
 		// Check if it's the "no changes" error.
 		if errors.Is(err, git.ErrNoChanges) {
-			return nil, &mcp.CallToolResult{
-				Content: []mcp.Content{
-					mcp.NewTextContent("No changes to review"),
-				},
-			}, nil
+			return nil, mcp.NewToolResultText("No changes to review"), nil
 		}
 
 		return nil, nil, fmt.Errorf("failed to get diff: %w", err)
@@ -347,12 +343,13 @@ func (s *Server) prepareReview(
 	}
 
 	if security.HasFindings(findings) {
-		return nil, &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.NewTextContent("Security scan failed:\n" + security.FormatFindings(findings)),
-			},
-			IsError: true,
-		}, nil
+		// Detected secrets are a non-approval, not a tool failure: the scan ran
+		// successfully and is reporting a finding (like a NOT APPROVED review),
+		// so this is a normal in-band result with IsError unset.
+		return nil, mcp.NewToolResultText(
+			"Review Result: NOT APPROVED\n\nSecurity scan detected secrets in the changes:\n" +
+				security.FormatFindings(findings),
+		), nil
 	}
 
 	// Extract list of changed files from the diff for Gemini's file retrieval.
@@ -466,7 +463,13 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, err
+		// A wrong-typed directory argument is a malformed request, so it stays a
+		// protocol-level error; any other failure (e.g. path resolution) is a
+		// tool-execution failure reported in-band so the model can read it.
+		if errors.Is(err, ErrDirectoryNotString) {
+			return nil, err
+		}
+		return mcp.NewToolResultErrorf("failed to process directory: %v", err), nil
 	}
 
 	s.logger.Info("Processing repository",
@@ -496,7 +499,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, err
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// Perform the review.
@@ -510,7 +513,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, fmt.Errorf("review failed: %w", err)
+		return mcp.NewToolResultErrorf("review failed: %v", err), nil
 	}
 
 	// Return review result (approved or not).
@@ -523,11 +526,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 	// Format the response with usage statistics.
 	responseText := formatReviewResponse(reviewResult, "")
 
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.NewTextContent(responseText),
-		},
-	}, nil
+	return mcp.NewToolResultText(responseText), nil
 }
 
 // HandleReviewAndCommit handles the review_and_commit tool invocation.
@@ -561,7 +560,13 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, err
+		// A wrong-typed directory argument is a malformed request, so it stays a
+		// protocol-level error; any other failure (e.g. path resolution) is a
+		// tool-execution failure reported in-band so the model can read it.
+		if errors.Is(err, ErrDirectoryNotString) {
+			return nil, err
+		}
+		return mcp.NewToolResultErrorf("failed to process directory: %v", err), nil
 	}
 
 	s.logger.Info("Processing repository",
@@ -597,7 +602,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, err
+		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	// Perform the review.
@@ -611,7 +616,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, fmt.Errorf("review failed: %w", err)
+		return mcp.NewToolResultErrorf("review failed: %v", err), nil
 	}
 
 	// If not approved, return review comments with usage stats.
@@ -622,11 +627,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 			"total_duration_ms", elapsed.Milliseconds())
 
 		responseText := formatReviewResponse(reviewResult, "")
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{
-				mcp.NewTextContent(responseText),
-			},
-		}, nil
+		return mcp.NewToolResultText(responseText), nil
 	}
 
 	// Changes are approved - proceed to commit.
@@ -655,7 +656,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", stageErr)
-		return nil, fmt.Errorf("failed to stage changes: %w", stageErr)
+		return mcp.NewToolResultErrorf("failed to stage changes: %v", stageErr), nil
 	}
 	stageDuration := time.Since(stageStart)
 	s.logger.Info("Changes staged",
@@ -674,7 +675,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 			"request_id", requestID,
 			"total_duration_ms", elapsed.Milliseconds(),
 			"error", err)
-		return nil, fmt.Errorf("failed to commit: %w", err)
+		return mcp.NewToolResultErrorf("failed to commit: %v", err), nil
 	}
 	commitDuration := time.Since(commitStart)
 
@@ -688,11 +689,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	// Format response with usage stats and commit message.
 	responseText := formatReviewResponse(reviewResult, commitHash)
 
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			mcp.NewTextContent(responseText),
-		},
-	}, nil
+	return mcp.NewToolResultText(responseText), nil
 }
 
 // Run starts the MCP server.

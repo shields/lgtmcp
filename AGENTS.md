@@ -166,6 +166,15 @@ The project intentionally runs no SAST scan of the Go source: the CodeQL workflo
 - [x] **REVIEW.md discovery** - Automatically discover and inject REVIEW.md instructions into review prompts
 - [x] **Context caching measurement** - Log implicit-cache hit rate and dollar savings; correct cached-token cost accounting
 
+## MCP Error Semantics
+
+The tool handlers in `pkg/mcp/server.go` distinguish two failure classes, following the MCP guidance that tool-execution failures belong *inside* the result object:
+
+- **Protocol-level errors** (handler returns a non-nil Go `error`, `result == nil`) are reserved for malformed requests the model cannot act on by reading a message: arguments that are not an object (`ErrInvalidArguments`), a non-string `directory` (`ErrDirectoryNotString`), or a non-string `commit_message` (`ErrCommitMessageNotString`). The directory branch uses `errors.Is(err, ErrDirectoryNotString)` to keep only the wrong-type case as a protocol error.
+- **In-band tool errors** (`mcp.NewToolResultError`/`NewToolResultErrorf`, returning `CallToolResult{IsError: true}` with `nil` Go error) carry every failure that happens while the tool runs: directory path resolution, invalid git repository, diff generation, a security scan that itself errors, the Gemini review, staging, and committing. The model receives the reason as text and can react.
+
+Results are built with the mcp-go helpers throughout — `mcp.NewToolResultError`/`NewToolResultErrorf` for the in-band errors above and `mcp.NewToolResultText` for non-error results. Two non-error results are worth calling out: a secret detected by the security scan is a **non-approval, not a failure** — the scan succeeded and is reporting a finding, so it returns `mcp.NewToolResultText` (`IsError` unset) with a `NOT APPROVED` message, mirroring a rejected review rather than carrying `IsError`; "No changes to review" is likewise a normal non-error result. Tests assert the protocol-vs-in-band split via the `assertInBandToolError` helper.
+
 ## AGENTS.md and REVIEW.md Support
 
 Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-specific review guidelines. LGTMCP automatically discovers these files by walking from each changed file's directory up to the repo root. The instructions are injected into both the context-gathering and review prompts.

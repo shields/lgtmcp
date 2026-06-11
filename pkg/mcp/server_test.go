@@ -82,6 +82,20 @@ func TestNew(t *testing.T) {
 	})
 }
 
+// assertInBandToolError asserts that a handler reported a tool-execution
+// failure in-band: no protocol-level error, a non-nil result with IsError set,
+// and a text payload containing want.
+func assertInBandToolError(t *testing.T, result *mcp.CallToolResult, err error, want string) {
+	t.Helper()
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.IsError, "expected an in-band IsError result")
+	require.Len(t, result.Content, 1)
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	require.True(t, ok, "expected text content, got %T", result.Content[0])
+	assert.Contains(t, textContent.Text, want)
+}
+
 func TestHandleReviewAndCommit(t *testing.T) {
 	t.Parallel()
 	// Create a minimal server for testing argument parsing.
@@ -148,9 +162,7 @@ func TestHandleReviewAndCommit(t *testing.T) {
 		}
 
 		result, err := server.HandleReviewAndCommit(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid git repository")
+		assertInBandToolError(t, result, err, "invalid git repository")
 	})
 }
 
@@ -203,9 +215,7 @@ func TestHandleReviewOnly(t *testing.T) {
 		}
 
 		result, err := server.HandleReviewOnly(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid git repository")
+		assertInBandToolError(t, result, err, "invalid git repository")
 	})
 }
 
@@ -316,10 +326,8 @@ func TestHandleReviewAndCommitWithRealRepo(t *testing.T) {
 
 		// This will likely fail at the Gemini review step due to no API key.
 		result, err := server.HandleReviewAndCommit(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		// Should fail at review step.
-		assert.Contains(t, err.Error(), "review failed")
+		// Should fail at the review step, surfaced in-band.
+		assertInBandToolError(t, result, err, "review failed")
 	})
 }
 
@@ -386,10 +394,8 @@ func TestHandleReviewOnlyWithRealRepo(t *testing.T) {
 
 		// This will likely fail at the Gemini review step due to invalid API key.
 		result, err := server.HandleReviewOnly(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		// Should fail at review step.
-		assert.Contains(t, err.Error(), "review failed")
+		// Should fail at the review step, surfaced in-band.
+		assertInBandToolError(t, result, err, "review failed")
 	})
 }
 
@@ -469,9 +475,7 @@ func TestHandleReviewOnlyArgumentValidation(t *testing.T) {
 		}
 
 		result, err := server.HandleReviewOnly(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid git repository")
+		assertInBandToolError(t, result, err, "invalid git repository")
 	})
 }
 
@@ -552,23 +556,16 @@ func TestHandleReviewAndCommitWithSecrets(t *testing.T) {
 			},
 		}
 
-		// Or fail at review step (due to invalid API key).
+		// The security scan runs before the review, so the secret is caught and
+		// reported as an in-band non-approval before any Gemini call.
 		result, err := server.HandleReviewAndCommit(ctx, request)
-
-		if err != nil {
-			// If error, check it's a review failure (expected due to invalid API key).
-			assert.Contains(t, err.Error(), "review failed")
-		} else {
-			// If no error, should be a security failure.
-			assert.NotNil(t, result)
-			if result.IsError {
-				if len(result.Content) > 0 {
-					if textContent, ok := result.Content[0].(mcp.TextContent); ok {
-						assert.Contains(t, textContent.Text, "Security scan failed")
-					}
-				}
-			}
-		}
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.False(t, result.IsError)
+		require.Len(t, result.Content, 1)
+		textContent, ok := result.Content[0].(mcp.TextContent)
+		require.True(t, ok)
+		assert.Contains(t, textContent.Text, "Security scan detected secrets")
 	})
 }
 
@@ -604,23 +601,16 @@ func TestHandleReviewOnlyWithSecrets(t *testing.T) {
 			},
 		}
 
-		// Or fail at review step (due to invalid API key).
+		// The security scan runs before the review, so the secret is caught and
+		// reported as an in-band non-approval before any Gemini call.
 		result, err := server.HandleReviewOnly(ctx, request)
-
-		if err != nil {
-			// If error, check it's a review failure (expected due to invalid API key).
-			assert.Contains(t, err.Error(), "review failed")
-		} else {
-			// If no error, should be a security failure.
-			assert.NotNil(t, result)
-			if result.IsError {
-				if len(result.Content) > 0 {
-					if textContent, ok := result.Content[0].(mcp.TextContent); ok {
-						assert.Contains(t, textContent.Text, "Security scan failed")
-					}
-				}
-			}
-		}
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.False(t, result.IsError)
+		require.Len(t, result.Content, 1)
+		textContent, ok := result.Content[0].(mcp.TextContent)
+		require.True(t, ok)
+		assert.Contains(t, textContent.Text, "Security scan detected secrets")
 	})
 }
 
@@ -649,9 +639,7 @@ func TestHandleReviewAndCommitWithDiffError(t *testing.T) {
 		}
 
 		result, err := server.HandleReviewAndCommit(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid git repository")
+		assertInBandToolError(t, result, err, "invalid git repository")
 	})
 }
 
@@ -679,9 +667,7 @@ func TestHandleReviewOnlyWithDiffError(t *testing.T) {
 		}
 
 		result, err := server.HandleReviewOnly(ctx, request)
-		require.Error(t, err)
-		assert.Nil(t, result)
-		assert.Contains(t, err.Error(), "invalid git repository")
+		assertInBandToolError(t, result, err, "invalid git repository")
 	})
 }
 
@@ -979,10 +965,12 @@ func TestPrepareReview_SecurityFindings(t *testing.T) {
 	result, err := s.HandleReviewOnly(t.Context(), request)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.True(t, result.IsError)
+	// Detected secrets are a non-approval, not a tool error.
+	assert.False(t, result.IsError)
 	textContent, ok := result.Content[0].(mcp.TextContent)
 	require.True(t, ok)
-	assert.Contains(t, textContent.Text, "Security scan failed")
+	assert.Contains(t, textContent.Text, "NOT APPROVED")
+	assert.Contains(t, textContent.Text, "Security scan detected secrets")
 }
 
 func TestPrepareReview_SplitsDeletionsFromChangedFiles(t *testing.T) {
