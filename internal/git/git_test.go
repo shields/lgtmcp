@@ -784,58 +784,6 @@ func TestGetDiff(t *testing.T) { //nolint:maintidx // many subtests in one test 
 	})
 }
 
-func TestStageAll(t *testing.T) {
-	t.Parallel()
-	t.Run("stage all changes", func(t *testing.T) {
-		t.Parallel()
-		tmpDir := testutil.CreateTempGitRepo(t)
-
-		testutil.CreateFile(t, tmpDir, "file1.txt", "content1")
-		testutil.CreateFile(t, tmpDir, "file2.txt", "content2")
-
-		g, err := New(tmpDir, nil)
-		require.NoError(t, err)
-
-		err = g.StageAll(t.Context())
-		require.NoError(t, err)
-
-		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
-		assert.Contains(t, status, "A  file1.txt")
-		assert.Contains(t, status, "A  file2.txt")
-	})
-
-	t.Run("no changes to stage", func(t *testing.T) {
-		t.Parallel()
-		tmpDir := testutil.CreateTempGitRepo(t)
-
-		g, err := New(tmpDir, nil)
-		require.NoError(t, err)
-
-		err = g.StageAll(t.Context())
-		require.NoError(t, err)
-	})
-
-	t.Run("stage deleted file", func(t *testing.T) {
-		t.Parallel()
-		tmpDir := testutil.CreateTempGitRepo(t)
-
-		testutil.CreateFile(t, tmpDir, "to-delete.txt", "will be deleted")
-		testutil.RunGitCmd(t, tmpDir, "add", "to-delete.txt")
-		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "add file")
-
-		require.NoError(t, os.Remove(filepath.Join(tmpDir, "to-delete.txt")))
-
-		g, err := New(tmpDir, nil)
-		require.NoError(t, err)
-
-		err = g.StageAll(t.Context())
-		require.NoError(t, err)
-
-		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
-		assert.Contains(t, status, "D  to-delete.txt")
-	})
-}
-
 func TestStageFiles(t *testing.T) {
 	t.Parallel()
 
@@ -1232,16 +1180,6 @@ func TestGetFileContent(t *testing.T) {
 	})
 }
 
-func TestGetRepoPath(t *testing.T) {
-	t.Parallel()
-	tmpDir := testutil.CreateTempGitRepo(t)
-
-	g, err := New(tmpDir, nil)
-	require.NoError(t, err)
-
-	assert.Equal(t, tmpDir, g.GetRepoPath())
-}
-
 func TestCheckGitRepo(t *testing.T) {
 	t.Parallel()
 	t.Run("valid git repo", func(t *testing.T) {
@@ -1303,20 +1241,6 @@ func TestRunGitCommand(t *testing.T) {
 		_, err = g.runGitCommand(t.Context(), "invalid-command")
 		require.ErrorIs(t, err, ErrCommandFailed)
 	})
-}
-
-func TestStageAll_Error(t *testing.T) {
-	t.Parallel()
-	tmpDir := testutil.CreateTempGitRepo(t)
-	g, err := New(tmpDir, nil)
-	require.NoError(t, err)
-
-	// Remove .git to make git commands fail.
-	require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, ".git")))
-
-	err = g.StageAll(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to stage all changes")
 }
 
 func TestStageFiles_Error(t *testing.T) {

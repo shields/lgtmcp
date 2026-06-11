@@ -561,7 +561,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses custom model from config", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		cfg.Gemini.Model = "gemini-1.5-pro"
+		cfg.Gemini.Model = "gemini-2.5-flash"
 
 		reviewer, err := New(cfg, testutil.NewTestLogger())
 		require.NoError(t, err)
@@ -1357,6 +1357,36 @@ func TestRetryableOperation(t *testing.T) {
 		assert.Equal(t, expectedErr, err)
 		assert.Equal(t, 1, callCount) // Should not retry.
 	})
+
+	t.Run("caps oversized API retry delay at MaxBackoff", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := &config.RetryConfig{
+			MaxRetries:        1,
+			InitialBackoff:    "10ms",
+			MaxBackoff:        "50ms",
+			BackoffMultiplier: 2.0,
+		}
+
+		reviewer := &Reviewer{retryConfig: cfg, logger: testutil.NewTestLogger()}
+		callCount := 0
+
+		start := time.Now()
+		err := reviewer.retryableOperation(t.Context(), func() error {
+			callCount++
+
+			// A hostile/buggy retryDelay an hour out must be clamped to
+			// MaxBackoff (50ms), not slept on verbatim.
+			return errors.New("Error 429: rate limited retryDelay:3600s") //nolint:err113 // test case
+		}, "test_operation")
+
+		elapsed := time.Since(start)
+		require.Error(t, err)
+		assert.Equal(t, 2, callCount) // Initial + 1 retry.
+		// Capped at 50ms; a generous ceiling well below the uncapped 3600s
+		// keeps the assertion meaningful without being CI-flaky.
+		assert.Less(t, elapsed, 10*time.Second)
+	})
 }
 
 func TestTokenUsage(t *testing.T) {
@@ -1493,11 +1523,11 @@ func TestTokenUsage(t *testing.T) {
 				expectedCost:     0.032,
 			},
 			{
-				name:             "flash model pricing",
-				modelName:        "gemini-1.5-flash",
-				promptTokens:     1_000_000, // 1M input = $0.075
-				candidatesTokens: 1_000_000, // 1M output = $0.30
-				expectedCost:     0.375,
+				name:             "flash-lite model pricing",
+				modelName:        "gemini-2.5-flash-lite",
+				promptTokens:     1_000_000, // 1M input = $0.10
+				candidatesTokens: 1_000_000, // 1M output = $0.40
+				expectedCost:     0.50,
 			},
 			{
 				name:             "gemini-2.5-flash pricing",

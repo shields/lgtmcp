@@ -49,6 +49,27 @@ func TestManager_LoadPrompt(t *testing.T) {
 		assert.Contains(t, prompt, "get_file_content")
 	})
 
+	t.Run("default prompts omit the embedded license header", func(t *testing.T) {
+		t.Parallel()
+		m := New("", "")
+
+		review, err := m.LoadPrompt(ReviewPrompt)
+		require.NoError(t, err)
+		ctx, err := m.LoadPrompt(ContextGatheringPrompt)
+		require.NoError(t, err)
+
+		for _, prompt := range []string{review, ctx} {
+			assert.NotContains(t, prompt, "Licensed under the Apache License")
+			assert.NotContains(t, prompt, "Copyright")
+			assert.False(t, strings.HasPrefix(prompt, "<!--"),
+				"prompt should not start with the license comment")
+		}
+		// Content after the stripped header survives intact.
+		assert.Contains(t, review, "strict code reviewer")
+		assert.True(t, strings.HasPrefix(review, "# Code Review Prompt"),
+			"review prompt should begin at its first heading")
+	})
+
 	t.Run("load custom review prompt from file", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
@@ -235,36 +256,6 @@ func TestManager_BuildContextGatheringPromptWithInstructions(t *testing.T) {
 		prompt, err := m.BuildContextGatheringPrompt(diff, changedFiles, nil, "")
 		require.NoError(t, err)
 		assert.NotContains(t, prompt, "Agent Instructions")
-	})
-}
-
-func TestPromptData(t *testing.T) {
-	t.Parallel()
-
-	t.Run("ReviewPromptData fields", func(t *testing.T) {
-		t.Parallel()
-		data := ReviewPromptData{
-			AnalysisSection:     "analysis",
-			InstructionsSection: "agents",
-			FilesList:           "files",
-			Diff:                "diff",
-		}
-		assert.Equal(t, "analysis", data.AnalysisSection)
-		assert.Equal(t, "agents", data.InstructionsSection)
-		assert.Equal(t, "files", data.FilesList)
-		assert.Equal(t, "diff", data.Diff)
-	})
-
-	t.Run("ContextGatheringPromptData fields", func(t *testing.T) {
-		t.Parallel()
-		data := ContextGatheringPromptData{
-			InstructionsSection: "agents",
-			FilesList:           "files",
-			Diff:                "diff",
-		}
-		assert.Equal(t, "agents", data.InstructionsSection)
-		assert.Equal(t, "files", data.FilesList)
-		assert.Equal(t, "diff", data.Diff)
 	})
 }
 

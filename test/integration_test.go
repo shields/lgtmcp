@@ -84,7 +84,8 @@ func main() {
 		assert.Equal(t, modifiedContent, content)
 
 		// Test staging and committing via the diff-derived file list, the
-		// path production uses (HandleReviewAndCommit never calls StageAll).
+		// path production uses (HandleReviewAndCommit stages only the scanned
+		// files, never the whole working tree).
 		err = gitClient.StageFiles(ctx, security.ExtractChangedFiles(diff))
 		require.NoError(t, err)
 
@@ -103,10 +104,6 @@ func main() {
 
 		gitClient, err := git.New(tmpDir, nil)
 		require.NoError(t, err)
-
-		// Test repository path.
-		repoPath := gitClient.GetRepoPath()
-		assert.Equal(t, tmpDir, repoPath)
 
 		// Test multiple file changes.
 		file1 := filepath.Join(tmpDir, "file1.txt")
@@ -275,24 +272,6 @@ func TestMCPServerIntegration(t *testing.T) {
 		assert.NotNil(t, server)
 		// Server should be properly initialized with all components.
 	})
-
-	t.Run("handle tools with real repository", func(t *testing.T) {
-		t.Parallel()
-		tmpDir := testutil.CreateTempGitRepo(t)
-
-		// Create a test file with changes.
-		testFile := filepath.Join(tmpDir, "main.go")
-		require.NoError(t, os.WriteFile(testFile, []byte(`package main
-
-import "fmt"
-
-func main() {
-	fmt.Println("Hello, World!")
-}`), 0o600))
-
-		// (Actual MCP protocol testing would require more complex setup).
-		assert.NotNil(t, server)
-	})
 }
 
 // TestEndToEndWorkflow tests a complete workflow.
@@ -354,8 +333,8 @@ func main() {
 		assert.Empty(t, findings) // Should be no secrets.
 
 		// 6. Stage exactly the diff-derived file list, mirroring
-		// HandleReviewAndCommit's staging step (which deliberately avoids
-		// StageAll so files created after the security scan are excluded).
+		// HandleReviewAndCommit's staging step (which deliberately stages only
+		// the scanned files so files created after the security scan are excluded).
 		cf := security.ExtractChangedFilesDetailed(diff)
 		assert.Equal(t, []string{"main.go"}, cf.All)
 		err = gitClient.StageFiles(ctx, cf.All)

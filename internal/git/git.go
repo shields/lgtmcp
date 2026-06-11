@@ -319,16 +319,6 @@ func gitFileMode(mode os.FileMode) string {
 	}
 }
 
-// StageAll stages all changes in the repository.
-func (g *Git) StageAll(ctx context.Context) error {
-	_, err := g.runGitCommand(ctx, "add", "-A")
-	if err != nil {
-		return fmt.Errorf("failed to stage all changes: %w", err)
-	}
-
-	return nil
-}
-
 // StageFiles stages only the specified files (additions, modifications, and
 // deletions). Limiting staging to a known list avoids picking up files that
 // appeared in the working directory after the security scan but before commit.
@@ -409,11 +399,6 @@ func (g *Git) GetFileContent(_ context.Context, relativePath string) (string, er
 	content, _, err := g.readRepoFile(relativePath)
 
 	return content, err
-}
-
-// GetRepoPath returns the absolute path to the repository.
-func (g *Git) GetRepoPath() string {
-	return g.repoPath
 }
 
 // repoPathFor joins a repo-relative path onto the repository root and verifies

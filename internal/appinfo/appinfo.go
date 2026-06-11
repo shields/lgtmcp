@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"runtime"
 	"runtime/debug"
-	"strings"
 )
 
 var (
@@ -60,40 +59,4 @@ func String() string {
 
 	return fmt.Sprintf("lgtmcp version %s (%s, %s/%s)",
 		Version, commit, runtime.GOOS, runtime.GOARCH)
-}
-
-// DetailedString returns a detailed version string including build info.
-func DetailedString() string {
-	var b strings.Builder
-	_, _ = fmt.Fprintf(&b, "lgtmcp version %s\n", Version)
-	_, _ = fmt.Fprintf(&b, "  Go:       %s\n", runtime.Version())
-	_, _ = fmt.Fprintf(&b, "  OS/Arch:  %s/%s\n", runtime.GOOS, runtime.GOARCH)
-
-	// Add module and VCS information if available
-	if buildInfo, ok := readBuildInfoFn(); ok {
-		if buildInfo.Main.Version != "" && buildInfo.Main.Version != "(devel)" {
-			_, _ = fmt.Fprintf(&b, "  Module:   %s\n", buildInfo.Main.Version)
-		}
-
-		for _, setting := range buildInfo.Settings {
-			switch setting.Key {
-			case "vcs.revision":
-				if setting.Value != "" {
-					_, _ = fmt.Fprintf(&b, "  Commit:   %s\n", setting.Value)
-				}
-			case "vcs.time":
-				if setting.Value != "" {
-					_, _ = fmt.Fprintf(&b, "  VCS Time: %s\n", setting.Value)
-				}
-			case "vcs.modified":
-				if setting.Value == "true" {
-					_, _ = b.WriteString("  Modified: true\n")
-				}
-			default:
-				// Ignore other build settings
-			}
-		}
-	}
-
-	return b.String()
 }

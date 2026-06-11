@@ -91,9 +91,13 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 		return "", fmt.Errorf("%w: %s", ErrUnknownPromptType, promptType)
 	}
 
-	// If no custom path specified, use the default.
+	// If no custom path specified, use the default. The embedded defaults
+	// carry an Apache license header as a leading HTML comment for source-file
+	// compliance; strip it here so the boilerplate never reaches the model and
+	// wastes context tokens. Custom prompt files are returned verbatim — a
+	// leading comment there may be intentional.
 	if path == "" {
-		return defaultPrompt, nil
+		return stripLeadingComment(defaultPrompt), nil
 	}
 
 	// Reject traversal and absolute paths outside the lgtmcp config directory
@@ -214,6 +218,25 @@ func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles, deleted
 	}
 
 	return buf.String(), nil
+}
+
+// stripLeadingComment removes a single leading HTML comment block (e.g. the
+// embedded prompt's Apache license header) plus the blank lines that follow
+// it, so the boilerplate does not consume model context. Only a comment at the
+// very start (after optional leading whitespace) is removed; comments elsewhere
+// and an unterminated comment leave the template untouched.
+func stripLeadingComment(s string) string {
+	trimmed := strings.TrimLeft(s, " \t\r\n")
+	if !strings.HasPrefix(trimmed, "<!--") {
+		return s
+	}
+
+	_, after, found := strings.Cut(trimmed, "-->")
+	if !found {
+		return s
+	}
+
+	return strings.TrimLeft(after, " \t\r\n")
 }
 
 // splitFiles partitions changedFiles into the paths that still exist (i.e.,

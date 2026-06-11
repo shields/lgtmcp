@@ -187,13 +187,10 @@ type modelPricing struct {
 // Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
 var pricingByModel = map[string]modelPricing{
 	"gemini-3.1-pro-preview": {InputPrice: 2.00, OutputPrice: 12.00},
-	"gemini-3-pro-preview":   {InputPrice: 2.00, OutputPrice: 12.00},
 	"gemini-2.5-pro":         {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-flash":       {InputPrice: 0.30, OutputPrice: 2.50},
 	"gemini-2.5-flash-lite":  {InputPrice: 0.10, OutputPrice: 0.40},
-	"gemini-1.5-pro":         {InputPrice: 1.25, OutputPrice: 5.00},
-	"gemini-1.5-flash":       {InputPrice: 0.075, OutputPrice: 0.30},
 }
 
 // tokenUsage tracks cumulative token counts across API calls.
@@ -437,6 +434,17 @@ func extractRetryDelay(err error) time.Duration {
 	return 0
 }
 
+// maxBackoffDuration returns the configured maximum backoff, falling back to
+// 60s when unset or unparseable.
+func maxBackoffDuration(retryConfig *config.RetryConfig) time.Duration {
+	maxBackoff, err := time.ParseDuration(retryConfig.MaxBackoff)
+	if err != nil || maxBackoff == 0 {
+		return 60 * time.Second
+	}
+
+	return maxBackoff
+}
+
 // calculateBackoff calculates the exponential backoff with jitter.
 func calculateBackoff(attempt int, retryConfig *config.RetryConfig) time.Duration {
 	// Parse initial and max backoff.
@@ -445,10 +453,7 @@ func calculateBackoff(attempt int, retryConfig *config.RetryConfig) time.Duratio
 		initialBackoff = time.Second
 	}
 
-	maxBackoff, err := time.ParseDuration(retryConfig.MaxBackoff)
-	if err != nil || maxBackoff == 0 {
-		maxBackoff = 60 * time.Second
-	}
+	maxBackoff := maxBackoffDuration(retryConfig)
 
 	// Calculate exponential backoff.
 	backoff := float64(initialBackoff) * math.Pow(retryConfig.BackoffMultiplier, float64(attempt))
@@ -514,9 +519,11 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 		// Calculate backoff duration.
 		var backoff time.Duration
 
-		// First, check if the API provided a retry delay.
+		// First, check if the API provided a retry delay. Cap it at MaxBackoff
+		// so a hostile or buggy server cannot pin us in a multi-minute (or
+		// multi-hour) sleep with an oversized retryDelay.
 		if apiDelay := extractRetryDelay(err); apiDelay > 0 {
-			backoff = apiDelay
+			backoff = min(apiDelay, maxBackoffDuration(r.retryConfig))
 			r.logger.Debug("Using API-provided retry delay",
 				"operation", operationName,
 				"attempt", attempt+1,

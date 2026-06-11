@@ -76,6 +76,15 @@ pre-commit:
     test:
       run: make test
 
-skip_output:
-  - meta
-  - summary
+# `output` is the allowlist of sections lefthook prints; it replaces the
+# deprecated `skip_output` denylist (dropped in lefthook v2). Listing
+# everything except `meta` (the version banner) and `summary`/`empty_summary`
+# (the timing block) reproduces the old `skip_output: [meta, summary]` while
+# still showing per-step success/failure and execution output.
+output:
+  - success
+  - failure
+  - execution
+  - execution_out
+  - execution_info
+  - skips

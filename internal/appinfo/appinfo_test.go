@@ -71,60 +71,6 @@ func TestString(t *testing.T) { //nolint:paralleltest // Modifies global Version
 	}
 }
 
-func TestDetailedString(t *testing.T) { //nolint:paralleltest // Modifies global Version variable
-	// Save original version
-	originalVersion := appinfo.Version
-	t.Cleanup(func() {
-		appinfo.Version = originalVersion
-	})
-
-	tests := []struct {
-		name             string
-		version          string
-		expectedContains []string
-	}{
-		{
-			name:    "default dev version",
-			version: "dev",
-			expectedContains: []string{
-				"lgtmcp version dev",
-				"Go:",
-				"OS/Arch:",
-				runtime.Version(),
-				runtime.GOOS + "/" + runtime.GOARCH,
-			},
-		},
-		{
-			name:    "custom version",
-			version: "2.0.0-beta",
-			expectedContains: []string{
-				"lgtmcp version 2.0.0-beta",
-				"Go:",
-				"OS/Arch:",
-			},
-		},
-	}
-
-	for _, tt := range tests { //nolint:paralleltest // Cannot parallelize due to global state
-		t.Run(tt.name, func(t *testing.T) {
-			appinfo.Version = tt.version
-			result := appinfo.DetailedString()
-
-			for _, expected := range tt.expectedContains {
-				if !strings.Contains(result, expected) {
-					t.Errorf("DetailedString() = %q, want it to contain %q", result, expected)
-				}
-			}
-
-			// Should be multi-line
-			lines := strings.Split(result, "\n")
-			if len(lines) < 3 {
-				t.Errorf("DetailedString() should return multiple lines, got %d lines", len(lines))
-			}
-		})
-	}
-}
-
 func TestVersionVariable(t *testing.T) { //nolint:paralleltest // Reads global Version variable
 	// Default should be "dev"
 	if appinfo.Version != "dev" {
