@@ -312,11 +312,18 @@ func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 
+	// Temperature is a pointer so an explicit 0 is honored; fall back to the
+	// default only when it is genuinely unset (e.g. a hand-built config).
+	temperature := float32(0.2)
+	if cfg.Gemini.Temperature != nil {
+		temperature = *cfg.Gemini.Temperature
+	}
+
 	return &Reviewer{
 		client:        &RealGeminiClient{client: client},
 		modelName:     cfg.Gemini.Model,
 		fallbackModel: cfg.Gemini.FallbackModel,
-		temperature:   cfg.Gemini.Temperature,
+		temperature:   temperature,
 		retryConfig:   cfg.Gemini.Retry,
 		promptManager: prompts.New(
 			cfg.Prompts.ReviewPromptPath,
@@ -476,7 +483,12 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 	operation func() error,
 	operationName string,
 ) error {
-	if r.retryConfig == nil || r.retryConfig.MaxRetries <= 0 {
+	maxRetries := 0
+	if r.retryConfig != nil && r.retryConfig.MaxRetries != nil {
+		maxRetries = *r.retryConfig.MaxRetries
+	}
+
+	if r.retryConfig == nil || maxRetries <= 0 {
 		// No retry configured, just run the operation once.
 		err := operation()
 		if err != nil && isQuotaExhaustedError(err) {
@@ -486,7 +498,7 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 	}
 
 	var lastErr error
-	for attempt := 0; attempt <= r.retryConfig.MaxRetries; attempt++ {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		// Check context cancellation.
 		select {
 		case <-ctx.Done():
@@ -512,7 +524,7 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 		}
 
 		// Don't retry if we've exhausted attempts.
-		if attempt >= r.retryConfig.MaxRetries {
+		if attempt >= maxRetries {
 			break
 		}
 
@@ -551,10 +563,10 @@ func (r *Reviewer) retryableOperation( //nolint:funcorder // Helper method used 
 		r.logger.Info("Retrying operation after rate limit",
 			"operation", operationName,
 			"attempt", attempt+2,
-			"max_attempts", r.retryConfig.MaxRetries+1)
+			"max_attempts", maxRetries+1)
 	}
 
-	return fmt.Errorf("operation %s failed after %d attempts: %w", operationName, r.retryConfig.MaxRetries+1, lastErr)
+	return fmt.Errorf("operation %s failed after %d attempts: %w", operationName, maxRetries+1, lastErr)
 }
 
 // ReviewDiff performs a code review on the provided diff.

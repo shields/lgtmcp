@@ -105,7 +105,11 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 	// review prompt.
 	configDir := m.configDir
 	if configDir == "" {
-		configDir = config.Dir()
+		dir, err := config.Dir()
+		if err != nil {
+			return "", fmt.Errorf("cannot determine config directory: %w", err)
+		}
+		configDir = dir
 	}
 	safePath, err := config.ValidatePathIn(path, configDir)
 	if err != nil {

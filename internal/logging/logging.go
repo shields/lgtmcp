@@ -38,6 +38,20 @@ var ErrStdoutNotAllowed = errors.New(
 	`logging output "stdout" would corrupt the MCP stdio transport; use "stderr" or "directory"`,
 )
 
+// ErrUnknownOutput is returned when the configured logging output is not one of
+// the recognized values. A typo'd output is a configuration error and fails
+// fast at startup rather than silently falling back to directory logging.
+var ErrUnknownOutput = errors.New(
+	`unknown logging output; valid values are "none", "stderr", "directory", "mcp"`,
+)
+
+// ErrUnknownLevel is returned when the configured logging level is not one of
+// the recognized values. A typo'd level is a configuration error and fails
+// fast at startup rather than silently logging at info.
+var ErrUnknownLevel = errors.New(
+	`unknown logging level; valid values are "debug", "info", "warn", "error"`,
+)
+
 // Config represents logging configuration.
 type Config struct {
 	// Level is the minimum log level (debug, info, warn, error).
@@ -80,9 +94,15 @@ type Logger interface {
 	Close() error
 }
 
-// New creates a new logger based on configuration.
-// If Output is empty or unrecognized, it defaults to directory logging.
+// New creates a new logger based on configuration. An empty Output defaults to
+// directory logging and an empty Level defaults to info; any other unrecognized
+// Output or Level is a configuration error and returns [ErrUnknownOutput] /
+// [ErrUnknownLevel] rather than silently falling back.
 func New(config Config) (Logger, error) {
+	if err := validateLevel(config.Level); err != nil {
+		return nil, err
+	}
+
 	switch config.Output {
 	case "none":
 		return &nopLogger{}, nil
@@ -92,9 +112,21 @@ func New(config Config) (Logger, error) {
 		return newStdLogger(os.Stderr, config.Level), nil
 	case "mcp":
 		return newMCPLogger(config)
-	default:
-		// Default to directory logging for empty, "directory", or unrecognized output types.
+	case "", "directory":
 		return newDirectoryLogger(config)
+	default:
+		return nil, fmt.Errorf("%w: %q", ErrUnknownOutput, config.Output)
+	}
+}
+
+// validateLevel reports whether level is a recognized slog level name. An empty
+// level is accepted and resolves to info (see [parseLevel]).
+func validateLevel(level string) error {
+	switch level {
+	case "", "debug", "info", "warn", "error":
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrUnknownLevel, level)
 	}
 }
 
@@ -147,7 +179,11 @@ func newDirectoryLogger(config Config) (Logger, error) {
 		// arbitrary filesystem locations.
 		base := config.ConfigDir
 		if base == "" {
-			base = cfgpkg.Dir()
+			dir, err := cfgpkg.Dir()
+			if err != nil {
+				return nil, fmt.Errorf("cannot determine log directory base: %w", err)
+			}
+			base = dir
 		}
 		safeDir, err := cfgpkg.ValidatePathIn(logDir, base)
 		if err != nil {

@@ -28,6 +28,16 @@ import (
 	cfgpkg "msrl.dev/lgtmcp/internal/config"
 )
 
+func TestNew_UnknownConfigReturnsTypedErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{Output: "syslog", Level: "info"})
+	require.ErrorIs(t, err, ErrUnknownOutput)
+
+	_, err = New(Config{Output: "stderr", Level: "verbose"})
+	require.ErrorIs(t, err, ErrUnknownLevel)
+}
+
 func TestNew(t *testing.T) {
 	t.Parallel()
 	dirA := t.TempDir()
@@ -83,12 +93,20 @@ func TestNew(t *testing.T) {
 			expectError: false, // Uses provided temp directory.
 		},
 		{
-			name: "invalid log level",
+			name: "invalid log level fails fast",
 			config: Config{
 				Output: "stderr",
 				Level:  "invalid",
 			},
-			expectError: false, // Falls back to info.
+			expectError: true, // Unknown level is a config error, not a silent default.
+		},
+		{
+			name: "unknown output fails fast",
+			config: Config{
+				Output: "syslog",
+				Level:  "info",
+			},
+			expectError: true, // Unknown output is a config error, not a silent fallback.
 		},
 		{
 			name: "mcp logging",

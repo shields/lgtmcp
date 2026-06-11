@@ -305,12 +305,15 @@ gemini:
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.Equal(t, 3, cfg.Gemini.Retry.MaxRetries)
+	require.NotNil(t, cfg.Gemini.Retry.MaxRetries)
+	assert.Equal(t, 3, *cfg.Gemini.Retry.MaxRetries)
 	assert.Equal(t, "1s", cfg.Gemini.Retry.InitialBackoff)
 	assert.Equal(t, "60s", cfg.Gemini.Retry.MaxBackoff)
 	assert.InDelta(t, 1.4, cfg.Gemini.Retry.BackoffMultiplier, 0.01)
 }
 
+// TestLoad_TemperatureZero verifies an explicit temperature of 0 is honored
+// (fully deterministic output) rather than silently bumped to the 0.2 default.
 func TestLoad_TemperatureZero(t *testing.T) {
 	tmpDir := t.TempDir()
 	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
@@ -328,7 +331,53 @@ gemini:
 
 	cfg, err := Load()
 	require.NoError(t, err)
-	assert.InDelta(t, 0.2, cfg.Gemini.Temperature, 0.01)
+	require.NotNil(t, cfg.Gemini.Temperature)
+	assert.InDelta(t, 0.0, *cfg.Gemini.Temperature, 0.0001)
+}
+
+// TestLoad_TemperatureUnset verifies that omitting temperature falls back to
+// the 0.2 default.
+func TestLoad_TemperatureUnset(t *testing.T) {
+	tmpDir := t.TempDir()
+	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+	require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
+
+	configContent := `
+google:
+  api_key: "test-api-key"
+`
+	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"), []byte(configContent), 0o600))
+
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Gemini.Temperature)
+	assert.InDelta(t, 0.2, *cfg.Gemini.Temperature, 0.01)
+}
+
+// TestLoad_MaxRetriesZero verifies an explicit max_retries of 0 is honored
+// (retries disabled) rather than silently bumped to the default of 5.
+func TestLoad_MaxRetriesZero(t *testing.T) {
+	tmpDir := t.TempDir()
+	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
+	require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
+
+	configContent := `
+google:
+  api_key: "test-api-key"
+gemini:
+  retry:
+    max_retries: 0
+`
+	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"), []byte(configContent), 0o600))
+
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Gemini.Retry.MaxRetries)
+	assert.Equal(t, 0, *cfg.Gemini.Retry.MaxRetries)
 }
 
 func TestNewTestConfig(t *testing.T) {
@@ -336,23 +385,27 @@ func TestNewTestConfig(t *testing.T) {
 	cfg := NewTestConfig()
 	assert.Equal(t, "test-api-key", cfg.Google.APIKey)
 	assert.Equal(t, "gemini-3.1-pro-preview", cfg.Gemini.Model)
-	assert.InDelta(t, 0.2, cfg.Gemini.Temperature, 0.01)
+	require.NotNil(t, cfg.Gemini.Temperature)
+	assert.InDelta(t, 0.2, *cfg.Gemini.Temperature, 0.01)
 	assert.NotNil(t, cfg.Gemini.Retry)
-	assert.Equal(t, 5, cfg.Gemini.Retry.MaxRetries)
+	require.NotNil(t, cfg.Gemini.Retry.MaxRetries)
+	assert.Equal(t, 5, *cfg.Gemini.Retry.MaxRetries)
 	assert.Equal(t, "info", cfg.Logging.Level)
 }
 
 func TestGetConfigPath(t *testing.T) {
 	t.Run("uses XDG_CONFIG_HOME when set", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", "/custom/config")
-		path := GetConfigPath()
+		path, err := GetConfigPath()
+		require.NoError(t, err)
 		assert.Equal(t, "/custom/config/lgtmcp/config.yaml", path)
 	})
 
 	t.Run("falls back to ~/.config when XDG not set", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", "")
 
-		path := GetConfigPath()
+		path, err := GetConfigPath()
+		require.NoError(t, err)
 		homeDir, err := os.UserHomeDir()
 		require.NoError(t, err)
 		expected := filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml")
@@ -364,7 +417,8 @@ func TestGetConfigPath(t *testing.T) {
 		// ignored rather than resolved against the working directory.
 		t.Setenv("XDG_CONFIG_HOME", "relative/config")
 
-		path := GetConfigPath()
+		path, err := GetConfigPath()
+		require.NoError(t, err)
 		homeDir, err := os.UserHomeDir()
 		require.NoError(t, err)
 		expected := filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml")
@@ -375,8 +429,27 @@ func TestGetConfigPath(t *testing.T) {
 func TestDir(t *testing.T) {
 	t.Run("returns parent of config path", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME", "/custom/config")
-		assert.Equal(t, "/custom/config/lgtmcp", Dir())
+		dir, err := Dir()
+		require.NoError(t, err)
+		assert.Equal(t, "/custom/config/lgtmcp", dir)
 	})
+}
+
+// TestGetConfigPath_NoHome verifies that GetConfigPath fails fast rather than
+// silently resolving the config (and the path-validation base) against the
+// working directory when neither XDG_CONFIG_HOME nor a home directory is set.
+func TestGetConfigPath_NoHome(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("home-directory resolution differs on Windows")
+	}
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", "")
+
+	_, err := GetConfigPath()
+	require.Error(t, err)
+
+	_, err = Dir()
+	require.Error(t, err)
 }
 
 func TestValidatePathIn(t *testing.T) {

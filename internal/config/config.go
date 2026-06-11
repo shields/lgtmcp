@@ -99,9 +99,12 @@ type PromptsConfig struct {
 
 // RetryConfig represents retry configuration for API calls.
 type RetryConfig struct {
-	InitialBackoff    string  `json:"initial_backoff"`
-	MaxBackoff        string  `json:"max_backoff"`
-	MaxRetries        int     `json:"max_retries"`
+	InitialBackoff string `json:"initial_backoff"`
+	MaxBackoff     string `json:"max_backoff"`
+	// MaxRetries is the number of retries after the initial attempt. Use a
+	// pointer to distinguish unset (nil = default 5) from an explicit 0,
+	// which disables retries.
+	MaxRetries        *int    `json:"max_retries,omitempty"`
 	BackoffMultiplier float64 `json:"backoff_multiplier"`
 }
 
@@ -113,7 +116,10 @@ type GeminiConfig struct {
 	Retry         *RetryConfig `json:"retry,omitempty"`
 	Model         string       `json:"model"`
 	FallbackModel string       `json:"fallback_model,omitempty"`
-	Temperature   float32      `json:"temperature,omitempty"`
+	// Temperature is the sampling temperature. Use a pointer to distinguish
+	// unset (nil = default 0.2) from an explicit 0, which requests fully
+	// deterministic output.
+	Temperature *float32 `json:"temperature,omitempty"`
 }
 
 // Config represents the application configuration.
@@ -128,7 +134,10 @@ type Config struct {
 
 // Load loads the configuration from the YAML file.
 func Load() (*Config, error) {
-	configPath := GetConfigPath()
+	configPath, err := GetConfigPath()
+	if err != nil {
+		return nil, err
+	}
 
 	data, err := os.ReadFile(configPath) //nolint:gosec // Path comes from GetConfigPath which is safe
 	if err != nil {
@@ -157,8 +166,8 @@ func Load() (*Config, error) {
 	if cfg.Gemini.FallbackModel == "" {
 		cfg.Gemini.FallbackModel = "gemini-2.5-pro"
 	}
-	if cfg.Gemini.Temperature == 0 {
-		cfg.Gemini.Temperature = 0.2
+	if cfg.Gemini.Temperature == nil {
+		cfg.Gemini.Temperature = new(float32(0.2))
 	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
@@ -167,15 +176,16 @@ func Load() (*Config, error) {
 	// Set retry defaults if not specified.
 	if cfg.Gemini.Retry == nil {
 		cfg.Gemini.Retry = &RetryConfig{
-			MaxRetries:        5,
+			MaxRetries:        new(5),
 			InitialBackoff:    "1s",
 			MaxBackoff:        defaultMaxBackoff,
 			BackoffMultiplier: 1.4,
 		}
 	} else {
-		// Set individual retry defaults if not specified.
-		if cfg.Gemini.Retry.MaxRetries == 0 {
-			cfg.Gemini.Retry.MaxRetries = 5
+		// Set individual retry defaults if not specified. MaxRetries is a
+		// pointer so an explicit 0 (disable retries) is preserved.
+		if cfg.Gemini.Retry.MaxRetries == nil {
+			cfg.Gemini.Retry.MaxRetries = new(5)
 		}
 		if cfg.Gemini.Retry.InitialBackoff == "" {
 			cfg.Gemini.Retry.InitialBackoff = "1s"
@@ -224,38 +234,50 @@ func configPermissionWarning(path string) string {
 	)
 }
 
-// GetConfigPath returns the path to the configuration file.
-func GetConfigPath() string {
+// GetConfigPath returns the path to the configuration file. It fails rather
+// than guessing when the home directory cannot be determined: silently falling
+// back to a working-directory-relative "config.yaml" would also relocate the
+// [Dir] base used to validate config-supplied paths, weakening that boundary.
+func GetConfigPath() (string, error) {
 	// Check XDG_CONFIG_HOME first. The XDG Base Directory spec requires these
 	// variables to hold absolute paths and says relative values must be
 	// ignored (os.UserConfigDir errors on them); honoring one would resolve
 	// the config — and the [Dir] base used to validate config-supplied paths —
 	// against whatever the process working directory happens to be.
 	if xdgConfigHome := os.Getenv("XDG_CONFIG_HOME"); filepath.IsAbs(xdgConfigHome) {
-		return filepath.Join(xdgConfigHome, "lgtmcp", "config.yaml")
+		return filepath.Join(xdgConfigHome, "lgtmcp", "config.yaml"), nil
 	}
 
 	// Fall back to ~/.config.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		// If we can't get home dir, use current directory as last resort.
-		return "config.yaml"
+		return "", fmt.Errorf("cannot determine config path: %w", err)
 	}
 
-	return filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml")
+	return filepath.Join(homeDir, ".config", "lgtmcp", "config.yaml"), nil
 }
 
 // Dir returns the directory that holds the lgtmcp configuration file. It is
-// the parent directory of [GetConfigPath].
-func Dir() string {
-	return filepath.Dir(GetConfigPath())
+// the parent directory of [GetConfigPath] and propagates its error.
+func Dir() (string, error) {
+	path, err := GetConfigPath()
+	if err != nil {
+		return "", err
+	}
+
+	return filepath.Dir(path), nil
 }
 
 // ValidatePath validates a filesystem path supplied through the YAML
 // configuration file against the lgtmcp config directory ([Dir]). See
 // [ValidatePathIn] for the rules enforced.
 func ValidatePath(path string) (string, error) {
-	return ValidatePathIn(path, Dir())
+	dir, err := Dir()
+	if err != nil {
+		return "", err
+	}
+
+	return ValidatePathIn(path, dir)
 }
 
 // ValidatePathIn validates a filesystem path supplied through the YAML
@@ -302,9 +324,9 @@ func NewTestConfig() *Config {
 		},
 		Gemini: GeminiConfig{
 			Model:       "gemini-3.1-pro-preview",
-			Temperature: 0.2,
+			Temperature: new(float32(0.2)),
 			Retry: &RetryConfig{
-				MaxRetries:        5,
+				MaxRetries:        new(5),
 				InitialBackoff:    "1s",
 				MaxBackoff:        defaultMaxBackoff,
 				BackoffMultiplier: 1.4,

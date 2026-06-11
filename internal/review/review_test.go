@@ -1217,7 +1217,7 @@ func TestRetryableOperation(t *testing.T) {
 		t.Parallel()
 
 		cfg := &config.RetryConfig{
-			MaxRetries:        3,
+			MaxRetries:        new(3),
 			InitialBackoff:    "10ms",
 			MaxBackoff:        "100ms",
 			BackoffMultiplier: 2.0,
@@ -1240,7 +1240,7 @@ func TestRetryableOperation(t *testing.T) {
 		t.Parallel()
 
 		cfg := &config.RetryConfig{
-			MaxRetries:        3,
+			MaxRetries:        new(3),
 			InitialBackoff:    "10ms",
 			MaxBackoff:        "100ms",
 			BackoffMultiplier: 2.0,
@@ -1266,7 +1266,7 @@ func TestRetryableOperation(t *testing.T) {
 		t.Parallel()
 
 		cfg := &config.RetryConfig{
-			MaxRetries:        3,
+			MaxRetries:        new(3),
 			InitialBackoff:    "10ms",
 			MaxBackoff:        "100ms",
 			BackoffMultiplier: 2.0,
@@ -1290,7 +1290,7 @@ func TestRetryableOperation(t *testing.T) {
 		t.Parallel()
 
 		cfg := &config.RetryConfig{
-			MaxRetries:        2,
+			MaxRetries:        new(2),
 			InitialBackoff:    "10ms",
 			MaxBackoff:        "100ms",
 			BackoffMultiplier: 2.0,
@@ -1314,7 +1314,7 @@ func TestRetryableOperation(t *testing.T) {
 		t.Parallel()
 
 		cfg := &config.RetryConfig{
-			MaxRetries:        3,
+			MaxRetries:        new(3),
 			InitialBackoff:    "100ms",
 			MaxBackoff:        "1s",
 			BackoffMultiplier: 2.0,
@@ -1362,7 +1362,7 @@ func TestRetryableOperation(t *testing.T) {
 		t.Parallel()
 
 		cfg := &config.RetryConfig{
-			MaxRetries:        1,
+			MaxRetries:        new(1),
 			InitialBackoff:    "10ms",
 			MaxBackoff:        "50ms",
 			BackoffMultiplier: 2.0,
@@ -1715,7 +1715,7 @@ func TestRetryableOperationQuotaFailure(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.RetryConfig{
-		MaxRetries:        3,
+		MaxRetries:        new(3),
 		InitialBackoff:    "10ms",
 		MaxBackoff:        "100ms",
 		BackoffMultiplier: 2.0,
@@ -2214,7 +2214,7 @@ func TestRetryableOperation_ContextCancelled(t *testing.T) {
 	t.Parallel()
 	r := &Reviewer{
 		retryConfig: &config.RetryConfig{
-			MaxRetries:        3,
+			MaxRetries:        new(3),
 			InitialBackoff:    "100ms",
 			MaxBackoff:        "1s",
 			BackoffMultiplier: 1.5,
