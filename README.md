@@ -17,16 +17,18 @@ limitations under the License.
 # LGTMCP
 
 A Model Context Protocol (MCP) server that provides AI-powered code review using
-Google Gemini 3.1 Pro. LGTMCP reviews your code changes and either commits them
+Google Gemini 3.6 Flash. LGTMCP reviews your code changes and either commits them
 automatically (if approved) or provides detailed feedback for improvements.
 
 In my usage, the median review takes 1.9 minutes and costs $0.20, with an
-acceptance rate around 45%. You should decide whether that is slow and
-expensive or fast and cheap.
+acceptance rate around 45%. Those figures were measured with the previous
+default model, `gemini-3.1-pro-preview`; they have not been remeasured on
+Gemini 3.6 Flash, which is priced lower per token. You should decide whether
+that is slow and expensive or fast and cheap.
 
 ## Features
 
-- **AI Code Review**: Leverages Google Gemini 3.1 Pro for intelligent code analysis
+- **AI Code Review**: Leverages Google Gemini 3.6 Flash for intelligent code analysis
 - **Automatic Commit**: Commits changes when code passes review (optional)
 - **Security Scanning**: Built-in secret detection using Gitleaks
 - **Gitignore Protection**: Prevents access to gitignored files during review
@@ -85,14 +87,16 @@ export PATH="$HOME/bin:$PATH"
    google:
      api_key: "your-gemini-api-key-here"
    gemini:
-     model: "gemini-3.1-pro-preview"
-     fallback_model: "gemini-2.5-pro" # Default; set to "none" to disable
+     model: "gemini-3.6-flash"
+     # fallback_model: "gemini-2.5-pro" # Optional; disabled by default
    logging:
      level: "info"
    ```
 
-The `fallback_model` is used when we run into quota exhaustion on the primary
-model. While Gemini 3.1 Pro is in preview, it has very low daily rate limits.
+The optional `fallback_model` is used when we run into quota exhaustion on the
+primary model. It is disabled by default (`none`); Gemini 3.6 Flash is generally
+available with generous daily rate limits, so a fallback is rarely needed. Set
+`fallback_model` to a model name (e.g. `gemini-2.5-pro`) if you want a safety net.
 
 ### Claude Code configuration
 
@@ -146,7 +150,7 @@ review_and_commit("/path/to/repo", "Add new feature")
 
 1. **Security check**: Scans files for secrets using Gitleaks
 2. **Diff generation**: Creates diff of all staged and unstaged changes
-3. **AI review**: Sends diff to Gemini 3.1 Pro for analysis
+3. **AI review**: Sends diff to Gemini 3.6 Flash for analysis
    - Gemini can request file contents for context
    - Gitignored files are automatically blocked from access
 4. **Decision**:

@@ -37,14 +37,15 @@ google:
 # Model configuration
 gemini:
   # Model to use for code review
-  # Default: gemini-3.1-pro-preview
-  model: "gemini-3.1-pro-preview"
+  # Default: gemini-3.6-flash
+  model: "gemini-3.6-flash"
 
   # Fallback model to use when primary model quota is exhausted
   # Only triggered on QuotaFailure errors (daily limit exceeded),
   # not on rate limiting (which uses retry with backoff)
-  # Default: gemini-2.5-pro
-  # Set to "none" to disable fallback
+  # Default: none (disabled). gemini-3.6-flash is generally available with
+  # generous daily limits, so a fallback is rarely needed. Uncomment and set
+  # a model name (e.g. gemini-2.5-pro) to enable a safety net.
   # fallback_model: "gemini-2.5-pro"
 
   # Temperature for response generation (0.0-1.0)

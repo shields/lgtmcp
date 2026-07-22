@@ -147,8 +147,8 @@ google:
 		cfg, err := Load()
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
-		assert.Equal(t, "gemini-3.1-pro-preview", cfg.Gemini.Model) // Default.
-		assert.Equal(t, "info", cfg.Logging.Level)                  // Default.
+		assert.Equal(t, "gemini-3.6-flash", cfg.Gemini.Model) // Default.
+		assert.Equal(t, "info", cfg.Logging.Level)            // Default.
 	})
 
 	t.Run("api key is required", func(t *testing.T) {
@@ -384,7 +384,7 @@ func TestNewTestConfig(t *testing.T) {
 	t.Parallel()
 	cfg := NewTestConfig()
 	assert.Equal(t, "test-api-key", cfg.Google.APIKey)
-	assert.Equal(t, "gemini-3.1-pro-preview", cfg.Gemini.Model)
+	assert.Equal(t, "gemini-3.6-flash", cfg.Gemini.Model)
 	require.NotNil(t, cfg.Gemini.Temperature)
 	assert.InDelta(t, 0.2, *cfg.Gemini.Temperature, 0.01)
 	assert.NotNil(t, cfg.Gemini.Retry)

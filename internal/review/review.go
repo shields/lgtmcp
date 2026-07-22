@@ -166,7 +166,7 @@ type Reviewer struct {
 }
 
 const (
-	defaultModel      = "gemini-3.1-pro-preview"
+	defaultModel      = "gemini-3.6-flash"
 	errorKey          = "error"
 	errDeletedFileMsg = "file was deleted or renamed away in this change; the diff records the removal, " +
 		"and a renamed file's content lives at its new path"
@@ -186,6 +186,7 @@ type modelPricing struct {
 // pricingByModel maps model names to their pricing (≤200K context).
 // Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
 var pricingByModel = map[string]modelPricing{
+	"gemini-3.6-flash":       {InputPrice: 1.50, OutputPrice: 7.50},
 	"gemini-3.1-pro-preview": {InputPrice: 2.00, OutputPrice: 12.00},
 	"gemini-2.5-pro":         {InputPrice: 1.25, OutputPrice: 10.00},
 	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},
