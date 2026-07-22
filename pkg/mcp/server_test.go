@@ -16,6 +16,7 @@ package mcp
 
 import (
 	"context"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -711,7 +712,23 @@ func TestFormatReviewResponse(t *testing.T) {
 		response := formatReviewResponse(result, "")
 		assert.Contains(t, response, "Review Result: APPROVED (LGTM)")
 		assert.Contains(t, response, "---")
-		assert.Contains(t, response, "Duration: 12.3s")
+		assert.Contains(t, response, "Duration: 12.3 s")
+	})
+
+	t.Run("with model only", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "LGTM",
+			Model:    "gemini-3.6-flash",
+		}
+
+		response := formatReviewResponse(result, "")
+		assert.Contains(t, response, "---")
+		assert.Contains(t, response, "Model: gemini-3.6-flash")
+		// With no token usage the second footer line is dropped entirely.
+		assert.NotContains(t, response, "Tokens:")
+		assert.NotContains(t, response, "Cached:")
 	})
 
 	t.Run("with token usage", func(t *testing.T) {
@@ -727,7 +744,7 @@ func TestFormatReviewResponse(t *testing.T) {
 		}
 
 		response := formatReviewResponse(result, "")
-		assert.Contains(t, response, "Tokens: 12000 (in: 10000, out: 2000)")
+		assert.Contains(t, response, "Tokens: 12,000 (in: 10,000, out: 2,000)")
 	})
 
 	t.Run("with cost in dollars", func(t *testing.T) {
@@ -766,15 +783,18 @@ func TestFormatReviewResponse(t *testing.T) {
 				TotalTokens:      15000,
 			},
 			CostUSD: 0.05,
+			Model:   "gemini-3.6-flash",
 		}
 
 		response := formatReviewResponse(result, "")
 		assert.Contains(t, response, "Review Result: APPROVED (LGTM)")
-		assert.Contains(t, response, "---")
-		assert.Contains(t, response, "Duration: 15.0s")
-		assert.Contains(t, response, "Tokens: 15000 (in: 12000, out: 3000)")
-		assert.Contains(t, response, "Cost: $0.05")
-		assert.Contains(t, response, " | ")
+		// The footer is two lines: run summary, then token breakdown.
+		_, footer, ok := strings.Cut(response, "\n\n---\n")
+		require.True(t, ok, "response should carry a usage footer")
+		assert.Equal(t,
+			"Model: gemini-3.6-flash · Duration: 15.0 s · Cost: $0.05\n"+
+				"Tokens: 15,000 (in: 12,000, out: 3,000) · Cached: 0 (no hit)",
+			footer)
 	})
 
 	t.Run("with cache hit and savings", func(t *testing.T) {
@@ -793,7 +813,7 @@ func TestFormatReviewResponse(t *testing.T) {
 		}
 
 		response := formatReviewResponse(result, "")
-		assert.Contains(t, response, "Cached: 4700 (47% hit, saved $0.0332)")
+		assert.Contains(t, response, "Cached: 4,700 (47% hit, saved $0.0332)")
 	})
 
 	t.Run("with no cache hit", func(t *testing.T) {
@@ -831,6 +851,50 @@ func TestFormatReviewResponse(t *testing.T) {
 		footerIdx := strings.Index(response, "---")
 		assert.Greater(t, footerIdx, commitIdx, "Commit message should appear before the stats footer")
 	})
+
+	t.Run("with token usage only", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:     true,
+			Comments: "LGTM",
+			TokenUsage: &review.TokenUsage{
+				PromptTokens:     900,
+				CandidatesTokens: 100,
+				TotalTokens:      1000,
+			},
+		}
+
+		// With no model, duration, or cost the summary line is dropped and
+		// the token breakdown becomes the only footer line.
+		_, footer, ok := strings.Cut(formatReviewResponse(result, ""), "\n\n---\n")
+		require.True(t, ok, "response should carry a usage footer")
+		assert.Equal(t, "Tokens: 1,000 (in: 900, out: 100) · Cached: 0 (no hit)", footer)
+	})
+}
+
+func TestFormatCount(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		count int32
+		want  string
+	}{
+		{name: "zero", count: 0, want: "0"},
+		{name: "under a thousand", count: 999, want: "999"},
+		{name: "exactly a thousand", count: 1000, want: "1,000"},
+		{name: "five digits", count: 12345, want: "12,345"},
+		{name: "seven digits", count: 1234567, want: "1,234,567"},
+		{name: "max int32", count: math.MaxInt32, want: "2,147,483,647"},
+		{name: "negative", count: -12345, want: "-12,345"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.want, formatCount(tt.count))
+		})
+	}
 }
 
 func createTestServer(t *testing.T) (*Server, string) {

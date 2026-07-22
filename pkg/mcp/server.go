@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,6 +51,9 @@ const (
 	schemaType    = "type"
 	schemaString  = "string"
 	schemaDescKey = "description"
+
+	// footerSeparator joins the usage statistics within a footer line.
+	footerSeparator = " · "
 )
 
 // Server implements the MCP server for LGTMCP.
@@ -245,53 +249,94 @@ func formatReviewResponse(result *review.Result, commitHash string) string {
 	}
 
 	// Add usage statistics footer if available.
-	if result.TokenUsage != nil || result.DurationMS > 0 || result.CostUSD > 0 {
+	if footer := formatUsageFooter(result); footer != "" {
 		_, _ = sb.WriteString("\n\n---\n")
-
-		var parts []string
-
-		// Duration.
-		if result.DurationMS > 0 {
-			seconds := float64(result.DurationMS) / 1000.0
-			parts = append(parts, fmt.Sprintf("Duration: %.1fs", seconds))
-		}
-
-		// Token usage.
-		if result.TokenUsage != nil {
-			tokenPart := fmt.Sprintf("Tokens: %d (in: %d, out: %d)",
-				result.TokenUsage.TotalTokens,
-				result.TokenUsage.PromptTokens,
-				result.TokenUsage.CandidatesTokens)
-			parts = append(parts, tokenPart)
-
-			// Caching: always report whether it engaged, folding savings in.
-			if result.TokenUsage.CachedTokens > 0 && result.TokenUsage.PromptTokens > 0 {
-				hitPct := 100 * float64(result.TokenUsage.CachedTokens) / float64(result.TokenUsage.PromptTokens)
-				cachedPart := fmt.Sprintf("Cached: %d (%.0f%% hit", result.TokenUsage.CachedTokens, hitPct)
-				if result.CacheSavingsUSD > 0 {
-					cachedPart += fmt.Sprintf(", saved $%.4f", result.CacheSavingsUSD)
-				}
-				parts = append(parts, cachedPart+")")
-			} else {
-				parts = append(parts, "Cached: 0 (no hit)")
-			}
-		}
-
-		// Cost.
-		if result.CostUSD > 0 {
-			var costStr string
-			if result.CostUSD < 0.01 {
-				costStr = fmt.Sprintf("Cost: $%.4f", result.CostUSD)
-			} else {
-				costStr = fmt.Sprintf("Cost: $%.2f", result.CostUSD)
-			}
-			parts = append(parts, costStr)
-		}
-
-		_, _ = sb.WriteString(strings.Join(parts, " | "))
+		_, _ = sb.WriteString(footer)
 	}
 
 	return sb.String()
+}
+
+// formatUsageFooter renders the usage statistics as two lines: what the review
+// cost to run (model, wall time, dollars), then how it spent its tokens.
+// Returns "" when the result carries no statistics at all, so the caller can
+// omit the separator too. Either line is dropped if it would be empty.
+func formatUsageFooter(result *review.Result) string {
+	var summary []string
+
+	// Model that produced the verdict; after a quota fallback this is the
+	// model that answered, not necessarily the configured primary.
+	if result.Model != "" {
+		summary = append(summary, "Model: "+result.Model)
+	}
+
+	if result.DurationMS > 0 {
+		seconds := float64(result.DurationMS) / 1000.0
+		summary = append(summary, fmt.Sprintf("Duration: %.1f s", seconds))
+	}
+
+	if result.CostUSD > 0 {
+		if result.CostUSD < 0.01 {
+			summary = append(summary, fmt.Sprintf("Cost: $%.4f", result.CostUSD))
+		} else {
+			summary = append(summary, fmt.Sprintf("Cost: $%.2f", result.CostUSD))
+		}
+	}
+
+	var tokens []string
+	if result.TokenUsage != nil {
+		tokens = append(tokens, fmt.Sprintf("Tokens: %s (in: %s, out: %s)",
+			formatCount(result.TokenUsage.TotalTokens),
+			formatCount(result.TokenUsage.PromptTokens),
+			formatCount(result.TokenUsage.CandidatesTokens)))
+		tokens = append(tokens, formatCacheStat(result))
+	}
+
+	lines := make([]string, 0, 2)
+	for _, line := range [][]string{summary, tokens} {
+		if len(line) > 0 {
+			lines = append(lines, strings.Join(line, footerSeparator))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// formatCacheStat reports whether implicit context caching engaged, folding in
+// the dollar savings when they are known.
+func formatCacheStat(result *review.Result) string {
+	usage := result.TokenUsage
+	if usage.CachedTokens <= 0 || usage.PromptTokens <= 0 {
+		return "Cached: 0 (no hit)"
+	}
+
+	hitPct := 100 * float64(usage.CachedTokens) / float64(usage.PromptTokens)
+	stat := fmt.Sprintf("Cached: %s (%.0f%% hit", formatCount(usage.CachedTokens), hitPct)
+	if result.CacheSavingsUSD > 0 {
+		stat += fmt.Sprintf(", saved $%.4f", result.CacheSavingsUSD)
+	}
+
+	return stat + ")"
+}
+
+// formatCount renders a token count with thousands separators (12345 → 12,345).
+func formatCount(n int32) string {
+	digits := strconv.FormatInt(int64(n), 10)
+
+	var sign string
+	if strings.HasPrefix(digits, "-") {
+		sign, digits = "-", digits[1:]
+	}
+
+	var sb strings.Builder
+	for i := range len(digits) {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			_ = sb.WriteByte(',')
+		}
+		_ = sb.WriteByte(digits[i])
+	}
+
+	return sign + sb.String()
 }
 
 // prepareReview handles common review preparation logic: getting diff, security scan, etc.

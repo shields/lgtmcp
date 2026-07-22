@@ -161,7 +161,7 @@ The project intentionally runs no SAST scan of the Go source: the CodeQL workflo
 - [ ] **File size limits** - Prevent excessive Gemini API token usage
 - [x] **Token and cost logging** - Log API usage token counts and estimated cost in USD
 - [x] **Progress notifications** - MCP progress notifications during review operations
-- [x] **Usage stats in response** - Duration, token counts, and cost shown in review response footer
+- [x] **Usage stats in response** - Model, duration, token counts, and cost shown in review response footer
 - [x] **AGENTS.md discovery** - Automatically discover and inject AGENTS.md instructions into review prompts
 - [x] **REVIEW.md discovery** - Automatically discover and inject REVIEW.md instructions into review prompts
 - [x] **Context caching measurement** - Log implicit-cache hit rate and dollar savings; correct cached-token cost accounting
@@ -212,8 +212,22 @@ The review measures and reports caching effectiveness (`internal/review/review.g
 
 - `tokenUsage.cost` bills `PromptTokens - CachedTokens` at the full input rate and `CachedTokens` at 10%. Gemini reports `PromptTokenCount` as the _total effective_ prompt size, which already includes the cached tokens (per the genai `UsageMetadata` docs), so the cached count is subtracted out rather than added on top — fixing an earlier double-count that overstated cost on a cache hit.
 - `costWithoutCaching` is the no-cache baseline (every prompt token at the full rate); `savings` is baseline minus actual; `cacheHitRate` is `CachedTokens / PromptTokens`.
-- Every review emits the `Token usage` log with `cost_usd_uncached`, `cache_savings_usd`, `cache_hit_rate`, and `cache_engaged`, plus a plain-language `Context caching` line (`engaged=true/false`) so "did it work / are we saving money" is answerable with one grep. The MCP response footer (`pkg/mcp/server.go`) shows `Cached: N (X% hit, saved $Y)`, or `Cached: 0 (no hit)` when nothing was cached.
+- Every review emits the `Token usage` log with `cost_usd_uncached`, `cache_savings_usd`, `cache_hit_rate`, and `cache_engaged`, plus a plain-language `Context caching` line (`engaged=true/false`) so "did it work / are we saving money" is answerable with one grep. The MCP response footer (see [Response Footer](#response-footer)) shows `Cached: N (X% hit, saved $Y)`, or `Cached: 0 (no hit)` when nothing was cached.
 - Small diffs below the model's implicit-cache minimum (4096 tokens for `gemini-3.6-flash`) never cache; the `engaged=false` log states that explicitly rather than looking broken.
+
+## Response Footer
+
+`formatReviewResponse` (`pkg/mcp/server.go`) appends a usage footer after a `---` rule. `formatUsageFooter` renders it as **two lines** — what the review cost to run, then how it spent its tokens — with fields joined by a middle dot:
+
+```
+---
+Model: gemini-3.6-flash · Duration: 15.0 s · Cost: $0.05
+Tokens: 15,000 (in: 12,000, out: 3,000) · Cached: 4,700 (47% hit, saved $0.0332)
+```
+
+- `Model` is `Result.Model`, i.e. the model that actually produced the verdict — after a quota fallback that is the fallback model, not the configured primary. The per-model spend breakdown stays in the `Token usage` logs.
+- Each field is omitted when its value is absent or zero (`Cost` under a cent prints `$%.4f`, otherwise `$%.2f`; `Cached` is the exception and always prints when token usage exists). A line whose fields are all absent is dropped, and `formatUsageFooter` returns `""` when nothing at all is available so the `---` rule is omitted too.
+- Token counts carry thousands separators via `formatCount`, a local helper rather than `golang.org/x/text/message` — it keeps `x/text` an indirect dependency and stays locale-independent, since the footer is always ASCII English.
 
 ## Security Features
 
