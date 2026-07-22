@@ -51,18 +51,29 @@ pre-commit:
     #
     # This file uses POSIX shell pipelines and is therefore Unix-only,
     # matching the rest of the project's development environment: the
-    # Makefile already uses `git ls-files -z | xargs -0 -r ...` (line 122),
+    # Makefile's `fmt` target already uses `git ls-files -z | xargs -0 -r ...`,
     # `bc`, `install -d`, and other Unix-only utilities, and the GitHub
     # Actions workflows run only on `ubuntu-24.04`. Windows is not a
     # supported development platform for this repository.
+    #
+    # `glob:` patterns are `*.go` rather than `**/*.go` because lefthook's
+    # matcher lets `*` cross `/`, so `*.go` matches at any depth while
+    # `**/*.go` requires a directory component and silently skips the hook
+    # when only root-level files (main.go, README.md, ...) are staged.
+    #
+    # The `:!CLAUDE.md` pathspec excludes that file because it is a symlink to
+    # AGENTS.md: prettier hard-errors on a symlink passed as an explicit
+    # argument, and .prettierignore does not suppress that. AGENTS.md is
+    # formatted in its own right, so the content is still covered. Same
+    # exclusion as the Makefile's `fmt` target.
     format-go:
-      glob: "**/*.go"
+      glob: "*.go"
       run: git diff --cached --name-only --diff-filter=ACMR -z -- '*.go' | xargs -0 -r go tool gofumpt -w --
       stage_fixed: true
 
     format-prettier:
-      glob: "**/*.{md,json,json5,yaml,yml}"
-      run: git diff --cached --name-only --diff-filter=ACMR -z -- '*.md' '*.json' '*.json5' '*.yaml' '*.yml' | xargs -0 -r npx --prefix tools prettier --write --
+      glob: "*.{md,json,json5,yaml,yml}"
+      run: git diff --cached --name-only --diff-filter=ACMR -z -- '*.md' '*.json' '*.json5' '*.yaml' '*.yml' ':!CLAUDE.md' | xargs -0 -r npx --prefix tools prettier --write --
       stage_fixed: true
 
     mod-tidy:

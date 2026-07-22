@@ -121,7 +121,13 @@ fmt: tools
 	@echo "==> Formatting Go code..."
 	$(GOCMD) tool gofumpt -w .
 	@echo "==> Formatting Markdown, JSON, YAML files..."
-	@git ls-files -z '*.md' '*.json' '*.json5' '*.yaml' '*.yml' | xargs -0 -r npx --prefix tools prettier --write
+# CLAUDE.md is excluded because it is a symlink to AGENTS.md: prettier
+# hard-errors on a symlink passed as an explicit argument ("Explicitly
+# specified pattern ... is a symbolic link") and .prettierignore does not
+# suppress that. AGENTS.md is formatted in its own right, so the content is
+# still covered.
+	@git ls-files -z '*.md' '*.json' '*.json5' '*.yaml' '*.yml' ':!CLAUDE.md' \
+		| xargs -0 -r npx --prefix tools prettier --write --
 
 # Clean build artifacts
 clean:

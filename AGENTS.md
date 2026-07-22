@@ -133,6 +133,10 @@ Example: `lgtmcp --version` outputs `lgtmcp version 1.0.0 (ef22d19, darwin/arm64
 
 Go tools (golangci-lint, gofumpt) are managed via the `tool` directive in `go.mod` and invoked with `go tool`. Prettier is managed via npm in `tools/package.json`.
 
+Both prettier callsites — the Makefile's `fmt` target and the `format-prettier` hook in `.lefthook.yml` — exclude `CLAUDE.md` with a `:!CLAUDE.md` pathspec. It is a symlink to `AGENTS.md`, and prettier hard-errors on a symlink passed as an explicit argument (`Explicitly specified pattern ... is a symbolic link`), which made `make fmt` exit 1 on every run. A `.prettierignore` entry does **not** suppress this — the symlink check runs before ignore rules are consulted, verified with the file both in and out of the ignore list — and letting prettier expand the globs itself (it skips symlinks silently during traversal) would pull in untracked local state such as `.claude/` and `.serena/`. Excluding the one tracked symlink by pathspec keeps the git-tracked file list intact; `AGENTS.md` is formatted in its own right, so the content is still covered. A future tracked symlink would need the same exclusion.
+
+The `glob:` patterns in `.lefthook.yml` are `*.go` and `*.{md,json,...}`, not `**/*.go`: lefthook's matcher lets `*` cross `/`, so a bare `*.go` matches at any depth, while `**/*.go` requires a directory component and silently skips the hook when only root-level files (`main.go`, `README.md`, …) are staged.
+
 ### Key Commands
 
 - **Lint check**: `make lint`
