@@ -39,7 +39,7 @@ If you ever genuinely need a raw `git commit` (e.g., emergency recovery), make t
 
 ## Overview
 
-LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.1 Pro and either commits them (if approved) or returns review comments.
+LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.6 Flash and either commits them (if approved) or returns review comments.
 
 **Note**: The `mcp__lgtmcp__` tools may run a different version than this repository. Always test with actual code.
 
@@ -73,7 +73,7 @@ LGTMCP is a Model Context Protocol server that reviews code changes using Google
 ## Architecture
 
 - **MCP Server** (`pkg/mcp/`) - Protocol implementation using mark3labs/mcp-go
-- **Review Engine** (`internal/review/`) - Gemini 3.1 Pro integration with file retrieval
+- **Review Engine** (`internal/review/`) - Gemini 3.6 Flash integration with file retrieval
 - **Git Operations** (`internal/git/`) - Diff generation, commit management, instruction file discovery
 - **Security** (`internal/security/`) - Gitleaks v8 for secret detection
 - **Prompts** (`internal/prompts/`) - Customizable review prompts with embedded defaults
@@ -88,8 +88,8 @@ google:
   api_key: "your-key" # Or use_adc: true for Application Default Credentials
 
 gemini:
-  model: "gemini-3.1-pro-preview"
-  fallback_model: "gemini-2.5-pro" # Used when primary model quota is exhausted
+  model: "gemini-3.6-flash"
+  # fallback_model: "gemini-2.5-pro" # Optional; disabled by default (none)
   temperature: 0.2
 
 git:
@@ -102,7 +102,7 @@ prompts:
   review_prompt_path: "" # Optional custom prompt
 ```
 
-**Model Fallback**: When the primary model's daily quota is exhausted (HTTP 429 with QuotaFailure), the review automatically falls back to `gemini-2.5-pro`. This is distinct from rate limiting, which retries with backoff.
+**Model Fallback**: The fallback is disabled by default (`fallback_model: none`) because `gemini-3.6-flash` is generally available with generous daily limits. When a `fallback_model` is configured and the primary model's daily quota is exhausted (HTTP 429 with QuotaFailure), the review automatically falls back to it. This is distinct from rate limiting, which retries with backoff.
 
 When a fallback occurs, the reported token totals and cost cover **both** attempts, not just the model that finally answered. `ReviewDiff` accumulates a `modelSpend` (model name + `tokenUsage`) for every model it tries — `reviewDiffWithModel` reports its spend through a `recordSpend` callback in its exit `defer`, so a primary model that consumes tokens before hitting quota still has that spend counted. `applyAggregateSpend` then sums the token counts for the at-a-glance totals and computes cost/savings **per model** (primary and fallback can price differently), folding the result onto `Result.CostUSD`/`CacheSavingsUSD`/`TokenUsage`. With a single attempt (the common case) this reproduces that one model's own figures, so there is no behavior change when no fallback fires. `Result.Model` remains the model that produced the verdict (the fallback), while the per-model breakdown stays visible in the `Token usage` logs emitted by each attempt.
 
@@ -168,7 +168,7 @@ The project intentionally runs no SAST scan of the Go source: the CodeQL workflo
 
 ## MCP Error Semantics
 
-The tool handlers in `pkg/mcp/server.go` distinguish two failure classes, following the MCP guidance that tool-execution failures belong *inside* the result object:
+The tool handlers in `pkg/mcp/server.go` distinguish two failure classes, following the MCP guidance that tool-execution failures belong _inside_ the result object:
 
 - **Protocol-level errors** (handler returns a non-nil Go `error`, `result == nil`) are reserved for malformed requests the model cannot act on by reading a message: arguments that are not an object (`ErrInvalidArguments`), a non-string `directory` (`ErrDirectoryNotString`), or a non-string `commit_message` (`ErrCommitMessageNotString`). The directory branch uses `errors.Is(err, ErrDirectoryNotString)` to keep only the wrong-type case as a protocol error.
 - **In-band tool errors** (`mcp.NewToolResultError`/`NewToolResultErrorf`, returning `CallToolResult{IsError: true}` with `nil` Go error) carry every failure that happens while the tool runs: directory path resolution, invalid git repository, diff generation, a security scan that itself errors, the Gemini review, staging, and committing. The model receives the reason as text and can react.
@@ -213,7 +213,7 @@ The review measures and reports caching effectiveness (`internal/review/review.g
 - `tokenUsage.cost` bills `PromptTokens - CachedTokens` at the full input rate and `CachedTokens` at 10%. Gemini reports `PromptTokenCount` as the _total effective_ prompt size, which already includes the cached tokens (per the genai `UsageMetadata` docs), so the cached count is subtracted out rather than added on top — fixing an earlier double-count that overstated cost on a cache hit.
 - `costWithoutCaching` is the no-cache baseline (every prompt token at the full rate); `savings` is baseline minus actual; `cacheHitRate` is `CachedTokens / PromptTokens`.
 - Every review emits the `Token usage` log with `cost_usd_uncached`, `cache_savings_usd`, `cache_hit_rate`, and `cache_engaged`, plus a plain-language `Context caching` line (`engaged=true/false`) so "did it work / are we saving money" is answerable with one grep. The MCP response footer (`pkg/mcp/server.go`) shows `Cached: N (X% hit, saved $Y)`, or `Cached: 0 (no hit)` when nothing was cached.
-- Small diffs below the model's implicit-cache minimum (4096 tokens for `gemini-3.1-pro-preview`) never cache; the `engaged=false` log states that explicitly rather than looking broken.
+- Small diffs below the model's implicit-cache minimum (4096 tokens for `gemini-3.6-flash`) never cache; the `engaged=false` log states that explicitly rather than looking broken.
 
 ## Security Features
 
@@ -228,7 +228,7 @@ The review measures and reports caching effectiveness (`internal/review/review.g
 - **Go**: Single binary, excellent performance, native git ops
 - **mark3labs/mcp-go**: Most mature MCP implementation
 - **Gitleaks v8**: MIT licensed, embedded library (no subprocess)
-- **Gemini 3.1 Pro Preview**: Advanced reasoning model for code understanding
+- **Gemini 3.6 Flash**: Fast, capable model for code understanding
 
 ## Why the git CLI (not go-git)
 

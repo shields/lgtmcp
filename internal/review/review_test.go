@@ -571,7 +571,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses default model when not specified", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		// Cfg already has default model set to gemini-3.1-pro-preview.
+		// Cfg already has default model set to gemini-3.6-flash.
 
 		reviewer, err := New(cfg, testutil.NewTestLogger())
 		require.NoError(t, err)
