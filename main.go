@@ -53,8 +53,9 @@ func run() int {
 	// Load configuration.
 	cfg, err := config.Load()
 	if err != nil {
-		var notFound *config.NotFoundError
-		if errors.As(err, &notFound) {
+		// Preserve the original wrapped error in the output; only the match is needed.
+		//nolint:errcheck // The matched NotFoundError value is intentionally unused.
+		if _, ok := errors.AsType[*config.NotFoundError](err); ok {
 			_, _ = fmt.Fprintf(os.Stderr, "lgtmcp: %v\n\n"+
 				"Create it with at minimum:\n\n"+
 				"  google:\n"+
