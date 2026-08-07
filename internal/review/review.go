@@ -346,8 +346,7 @@ func isRetryableError(err error) bool {
 	}
 
 	// Check if it's a genai.APIError.
-	var apiErr *genai.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*genai.APIError](err); ok {
 		// Check HTTP status code for retryable errors.
 		switch apiErr.Code {
 		case http.StatusRequestTimeout, // 408

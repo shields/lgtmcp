@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
 package config
 
 import (
+	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -89,6 +91,7 @@ logging:
 		var notFound *NotFoundError
 		require.ErrorAs(t, err, &notFound)
 		assert.Contains(t, notFound.Path, "config.yaml")
+		require.ErrorIs(t, err, fs.ErrNotExist)
 	})
 
 	t.Run("invalid yaml", func(t *testing.T) {
@@ -251,6 +254,15 @@ func TestNotFoundError_Error(t *testing.T) {
 	t.Parallel()
 	err := &NotFoundError{Path: "/some/path/config.yaml"}
 	assert.Equal(t, "config file not found: /some/path/config.yaml", err.Error())
+}
+
+func TestNotFoundError_Is(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("loading config: %w", &NotFoundError{Path: "/some/path/config.yaml"})
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.NotErrorIs(t, err, fs.ErrExist)
+	require.NotErrorIs(t, err, fs.ErrPermission)
 }
 
 func TestLoad_TrulyInvalidYAML(t *testing.T) {
