@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"syscall"
@@ -53,9 +54,8 @@ func run() int {
 	// Load configuration.
 	cfg, err := config.Load()
 	if err != nil {
-		// Preserve the original wrapped error in the output; only the match is needed.
-		//nolint:errcheck // The matched NotFoundError value is intentionally unused.
-		if _, ok := errors.AsType[*config.NotFoundError](err); ok {
+		// config.NotFoundError matches fs.ErrNotExist via its Is method.
+		if errors.Is(err, fs.ErrNotExist) {
 			_, _ = fmt.Fprintf(os.Stderr, "lgtmcp: %v\n\n"+
 				"Create it with at minimum:\n\n"+
 				"  google:\n"+

@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -46,6 +47,14 @@ type NotFoundError struct {
 
 func (e *NotFoundError) Error() string {
 	return "config file not found: " + e.Path
+}
+
+// Is reports a missing config file as equivalent to [fs.ErrNotExist], so
+// callers can match it with errors.Is and a standard sentinel rather than
+// extracting this concrete type. The equivalence is exact: [Load] constructs
+// this error only when reading the config file failed with fs.ErrNotExist.
+func (*NotFoundError) Is(target error) bool {
+	return target == fs.ErrNotExist
 }
 
 // GoogleConfig holds Google/GCP configuration.
@@ -140,7 +149,7 @@ func Load() (*Config, error) {
 
 	data, err := os.ReadFile(configPath) //nolint:gosec // Path comes from GetConfigPath which is safe
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil, &NotFoundError{Path: configPath}
 		}
 		return nil, fmt.Errorf("cannot read %s: %w", configPath, err)
