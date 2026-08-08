@@ -1,5 +1,5 @@
 <!--
-Copyright © 2025 Michael Shields
+Copyright © 2025-2026 Michael Shields
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,9 +18,9 @@ limitations under the License.
 
 **IMPORTANT**:
 
-1. Update this file after completing any task to document changes.
-2. After completing any task, run `make lint`, `make test`, then use `mcp__lgtmcp__review_only` to review changes.
-3. Do not use conventional commit prefixes (feat:, fix:, docs:, etc.) in commit messages.
+1. After completing any task, run `make lint`, `make test`, then use `mcp__lgtmcp__review_only` to review changes.
+2. Do not use conventional commit prefixes (feat:, fix:, docs:, etc.) in commit messages.
+3. Update this file only when a change alters durable guidance — commands, policies, architecture, or gotchas recorded nowhere else. Implementation detail belongs in code doc comments; this file is not a changelog.
 
 ## File Headers
 
@@ -39,36 +39,9 @@ If you ever genuinely need a raw `git commit` (e.g., emergency recovery), make t
 
 ## Overview
 
-LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.6 Flash and either commits them (if approved) or returns review comments.
+LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.6 Flash and either commits them (if approved) or returns review comments. Setup, configuration, usage, and troubleshooting are covered in `README.md`; every configuration option is documented in `config.example.yaml`.
 
 **Note**: The `mcp__lgtmcp__` tools may run a different version than this repository. Always test with actual code.
-
-## Quick Start
-
-1. **Setup config**:
-
-   ```bash
-   mkdir -p ~/.config/lgtmcp
-   cp config.example.yaml ~/.config/lgtmcp/config.yaml
-   chmod 600 ~/.config/lgtmcp/config.yaml
-   ```
-
-2. **Add to Claude Desktop**:
-
-   ```json
-   {
-     "mcpServers": {
-       "lgtmcp": {
-         "command": "lgtmcp",
-         "args": []
-       }
-     }
-   }
-   ```
-
-3. **Use the tools**:
-   - `review_only`: Reviews changes without committing
-   - `review_and_commit`: Reviews and commits if approved (LGTM=true)
 
 ## Architecture
 
@@ -79,33 +52,6 @@ LGTMCP is a Model Context Protocol server that reviews code changes using Google
 - **Prompts** (`internal/prompts/`) - Customizable review prompts with embedded defaults
 - **Progress** (`internal/progress/`) - MCP progress notification support
 
-## Configuration
-
-Config location: `~/.config/lgtmcp/config.yaml` (or `$XDG_CONFIG_HOME/lgtmcp/config.yaml`)
-
-```yaml
-google:
-  api_key: "your-key" # Or use_adc: true for Application Default Credentials
-
-gemini:
-  model: "gemini-3.6-flash"
-  # fallback_model: "gemini-2.5-pro" # Optional; disabled by default (none)
-  temperature: 0.2
-
-git:
-  diff_context_lines: 20
-
-logging:
-  level: "info" # debug, info, warn, error
-
-prompts:
-  review_prompt_path: "" # Optional custom prompt
-```
-
-**Model Fallback**: The fallback is disabled by default (`fallback_model: none`) because `gemini-3.6-flash` is generally available with generous daily limits. When a `fallback_model` is configured and the primary model's daily quota is exhausted (HTTP 429 with QuotaFailure), the review automatically falls back to it. This is distinct from rate limiting, which retries with backoff.
-
-When a fallback occurs, the reported token totals and cost cover **both** attempts, not just the model that finally answered. `ReviewDiff` accumulates a `modelSpend` (model name + `tokenUsage`) for every model it tries — `reviewDiffWithModel` reports its spend through a `recordSpend` callback in its exit `defer`, so a primary model that consumes tokens before hitting quota still has that spend counted. `applyAggregateSpend` then sums the token counts for the at-a-glance totals and computes cost/savings **per model** (primary and fallback can price differently), folding the result onto `Result.CostUSD`/`CacheSavingsUSD`/`TokenUsage`. With a single attempt (the common case) this reproduces that one model's own figures, so there is no behavior change when no fallback fires. `Result.Model` remains the model that produced the verdict (the fallback), while the per-model breakdown stays visible in the `Token usage` logs emitted by each attempt.
-
 ## Development
 
 ```bash
@@ -113,133 +59,35 @@ make test    # Run tests
 make coverage # Run tests with coverage
 make build   # Build binary (VERSION=x.y.z for custom version)
 make lint    # Run golangci-lint
-make fmt     # Format code with gofumpt
+make fmt     # Format code with gofumpt and prettier
 make clean   # Remove build artifacts
 make deps    # Install tools and dependencies
 ```
 
-### Version Information
+### Formatting gotcha
 
-The binary supports a `--version` flag that displays:
+`CLAUDE.md` is a symlink to `AGENTS.md`, and both prettier callsites (the Makefile `fmt` target and `.lefthook.yml`'s `format-prettier` hook) exclude it with a `:!CLAUDE.md` pathspec; the comments at those callsites explain the basics. Two details recorded only here: a `.prettierignore` entry cannot fix this, because prettier's symlink hard-error fires before ignore rules are consulted (verified with the file both in and out of the ignore list); and letting prettier expand its own globs instead of taking a git-derived file list was rejected because its traversal, while skipping symlinks silently, would sweep in untracked local state such as `.claude/` and `.serena/`. A future tracked symlink needs the same pathspec exclusion.
 
-- Version (defaults to "dev", set via `VERSION` during build)
-- Git commit hash (automatically detected)
-- Dirty status (if working tree has uncommitted changes)
-- OS/Architecture
+### CI
 
-Example: `lgtmcp --version` outputs `lgtmcp version 1.0.0 (ef22d19, darwin/arm64)`
+`lint.yaml` (golangci-lint, then zizmor on the workflow files) and `test.yaml` (race + coverage) run on every push and pull request; actions are SHA-pinned, and the zizmor step's configuration rationale is commented inline in `lint.yaml`. Recorded only here:
 
-### Tool Management
-
-Go tools (golangci-lint, gofumpt) are managed via the `tool` directive in `go.mod` and invoked with `go tool`. Prettier is managed via npm in `tools/package.json`.
-
-Both prettier callsites — the Makefile's `fmt` target and the `format-prettier` hook in `.lefthook.yml` — exclude `CLAUDE.md` with a `:!CLAUDE.md` pathspec. It is a symlink to `AGENTS.md`, and prettier hard-errors on a symlink passed as an explicit argument (`Explicitly specified pattern ... is a symbolic link`), which made `make fmt` exit 1 on every run. A `.prettierignore` entry does **not** suppress this — the symlink check runs before ignore rules are consulted, verified with the file both in and out of the ignore list — and letting prettier expand the globs itself (it skips symlinks silently during traversal) would pull in untracked local state such as `.claude/` and `.serena/`. Excluding the one tracked symlink by pathspec keeps the git-tracked file list intact; `AGENTS.md` is formatted in its own right, so the content is still covered. A future tracked symlink would need the same exclusion.
-
-The `glob:` patterns in `.lefthook.yml` are `*.go` and `*.{md,json,...}`, not `**/*.go`: lefthook's matcher lets `*` cross `/`, so a bare `*.go` matches at any depth, while `**/*.go` requires a directory component and silently skips the hook when only root-level files (`main.go`, `README.md`, …) are staged.
-
-### Key Commands
-
-- **Lint check**: `make lint`
-- **Format code**: `make fmt`
-- **Run with lefthook**: `lefthook run pre-commit`
-- **Code review**: After completing any task:
-  1. Run `make lint` to check for lint errors
-  2. Run `make test` to ensure all tests pass
-  3. Use `mcp__lgtmcp__review_only` to review your changes
-
-### GitHub Workflows
-
-CI workflows in `.github/workflows/`:
-
-- **lint.yaml** - Runs golangci-lint, then zizmor (GitHub Actions static analysis, `pedantic` persona) on every push and pull request
-- **test.yaml** - Runs tests with race detection and coverage on every push and pull request
-
-All workflows use pinned action versions with SHA hashes for reproducibility.
-
-The zizmor step runs the official `zizmorcore/zizmor-action` as a plain pass/fail gate: `advanced-security: false` (no SARIF upload, so the job stays `contents: read`) and `online-audits: false` (deterministic, offline — matches local `zizmor --pedantic .`). Renovate bumps the pinned action SHA, which also advances the bundled zizmor version.
-
-The project intentionally runs no SAST scan of the Go source: the CodeQL workflow was removed deliberately and is not being replaced. The zizmor step audits only the GitHub Actions workflow files, not Go code, so it is not a SAST substitute. Reintroduce a Go SAST workflow here if that coverage is wanted again.
+- The project intentionally runs no SAST scan of the Go source — the CodeQL workflow was deliberately removed and is not being replaced. zizmor audits only the workflow YAML, so it is not a substitute; reintroduce a Go SAST workflow if that coverage is wanted again.
+- Renovate's SHA bumps of `zizmor-action` are what advance the bundled zizmor version; zizmor is not pinned separately.
 
 ## TODO
 
 - [ ] **File size limits** - Prevent excessive Gemini API token usage
-- [x] **Token and cost logging** - Log API usage token counts and estimated cost in USD
-- [x] **Progress notifications** - MCP progress notifications during review operations
-- [x] **Usage stats in response** - Model, duration, token counts, and cost shown in review response footer
-- [x] **AGENTS.md discovery** - Automatically discover and inject AGENTS.md instructions into review prompts
-- [x] **REVIEW.md discovery** - Automatically discover and inject REVIEW.md instructions into review prompts
-- [x] **Context caching measurement** - Log implicit-cache hit rate and dollar savings; correct cached-token cost accounting
 
-## MCP Error Semantics
+## Design notes
 
-The tool handlers in `pkg/mcp/server.go` distinguish two failure classes, following the MCP guidance that tool-execution failures belong _inside_ the result object:
+Implementation details live in doc comments on the functions named below; these notes record only decisions and constraints written nowhere else.
 
-- **Protocol-level errors** (handler returns a non-nil Go `error`, `result == nil`) are reserved for malformed requests the model cannot act on by reading a message: arguments that are not an object (`ErrInvalidArguments`), a non-string `directory` (`ErrDirectoryNotString`), or a non-string `commit_message` (`ErrCommitMessageNotString`). The directory branch uses `errors.Is(err, ErrDirectoryNotString)` to keep only the wrong-type case as a protocol error.
-- **In-band tool errors** (`mcp.NewToolResultError`/`NewToolResultErrorf`, returning `CallToolResult{IsError: true}` with `nil` Go error) carry every failure that happens while the tool runs: directory path resolution, invalid git repository, diff generation, a security scan that itself errors, the Gemini review, staging, and committing. The model receives the reason as text and can react.
-
-Results are built with the mcp-go helpers throughout — `mcp.NewToolResultError`/`NewToolResultErrorf` for the in-band errors above and `mcp.NewToolResultText` for non-error results. Two non-error results are worth calling out: a secret detected by the security scan is a **non-approval, not a failure** — the scan succeeded and is reporting a finding, so it returns `mcp.NewToolResultText` (`IsError` unset) with a `NOT APPROVED` message, mirroring a rejected review rather than carrying `IsError`; "No changes to review" is likewise a normal non-error result. Tests assert the protocol-vs-in-band split via the `assertInBandToolError` helper.
-
-## MCP Logging Output
-
-The `logging.output: "mcp"` setting routes application logs to the MCP client as `notifications/message` (previously this errored at startup because nothing supplied an `MCPLogSender`). The wiring uses **lazy injection** because the application logger is built before the MCP server it must send through:
-
-- `pkg/mcp/logsender.go` defines `LogSender`, which implements `logging.MCPLogSender`. `main` creates it unbound, hands it to `logging.New` via `logConfig.MCPSender`, constructs the server, then calls `server.BindLogSender(ls)` to attach the live `*server.MCPServer`. Records logged before binding are dropped (there is no transport yet).
-- `SendLog` emits via `SendNotificationToAllClients(notifications/message, …)`, which broadcasts to every initialized session (a stdio server has exactly one) and needs no request context. The server advertises the logging capability (`server.WithLogging()`) **only** when `output == "mcp"`, so it never claims a capability it won't use.
-- Level names are mapped slog→MCP by `mcpLogLevel` (`warn`→`warning`; others coincide). The configured logger level gates output; per-client `logging/setLevel` filtering is not applied because `logging.Logger` carries no request context to resolve the session.
-
-## AGENTS.md and REVIEW.md Support
-
-Repositories can include `AGENTS.md` and/or `REVIEW.md` files with project-specific review guidelines. LGTMCP automatically discovers these files by walking from each changed file's directory up to the repo root. The instructions are injected into both the context-gathering and review prompts.
-
-- Files are deduplicated and sorted root-first (shallowest depth first)
-- Symlinks pointing outside the repository are skipped
-- Discovery errors are non-fatal (logged as warnings)
-
-## Deleted-File Handling
-
-When the diff contains deleted files, lgtmcp lists them in a dedicated "Files deleted by this change" section in both prompts, and the `get_file_content` tool short-circuits requests for those paths with the dedicated `errDeletedFileMsg` instead of returning a generic ENOENT. The diff already carries the full removed content, so the model has everything it needs without a follow-up fetch. The deletion set comes from `security.ChangedFiles.Deleted` (returned by `ExtractChangedFilesDetailed`) and is threaded through `review.WithDeletedFiles`. Rename blocks contribute both halves: the "rename from" source goes into `All` and `Deleted` (the rename removes that path), so a partially staged rename commits the source's deletion instead of silently keeping the old file; `git.StageFiles` skips paths that exist only in HEAD (a fully staged `git mv` source — an already-staged deletion with nothing left to stage) rather than failing on a no-match pathspec, and errors on paths git does not know at all. Staging still receives the full path list so deletions are committed; the broader stage-time TOCTOU window (re-created files, modification swap, pre-staged index content) is documented at the `StageFiles` callsite in `pkg/mcp/server.go` and tracked separately.
-
-## New-File Diff Synthesis
-
-Untracked files and initial-commit files have no blob to diff against, so `GetDiff` synthesizes a git-style "new file" block via `writeNewFileDiff` in `internal/git/git.go`. The `new file mode` line reflects the file on disk rather than a hardcoded value, matching what real `git diff` emits:
-
-- `gitFileMode` chooses the mode: `120000` for symlinks (checked first, since a symlink's permission bits often include execute bits), `100755` when a regular file's owner-execute bit is set, else `100644`. This mirrors git's `ce_permissions`, which keys off `0o100` alone and ignores group/other execute bits. On Windows, Go never reports execute bits, so regular files resolve to `100644` (consistent with git's default `core.fileMode=false`).
-- `newFileForDiff` supplies the content and mode. For a symlink it returns the link target via `os.Readlink` (which reads only the link text and never dereferences the link, so a target outside the repo is never read) and the symlink mode; escaping or dangling symlinks are therefore surfaced to the reviewer as `120000` entries rather than being silently dropped. Regular files delegate to `readRepoFile`, the shared reader that also backs the public `GetFileContent`/`get_file_content` tool — whose follow-the-symlink-and-reject-escapes security contract is unchanged.
-- Newly added **empty** files (e.g. `__init__.py`, `.gitkeep`) are surfaced as a header-only block (`writeNewFileDiff` writes the headers and returns), matching git. The `GetDiff` callsites guard only on the read error, not on empty content, so an empty new file is neither dropped from the review nor (for `review_and_commit`, whose staged-file list is derived from the diff) silently omitted from the commit.
-- Synthesized `+++` lines carry git's trailing tab when the rendered path contains a literal space (so patch parsers can find where the filename ends), and synthesized new-file blocks are concatenated directly after the tracked diff with no blank separator line — both matching real `git diff` byte-for-byte.
-
-## Context Caching
-
-Gemini 2.5/3.x perform **implicit** context caching automatically (no API setup, no storage cost): when a request shares a long prefix with a recent one, the shared tokens are billed at ~10% of the input rate. Within a single review this fires across Phase 1's tool-calling loop, where the chat resends the growing history (including the diff) on each turn. lgtmcp deliberately does **not** create explicit caches (`Caches.Create`): for a one-review-at-a-time workload the hourly storage floor plus per-cache create overhead exceed the read discount from the handful of reuses a single review generates, so explicit caching would lose money. Implicit caching is free and always on, so there is nothing to configure.
-
-The review measures and reports caching effectiveness (`internal/review/review.go`):
-
-- `tokenUsage.cost` bills `PromptTokens - CachedTokens` at the full input rate and `CachedTokens` at 10%. Gemini reports `PromptTokenCount` as the _total effective_ prompt size, which already includes the cached tokens (per the genai `UsageMetadata` docs), so the cached count is subtracted out rather than added on top — fixing an earlier double-count that overstated cost on a cache hit.
-- `costWithoutCaching` is the no-cache baseline (every prompt token at the full rate); `savings` is baseline minus actual; `cacheHitRate` is `CachedTokens / PromptTokens`.
-- Every review emits the `Token usage` log with `cost_usd_uncached`, `cache_savings_usd`, `cache_hit_rate`, and `cache_engaged`, plus a plain-language `Context caching` line (`engaged=true/false`) so "did it work / are we saving money" is answerable with one grep. The MCP response footer (see [Response Footer](#response-footer)) shows `Cached: N (X% hit, saved $Y)`, or `Cached: 0 (no hit)` when nothing was cached.
-- Small diffs below the model's implicit-cache minimum (4096 tokens for `gemini-3.6-flash`) never cache; the `engaged=false` log states that explicitly rather than looking broken.
-
-## Response Footer
-
-`formatReviewResponse` (`pkg/mcp/server.go`) appends a usage footer after a `---` rule. `formatUsageFooter` renders it as **two lines** — what the review cost to run, then how it spent its tokens — with fields joined by a middle dot:
-
-```
----
-Model: gemini-3.6-flash · Duration: 15.0 s · Cost: $0.05
-Tokens: 15,000 (in: 12,000, out: 3,000) · Cached: 4,700 (47% hit, saved $0.0332)
-```
-
-- `Model` is `Result.Model`, i.e. the model that actually produced the verdict — after a quota fallback that is the fallback model, not the configured primary. The per-model spend breakdown stays in the `Token usage` logs.
-- Each field is omitted when its value is absent or zero (`Cost` under a cent prints `$%.4f`, otherwise `$%.2f`; `Cached` is the exception and always prints when token usage exists). A line whose fields are all absent is dropped, and `formatUsageFooter` returns `""` when nothing at all is available so the `---` rule is omitted too.
-- Token counts carry thousands separators via `formatCount`, a local helper rather than `golang.org/x/text/message` — it keeps `x/text` an indirect dependency and stays locale-independent, since the footer is always ASCII English.
-
-## Security Features
-
-- **Gitignore Protection**: The `get_file_contents` tool respects `.gitignore` files and refuses access to any ignored files
-  - Prevents accidental exposure of sensitive files like `.env`, API keys, secrets
-  - Respects nested `.gitignore` files throughout the repository hierarchy
-  - Uses `git check-ignore` (via the `git.IsIgnored` helper in `internal/git`) for accurate gitignore rule evaluation; the helper strips inherited `GIT_*` variables so a leaked `GIT_DIR`/`GIT_CONFIG_GLOBAL` cannot redirect the check at another repository
-  - Symlinks are resolved and the resolved target is re-checked against `.gitignore`, failing closed on errors, so a link like `config-link -> .env` cannot launder ignored content past the check (symlinks to non-ignored files are still followed)
+- **MCP error semantics** (`pkg/mcp/server.go`): following MCP guidance that tool-execution failures belong inside the result object, only malformed requests (non-object arguments, a non-string `directory` or `commit_message`) return protocol-level Go errors; every failure while the tool runs is an in-band `IsError` result the model can read and react to. A detected secret and "no changes to review" are non-error results — findings, not failures. The per-case classification is commented in `server.go` and asserted by `assertInBandToolError` in the tests.
+- **New-file diff synthesis** (`writeNewFileDiff`/`gitFileMode`/`newFileForDiff` in `internal/git/git.go`): synthesized blocks match real `git diff` byte-for-byte; see the doc comments. One cross-file guarantee: an empty new file's header-only block (no hunk) still registers in `security.ExtractChangedFilesDetailed`, which keys off the `diff --git` header, so `review_and_commit`'s diff-derived staging list commits empty new files instead of dropping them.
+- **Context caching** (`internal/review/review.go`): only Gemini's implicit caching is used; explicit caches (`Caches.Create`) were deliberately rejected because, at one review at a time, the hourly storage floor plus per-cache create overhead exceed the read discount — explicit caching would lose money. Implicit caching engages across Phase 1's tool-calling loop (the growing history, including the diff, is resent each turn) and never fires on prompts below the model's minimum (4096 tokens for `gemini-3.6-flash`) — expected, not a bug.
+- **Response footer** (`formatUsageFooter` in `pkg/mcp/server.go`): `formatCount` hand-rolls thousands separators rather than using `golang.org/x/text/message`, deliberately keeping `x/text` an indirect-only dependency; the footer is always ASCII English, so locale-aware formatting isn't needed.
+- **Gemini API constraint**: function calling and Google Search grounding cannot be combined in one request. The review's `get_file_content` tool already relies on function calling, so a search-grounded review would require a redesign.
 
 ## Technical Choices
 
@@ -273,16 +121,3 @@ All git subprocesses route through one hardened helper in `internal/git`
 `GIT_DIR`/`GIT_CONFIG_GLOBAL` from a surrounding git process such as a pre-commit
 hook cannot redirect a command at the wrong repository — and applies a uniform
 timeout.
-
-## Troubleshooting
-
-1. **Config errors**: Check `~/.config/lgtmcp/config.yaml` exists and has valid YAML
-2. **Not a git repo**: Ensure `.git` directory exists
-3. **Secrets detected**: Remove sensitive information from diff
-4. **API errors**: Verify API key and network connectivity
-
-## Notes
-
-- Gemini API limitation: Can't use both function calling and Google Search simultaneously
-- Gitleaks v8 has library usage limitations (no direct git repo scanning)
-- All quality checks passing: zero lint errors, 100% test pass rate
