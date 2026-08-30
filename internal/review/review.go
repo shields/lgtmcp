@@ -17,7 +17,7 @@ package review
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -88,9 +88,9 @@ type TokenUsage struct {
 	PromptTokens     int32 `json:"prompt_tokens"`
 	CandidatesTokens int32 `json:"candidates_tokens"`
 	TotalTokens      int32 `json:"total_tokens"`
-	CachedTokens     int32 `json:"cached_tokens,omitempty"`
-	ThoughtsTokens   int32 `json:"thoughts_tokens,omitempty"`
-	ToolUseTokens    int32 `json:"tool_use_tokens,omitempty"`
+	CachedTokens     int32 `json:"cached_tokens,omitzero"`
+	ThoughtsTokens   int32 `json:"thoughts_tokens,omitzero"`
+	ToolUseTokens    int32 `json:"tool_use_tokens,omitzero"`
 }
 
 // Result represents the result of a code review.
@@ -98,9 +98,9 @@ type Result struct {
 	Comments        string      `json:"comments"`
 	LGTM            bool        `json:"lgtm"`
 	TokenUsage      *TokenUsage `json:"token_usage,omitempty"`
-	DurationMS      int64       `json:"duration_ms,omitempty"`
-	CostUSD         float64     `json:"cost_usd,omitempty"`
-	CacheSavingsUSD float64     `json:"cache_savings_usd,omitempty"`
+	DurationMS      int64       `json:"duration_ms,omitzero"`
+	CostUSD         float64     `json:"cost_usd,omitzero"`
+	CacheSavingsUSD float64     `json:"cache_savings_usd,omitzero"`
 	Model           string      `json:"model,omitempty"`
 }
 

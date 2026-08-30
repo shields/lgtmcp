@@ -16,7 +16,7 @@ package review
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 
 	"google.golang.org/genai"
 	"msrl.dev/lgtmcp/internal/logging"

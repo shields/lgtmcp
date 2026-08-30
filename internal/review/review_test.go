@@ -16,6 +16,7 @@ package review
 
 import (
 	"context"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"net/http"
@@ -780,6 +781,7 @@ index 0000000..1111111 100644
 
 func TestResult(t *testing.T) {
 	t.Parallel()
+
 	t.Run("struct fields", func(t *testing.T) {
 		t.Parallel()
 		result := Result{
@@ -789,6 +791,14 @@ func TestResult(t *testing.T) {
 
 		assert.True(t, result.LGTM)
 		assert.Equal(t, "Looks good!", result.Comments)
+	})
+
+	t.Run("zero-value optional fields are omitted", func(t *testing.T) {
+		t.Parallel()
+
+		encoded, err := json.Marshal(Result{})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"comments":"","lgtm":false}`, string(encoded))
 	})
 }
 
@@ -2104,29 +2114,47 @@ func TestReviewDiffWithModel_EmptyResponse(t *testing.T) {
 
 func TestReviewDiffWithModel_JSONParseError(t *testing.T) {
 	t.Parallel()
-	client := newStubClientWithGenerateContent(
-		func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: "not valid json"}},
-				}}},
-			}, nil
-		},
-	)
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		temperature:   0.2,
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{name: "malformed JSON", response: "not valid json"},
+		{
+			name:     "duplicate object name",
+			response: `{"lgtm":true,"lgtm":false,"comments":"ambiguous"}`,
+		},
 	}
 
-	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to parse review response")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			client := newStubClientWithGenerateContent(
+				func(
+					_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+				) (*genai.GenerateContentResponse, error) {
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: &genai.Content{
+							Parts: []*genai.Part{{Text: tt.response}},
+						}}},
+					}, nil
+				},
+			)
+
+			r := &Reviewer{
+				client:        client,
+				modelName:     "test-model",
+				temperature:   0.2,
+				promptManager: prompts.New("", ""),
+				logger:        testutil.NewTestLogger(),
+			}
+
+			_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "failed to parse review response")
+		})
+	}
 }
 
 func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
