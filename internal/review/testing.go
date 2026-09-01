@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ import (
 	"encoding/json/v2"
 
 	"google.golang.org/genai"
+	"msrl.dev/lgtmcp/internal/config"
 	"msrl.dev/lgtmcp/internal/logging"
 	"msrl.dev/lgtmcp/internal/prompts"
 )
@@ -33,7 +34,7 @@ func NewForTesting() *Reviewer {
 	return &Reviewer{
 		client:        newDefaultStubClient(),
 		modelName:     defaultModel,
-		temperature:   0.2,
+		thinkingLevel: thinkingLevelFromConfig(config.DefaultThinkingLevel),
 		promptManager: prompts.New("", ""),
 		logger:        logger,
 	}
@@ -92,7 +93,7 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 	return &Reviewer{
 		client:        newStubClient("Analysis complete for testing.", string(responseJSON)),
 		modelName:     defaultModel,
-		temperature:   0.2,
+		thinkingLevel: thinkingLevelFromConfig(config.DefaultThinkingLevel),
 		retryConfig:   nil, // No retry for testing by default.
 		promptManager: prompts.New("", ""),
 		logger:        logger,

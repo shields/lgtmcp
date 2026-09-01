@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -160,13 +160,13 @@ type Reviewer struct {
 	retryConfig   *config.RetryConfig
 	modelName     string
 	fallbackModel string
-	temperature   float32
+	thinkingLevel genai.ThinkingLevel
 	promptManager *prompts.Manager
 	logger        logging.Logger
 }
 
 const (
-	defaultModel      = "gemini-3.6-flash"
+	defaultModel      = "gemini-3.7-flash"
 	errorKey          = "error"
 	errDeletedFileMsg = "file was deleted or renamed away in this change; the diff records the removal, " +
 		"and a renamed file's content lives at its new path"
@@ -183,15 +183,52 @@ type modelPricing struct {
 	OutputPrice float64 // USD per 1M output tokens
 }
 
-// pricingByModel maps model names to their pricing (≤200K context).
+// pricingByModel maps model names to their standard pricing (≤200K context).
 // Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
 var pricingByModel = map[string]modelPricing{
+	"gemini-3.7-flash":       {InputPrice: 1.50, OutputPrice: 7.50},
 	"gemini-3.6-flash":       {InputPrice: 1.50, OutputPrice: 7.50},
 	"gemini-3.1-pro-preview": {InputPrice: 2.00, OutputPrice: 12.00},
-	"gemini-2.5-pro":         {InputPrice: 1.25, OutputPrice: 10.00},
-	"gemini-2.5-pro-preview": {InputPrice: 1.25, OutputPrice: 10.00},
-	"gemini-2.5-flash":       {InputPrice: 0.30, OutputPrice: 2.50},
-	"gemini-2.5-flash-lite":  {InputPrice: 0.10, OutputPrice: 0.40},
+}
+
+// introductoryPricing is a promotional rate that replaces a model's
+// pricingByModel entry for requests made before Until.
+type introductoryPricing struct {
+	modelPricing
+
+	Until time.Time
+}
+
+// flashIntroductoryPricingEnd is the first instant at which Gemini 3.7 Flash
+// and 3.6 Flash bill at their standard rates. Google's announcement says the
+// introductory pricing runs "through December 31, 2026" without naming a time
+// zone, so the switch is placed at UTC midnight.
+var flashIntroductoryPricingEnd = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+// introductoryPricingByModel records launch pricing that Google announced with
+// an end date (https://ai.google.dev/gemini-api/docs/latest-model). Encoding
+// the schedule keeps cost reporting correct across the boundary with no
+// follow-up change.
+var introductoryPricingByModel = map[string]introductoryPricing{
+	"gemini-3.7-flash": {
+		modelPricing: modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
+		Until:        flashIntroductoryPricingEnd,
+	},
+	"gemini-3.6-flash": {
+		modelPricing: modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
+		Until:        flashIntroductoryPricingEnd,
+	},
+}
+
+// pricingFor returns the pricing in effect for modelName at the instant at,
+// preferring an unexpired introductory rate over the standard one. The boolean
+// is false for models missing from both tables.
+func pricingFor(modelName string, at time.Time) (modelPricing, bool) {
+	if intro, ok := introductoryPricingByModel[modelName]; ok && at.Before(intro.Until) {
+		return intro.modelPricing, true
+	}
+	pricing, ok := pricingByModel[modelName]
+	return pricing, ok
 }
 
 // tokenUsage tracks cumulative token counts across API calls.
@@ -221,11 +258,12 @@ func (t *tokenUsage) total() int32 {
 	return t.PromptTokens + t.CandidatesTokens + t.ToolUseTokens + t.ThoughtsTokens
 }
 
-// cost returns the estimated cost in USD for the given model.
-// Returns -1 if the model is not in the pricing table.
+// cost returns the estimated cost in USD for the given model, priced as of
+// the instant at (see pricingFor). Returns -1 if the model is not in the
+// pricing table.
 // Note: Uses base pricing tier (≤200K context). Large contexts may cost more.
-func (t *tokenUsage) cost(modelName string) float64 {
-	pricing, ok := pricingByModel[modelName]
+func (t *tokenUsage) cost(modelName string, at time.Time) float64 {
+	pricing, ok := pricingFor(modelName, at)
 	if !ok {
 		return -1 // Unknown model
 	}
@@ -247,8 +285,8 @@ func (t *tokenUsage) cost(modelName string) float64 {
 // costWithoutCaching is the baseline cost had no tokens been served from cache:
 // every prompt token billed at the full input rate. It is the reference point
 // for savings(). Returns -1 for unknown models, matching cost().
-func (t *tokenUsage) costWithoutCaching(modelName string) float64 {
-	pricing, ok := pricingByModel[modelName]
+func (t *tokenUsage) costWithoutCaching(modelName string, at time.Time) float64 {
+	pricing, ok := pricingFor(modelName, at)
 	if !ok {
 		return -1
 	}
@@ -260,12 +298,12 @@ func (t *tokenUsage) costWithoutCaching(modelName string) float64 {
 // savings returns the USD saved by (implicit) context caching on this review:
 // the baseline cost minus the actual discounted cost. Returns 0 for unknown
 // models or when nothing was cached.
-func (t *tokenUsage) savings(modelName string) float64 {
-	base := t.costWithoutCaching(modelName)
+func (t *tokenUsage) savings(modelName string, at time.Time) float64 {
+	base := t.costWithoutCaching(modelName, at)
 	if base < 0 {
 		return 0
 	}
-	if s := base - t.cost(modelName); s > 0 {
+	if s := base - t.cost(modelName, at); s > 0 {
 		return s
 	}
 	return 0
@@ -313,18 +351,11 @@ func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 		return nil, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
 
-	// Temperature is a pointer so an explicit 0 is honored; fall back to the
-	// default only when it is genuinely unset (e.g. a hand-built config).
-	temperature := float32(0.2)
-	if cfg.Gemini.Temperature != nil {
-		temperature = *cfg.Gemini.Temperature
-	}
-
 	return &Reviewer{
 		client:        &RealGeminiClient{client: client},
 		modelName:     cfg.Gemini.Model,
 		fallbackModel: cfg.Gemini.FallbackModel,
-		temperature:   temperature,
+		thinkingLevel: thinkingLevelFromConfig(cfg.Gemini.ThinkingLevel),
 		retryConfig:   cfg.Gemini.Retry,
 		promptManager: prompts.New(
 			cfg.Prompts.ReviewPromptPath,
@@ -332,6 +363,20 @@ func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 		),
 		logger: logger,
 	}, nil
+}
+
+// thinkingLevelFromConfig converts the config's lowercase thinking_level into
+// the SDK enum. Empty (a hand-built config; config.Load fills the default)
+// selects config.DefaultThinkingLevel, and config.ThinkingLevelNone yields ""
+// so the parameter is omitted from requests.
+func thinkingLevelFromConfig(level string) genai.ThinkingLevel {
+	if level == "" {
+		level = config.DefaultThinkingLevel
+	}
+	if level == config.ThinkingLevelNone {
+		return ""
+	}
+	return genai.ThinkingLevel(strings.ToUpper(level))
 }
 
 // isRetryableError checks if the error is retryable (rate limit or server errors).
@@ -581,8 +626,9 @@ type modelSpend struct {
 // Token counts are summed for the at-a-glance totals; cost and savings are
 // computed per model, because a quota fallback runs a second model that may
 // price differently from the primary. With a single attempt (the common case)
-// this reproduces that model's own figures.
-func applyAggregateSpend(result *Result, spends []modelSpend) {
+// this reproduces that model's own figures. Prices are taken as of the
+// instant at.
+func applyAggregateSpend(result *Result, spends []modelSpend, at time.Time) {
 	var combined tokenUsage
 	var cost, savings float64
 	var costKnown bool
@@ -592,9 +638,9 @@ func applyAggregateSpend(result *Result, spends []modelSpend) {
 		combined.CachedTokens += s.usage.CachedTokens
 		combined.ThoughtsTokens += s.usage.ThoughtsTokens
 		combined.ToolUseTokens += s.usage.ToolUseTokens
-		if c := s.usage.cost(s.model); c >= 0 {
+		if c := s.usage.cost(s.model, at); c >= 0 {
 			cost += c
-			savings += s.usage.savings(s.model)
+			savings += s.usage.savings(s.model, at)
 			costKnown = true
 		}
 	}
@@ -652,11 +698,21 @@ func (r *Reviewer) ReviewDiff(
 	// Fold the spend from every attempt onto the result and update duration to
 	// reflect total wall-clock time including any fallback attempt.
 	if result != nil {
-		result.DurationMS = time.Since(startTime).Milliseconds()
-		applyAggregateSpend(result, spends)
+		finishedAt := time.Now()
+		result.DurationMS = finishedAt.Sub(startTime).Milliseconds()
+		applyAggregateSpend(result, spends, finishedAt)
 	}
 
 	return result, err
+}
+
+// thinkingConfig returns the ThinkingConfig attached to every request, or nil
+// when no thinking level is set so the model applies its own default.
+func (r *Reviewer) thinkingConfig() *genai.ThinkingConfig {
+	if r.thinkingLevel == "" {
+		return nil
+	}
+	return &genai.ThinkingConfig{ThinkingLevel: r.thinkingLevel}
 }
 
 // reviewDiffWithModel performs a code review using the specified model.
@@ -666,7 +722,6 @@ func (r *Reviewer) reviewDiffWithModel(
 	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string,
 	opts *Options, recordSpend func(model string, usage tokenUsage),
 ) (*Result, error) {
-	startTime := time.Now()
 	// Validate inputs.
 	if diff == "" {
 		return nil, ErrEmptyDiff
@@ -685,6 +740,7 @@ func (r *Reviewer) reviewDiffWithModel(
 			recordSpend(modelName, *usage)
 		}
 		if usage.total() > 0 {
+			pricedAt := time.Now()
 			logArgs := []any{
 				"prompt_tokens", usage.PromptTokens,
 				"candidates_tokens", usage.CandidatesTokens,
@@ -699,10 +755,10 @@ func (r *Reviewer) reviewDiffWithModel(
 			if usage.ToolUseTokens > 0 {
 				logArgs = append(logArgs, "tool_use_tokens", usage.ToolUseTokens)
 			}
-			if cost := usage.cost(modelName); cost >= 0 {
+			if cost := usage.cost(modelName, pricedAt); cost >= 0 {
 				logArgs = append(logArgs, "cost_usd", cost,
-					"cost_usd_uncached", usage.costWithoutCaching(modelName),
-					"cache_savings_usd", usage.savings(modelName),
+					"cost_usd_uncached", usage.costWithoutCaching(modelName, pricedAt),
+					"cache_savings_usd", usage.savings(modelName, pricedAt),
 					"cache_hit_rate", usage.cacheHitRate(),
 					"cache_engaged", usage.CachedTokens > 0)
 			}
@@ -722,7 +778,7 @@ func (r *Reviewer) reviewDiffWithModel(
 					"cached_tokens", usage.CachedTokens,
 					"prompt_tokens", usage.PromptTokens,
 					"hit_rate", usage.cacheHitRate(),
-					"saved_usd", usage.savings(modelName),
+					"saved_usd", usage.savings(modelName, pricedAt),
 					"model", modelName)
 			}
 		}
@@ -743,7 +799,7 @@ func (r *Reviewer) reviewDiffWithModel(
 
 	// Configure the model with tools for context gathering.
 	toolConfig := &genai.GenerateContentConfig{
-		Temperature: &r.temperature,
+		ThinkingConfig: r.thinkingConfig(),
 	}
 
 	// Define the file retrieval tool.
@@ -869,7 +925,7 @@ func (r *Reviewer) reviewDiffWithModel(
 
 	// Configure for structured JSON output without tools.
 	jsonConfig := &genai.GenerateContentConfig{
-		Temperature:      &r.temperature,
+		ThinkingConfig:   r.thinkingConfig(),
 		ResponseMIMEType: "application/json",
 		ResponseSchema: &genai.Schema{
 			Type: genai.TypeObject,
@@ -930,21 +986,10 @@ func (r *Reviewer) reviewDiffWithModel(
 				return nil, fmt.Errorf("failed to parse review response: %w", err)
 			}
 
-			// Add usage statistics to result.
-			result.DurationMS = time.Since(startTime).Milliseconds()
+			// Duration, token usage, and cost are left to ReviewDiff, the
+			// only caller, which prices every attempt (primary plus any
+			// fallback) at one instant via applyAggregateSpend.
 			result.Model = modelName
-			result.TokenUsage = &TokenUsage{
-				PromptTokens:     usage.PromptTokens,
-				CandidatesTokens: usage.CandidatesTokens,
-				TotalTokens:      usage.total(),
-				CachedTokens:     usage.CachedTokens,
-				ThoughtsTokens:   usage.ThoughtsTokens,
-				ToolUseTokens:    usage.ToolUseTokens,
-			}
-			if cost := usage.cost(modelName); cost >= 0 {
-				result.CostUSD = cost
-				result.CacheSavingsUSD = usage.savings(modelName)
-			}
 
 			return &result, nil
 		}

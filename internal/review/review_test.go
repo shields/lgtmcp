@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -35,6 +35,10 @@ import (
 )
 
 var errTest = errors.New("test error")
+
+// testPricingTime is a fixed instant inside the Gemini Flash introductory
+// pricing window, so cost assertions do not depend on the wall clock.
+var testPricingTime = time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
 
 // generateContentFn is a type alias to shorten long function signatures in tests.
 type generateContentFn = func(
@@ -562,7 +566,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses custom model from config", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		cfg.Gemini.Model = "gemini-2.5-flash"
+		cfg.Gemini.Model = "gemini-3.1-pro-preview"
 
 		reviewer, err := New(cfg, testutil.NewTestLogger())
 		require.NoError(t, err)
@@ -572,7 +576,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses default model when not specified", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		// Cfg already has default model set to gemini-3.6-flash.
+		// Cfg already has default model set to gemini-3.7-flash.
 
 		reviewer, err := New(cfg, testutil.NewTestLogger())
 		require.NoError(t, err)
@@ -834,7 +838,6 @@ func TestReviewDiff_ErrorCases(t *testing.T) {
 				},
 			},
 			modelName:     "gemini-3.1-pro-preview",
-			temperature:   0.2,
 			promptManager: prompts.New("", ""),
 			logger:        testutil.NewTestLogger(),
 		}
@@ -1490,6 +1493,7 @@ func TestTokenUsage(t *testing.T) {
 		tests := []struct {
 			name             string
 			modelName        string
+			at               time.Time // Zero means testPricingTime.
 			promptTokens     int32
 			candidatesTokens int32
 			thoughtsTokens   int32
@@ -1533,18 +1537,19 @@ func TestTokenUsage(t *testing.T) {
 				expectedCost:     0.032,
 			},
 			{
-				name:             "flash-lite model pricing",
-				modelName:        "gemini-2.5-flash-lite",
-				promptTokens:     1_000_000, // 1M input = $0.10
-				candidatesTokens: 1_000_000, // 1M output = $0.40
-				expectedCost:     0.50,
+				name:             "gemini-3.7-flash introductory pricing",
+				modelName:        "gemini-3.7-flash",
+				promptTokens:     1_000_000, // 1M input = $0.75
+				candidatesTokens: 1_000_000, // 1M output = $3.75
+				expectedCost:     4.50,
 			},
 			{
-				name:             "gemini-2.5-flash pricing",
-				modelName:        "gemini-2.5-flash",
-				promptTokens:     1_000_000, // 1M input = $0.30
-				candidatesTokens: 1_000_000, // 1M output = $2.50
-				expectedCost:     2.80,
+				name:             "gemini-3.7-flash standard pricing once the introductory period ends",
+				modelName:        "gemini-3.7-flash",
+				at:               flashIntroductoryPricingEnd,
+				promptTokens:     1_000_000, // 1M input = $1.50
+				candidatesTokens: 1_000_000, // 1M output = $7.50
+				expectedCost:     9.00,
 			},
 			{
 				name:             "unknown model returns -1",
@@ -1601,7 +1606,11 @@ func TestTokenUsage(t *testing.T) {
 					ToolUseTokens:    tt.toolUseTokens,
 				}
 
-				cost := usage.cost(tt.modelName)
+				at := tt.at
+				if at.IsZero() {
+					at = testPricingTime
+				}
+				cost := usage.cost(tt.modelName, at)
 				assert.InDelta(t, tt.expectedCost, cost, 0.0001,
 					"cost should be approximately $%.4f", tt.expectedCost)
 			})
@@ -1612,23 +1621,23 @@ func TestTokenUsage(t *testing.T) {
 		t.Parallel()
 		usage := &tokenUsage{PromptTokens: 1_000_000, CachedTokens: 400_000}
 		// All prompt tokens billed at the full input rate, no discount.
-		assert.InDelta(t, 2.00, usage.costWithoutCaching("gemini-3.1-pro-preview"), 0.0001)
+		assert.InDelta(t, 2.00, usage.costWithoutCaching("gemini-3.1-pro-preview", testPricingTime), 0.0001)
 		// Unknown model returns -1, matching cost().
-		assert.InDelta(t, -1.0, usage.costWithoutCaching("unknown-model"), 0.0001)
+		assert.InDelta(t, -1.0, usage.costWithoutCaching("unknown-model", testPricingTime), 0.0001)
 	})
 
 	t.Run("savings is baseline minus actual", func(t *testing.T) {
 		t.Parallel()
 		// 400K cached of 1M prompt: baseline $2.00, actual $1.28, saved $0.72.
 		usage := &tokenUsage{PromptTokens: 1_000_000, CachedTokens: 400_000}
-		assert.InDelta(t, 0.72, usage.savings("gemini-3.1-pro-preview"), 0.0001)
+		assert.InDelta(t, 0.72, usage.savings("gemini-3.1-pro-preview", testPricingTime), 0.0001)
 
 		// No cached tokens: nothing saved.
 		noCache := &tokenUsage{PromptTokens: 1_000_000}
-		assert.InDelta(t, 0.0, noCache.savings("gemini-3.1-pro-preview"), 0.0001)
+		assert.InDelta(t, 0.0, noCache.savings("gemini-3.1-pro-preview", testPricingTime), 0.0001)
 
 		// Unknown model: zero, not a negative number.
-		assert.InDelta(t, 0.0, usage.savings("unknown-model"), 0.0001)
+		assert.InDelta(t, 0.0, usage.savings("unknown-model", testPricingTime), 0.0001)
 	})
 
 	t.Run("cacheHitRate is cached over prompt", func(t *testing.T) {
@@ -1851,7 +1860,6 @@ func TestReviewDiff_FallbackOnQuota(t *testing.T) {
 		client:        client,
 		modelName:     "primary-model",
 		fallbackModel: "fallback-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -1914,8 +1922,7 @@ func TestReviewDiff_FallbackAggregatesSpend(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "gemini-3.1-pro-preview",
-		fallbackModel: "gemini-2.5-pro",
-		temperature:   0.2,
+		fallbackModel: "gemini-3.7-flash",
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -1928,12 +1935,14 @@ func TestReviewDiff_FallbackAggregatesSpend(t *testing.T) {
 	// Phase 1 (100) and Phase 2 (200); candidates come from the fallback only.
 	assert.Equal(t, int32(400), result.TokenUsage.PromptTokens)
 	assert.Equal(t, int32(80), result.TokenUsage.CandidatesTokens)
-	assert.Equal(t, "gemini-2.5-pro", result.Model)
+	assert.Equal(t, "gemini-3.7-flash", result.Model)
 
 	// Cost folds the primary attempt's spend (priced at the primary model's
-	// rate) into the fallback's, so it exceeds the fallback-only cost.
-	primaryOnly := (&tokenUsage{PromptTokens: 100}).cost("gemini-3.1-pro-preview")
-	fallbackOnly := (&tokenUsage{PromptTokens: 300, CandidatesTokens: 80}).cost("gemini-2.5-pro")
+	// rate) into the fallback's, so it exceeds the fallback-only cost. The
+	// expected figures are priced at the wall clock, as ReviewDiff does.
+	now := time.Now()
+	primaryOnly := (&tokenUsage{PromptTokens: 100}).cost("gemini-3.1-pro-preview", now)
+	fallbackOnly := (&tokenUsage{PromptTokens: 300, CandidatesTokens: 80}).cost("gemini-3.7-flash", now)
 	assert.InDelta(t, primaryOnly+fallbackOnly, result.CostUSD, 1e-9)
 	assert.Greater(t, result.CostUSD, fallbackOnly)
 }
@@ -1950,7 +1959,6 @@ func TestReviewDiff_FallbackNone(t *testing.T) {
 		client:        client,
 		modelName:     "primary-model",
 		fallbackModel: config.FallbackModelNone,
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -1972,7 +1980,6 @@ func TestReviewDiff_FallbackSameModel(t *testing.T) {
 		client:        client,
 		modelName:     "same-model",
 		fallbackModel: "same-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -1993,7 +2000,6 @@ func TestReviewDiffWithModel_NoResponse(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2019,7 +2025,6 @@ func TestReviewDiffWithModel_NilContentReviewPhase(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2057,7 +2062,6 @@ func TestReviewDiffWithModel_NilContentContextPhase(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2103,7 +2107,6 @@ func TestReviewDiffWithModel_EmptyResponse(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2145,7 +2148,6 @@ func TestReviewDiffWithModel_JSONParseError(t *testing.T) {
 			r := &Reviewer{
 				client:        client,
 				modelName:     "test-model",
-				temperature:   0.2,
 				promptManager: prompts.New("", ""),
 				logger:        testutil.NewTestLogger(),
 			}
@@ -2204,7 +2206,6 @@ func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2231,7 +2232,6 @@ func TestReviewDiffWithModel_ChatCreationError(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2256,7 +2256,6 @@ func TestReviewDiffWithModel_InitialPromptError(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2277,7 +2276,6 @@ func TestReviewDiffWithModel_ReviewPromptError(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2413,7 +2411,6 @@ func TestReviewDiffWithModel_TokenUsage(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "gemini-3.1-pro-preview",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2635,7 +2632,6 @@ func TestReviewDiffWithModel_ParallelFunctionCalls(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2692,7 +2688,6 @@ func TestReviewDiffWithModel_ToolTurnLimit(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2721,7 +2716,6 @@ func TestReviewDiff_NoFallbackWhenUnset(t *testing.T) {
 		client:        client,
 		modelName:     "primary-model",
 		fallbackModel: "",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2770,7 +2764,6 @@ func TestReviewDiffWithModel_ThoughtPartNotCapturedAsAnalysis(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2803,7 +2796,6 @@ func TestReviewDiffWithModel_ThoughtPartSkippedInReviewPhase(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		temperature:   0.2,
 		promptManager: prompts.New("", ""),
 		logger:        testutil.NewTestLogger(),
 	}
@@ -2812,4 +2804,225 @@ func TestReviewDiffWithModel_ThoughtPartSkippedInReviewPhase(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.LGTM)
 	assert.Equal(t, "OK", result.Comments)
+}
+
+// TestNew_ThinkingLevel verifies the config's thinking_level reaches the
+// Reviewer as the SDK enum, with the same default config.Load applies.
+func TestNew_ThinkingLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		configured string
+		want       genai.ThinkingLevel
+	}{
+		{name: "config value maps to the SDK enum", configured: "low", want: genai.ThinkingLevelLow},
+		{name: "unset defaults to high", configured: "", want: genai.ThinkingLevelHigh},
+		{name: "none omits the level", configured: config.ThinkingLevelNone, want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := config.NewTestConfig()
+			cfg.Gemini.ThinkingLevel = tt.configured
+
+			reviewer, err := New(cfg, testutil.NewTestLogger())
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, reviewer.thinkingLevel)
+		})
+	}
+}
+
+// TestReviewDiff_ThinkingConfig verifies the thinking level is attached to
+// both the Phase 1 tool-calling chat and the Phase 2 structured-output
+// request, and that an unset level omits ThinkingConfig entirely so the
+// model's own default applies.
+func TestReviewDiff_ThinkingConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		level genai.ThinkingLevel
+		want  *genai.ThinkingConfig
+	}{
+		{
+			name:  "configured level is sent to both phases",
+			level: genai.ThinkingLevelHigh,
+			want:  &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh},
+		},
+		{
+			name:  "unset level omits the config",
+			level: "",
+			want:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var chatConfig, generateConfig *genai.GenerateContentConfig
+			client := &StubGeminiClient{
+				CreateChatFunc: func(_ context.Context, _ string, cfg *genai.GenerateContentConfig) (GeminiChat, error) {
+					chatConfig = cfg
+					return &StubGeminiChat{}, nil
+				},
+				GenerateContentFunc: func(
+					_ context.Context, _ string, _ []*genai.Content, cfg *genai.GenerateContentConfig,
+				) (*genai.GenerateContentResponse, error) {
+					generateConfig = cfg
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: &genai.Content{
+							Parts: []*genai.Part{{Text: stubReviewJSON}},
+						}}},
+					}, nil
+				},
+			}
+
+			r := &Reviewer{
+				client:        client,
+				modelName:     "test-model",
+				thinkingLevel: tt.level,
+				promptManager: prompts.New("", ""),
+				logger:        testutil.NewTestLogger(),
+			}
+
+			_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+			require.NoError(t, err)
+			require.NotNil(t, chatConfig)
+			require.NotNil(t, generateConfig)
+			assert.Equal(t, tt.want, chatConfig.ThinkingConfig)
+			assert.Equal(t, tt.want, generateConfig.ThinkingConfig)
+		})
+	}
+}
+
+// TestPricingFor verifies introductory rates apply only before their end
+// instant and that models without one always bill at the standard rate.
+func TestPricingFor(t *testing.T) {
+	t.Parallel()
+
+	before := flashIntroductoryPricingEnd.Add(-time.Second)
+	tests := []struct {
+		name  string
+		model string
+		at    time.Time
+		want  modelPricing
+		known bool
+	}{
+		{
+			name:  "introductory rate before the cutoff",
+			model: "gemini-3.7-flash",
+			at:    before,
+			want:  modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
+			known: true,
+		},
+		{
+			name:  "standard rate from the cutoff instant",
+			model: "gemini-3.7-flash",
+			at:    flashIntroductoryPricingEnd,
+			want:  modelPricing{InputPrice: 1.50, OutputPrice: 7.50},
+			known: true,
+		},
+		{
+			name:  "3.6 flash shares the introductory rate",
+			model: "gemini-3.6-flash",
+			at:    before,
+			want:  modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
+			known: true,
+		},
+		{
+			name:  "model without an introductory rate",
+			model: "gemini-3.1-pro-preview",
+			at:    before,
+			want:  modelPricing{InputPrice: 2.00, OutputPrice: 12.00},
+			known: true,
+		},
+		{
+			name:  "unknown model",
+			model: "unknown-model",
+			at:    before,
+			known: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, known := pricingFor(tt.model, tt.at)
+			assert.Equal(t, tt.known, known)
+			assert.InDelta(t, tt.want.InputPrice, got.InputPrice, 1e-9)
+			assert.InDelta(t, tt.want.OutputPrice, got.OutputPrice, 1e-9)
+		})
+	}
+}
+
+// TestReviewDiff_FallbackCarriesThinkingConfig verifies the documented
+// contract that a quota-triggered fallback attempt sends the same thinking
+// level as the primary attempt, on both request phases.
+func TestReviewDiff_FallbackCarriesThinkingConfig(t *testing.T) {
+	t.Parallel()
+
+	want := &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh}
+	chatConfigs := map[string]*genai.GenerateContentConfig{}
+	generateConfigs := map[string]*genai.GenerateContentConfig{}
+	client := &StubGeminiClient{
+		CreateChatFunc: func(_ context.Context, model string, cfg *genai.GenerateContentConfig) (GeminiChat, error) {
+			chatConfigs[model] = cfg
+			return &StubGeminiChat{}, nil
+		},
+		GenerateContentFunc: func(
+			_ context.Context, model string, _ []*genai.Content, cfg *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			generateConfigs[model] = cfg
+			if model == "primary-model" {
+				return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+					Code:    http.StatusTooManyRequests,
+					Message: "Quota exceeded",
+					Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}},
+				})
+			}
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{Content: &genai.Content{
+					Parts: []*genai.Part{{Text: stubReviewJSON}},
+				}}},
+			}, nil
+		},
+	}
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "primary-model",
+		fallbackModel: "fallback-model",
+		thinkingLevel: genai.ThinkingLevelHigh,
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+	require.NoError(t, err)
+	assert.Equal(t, "fallback-model", result.Model)
+	for _, model := range []string{"primary-model", "fallback-model"} {
+		require.Contains(t, chatConfigs, model)
+		require.Contains(t, generateConfigs, model)
+		assert.Equal(t, want, chatConfigs[model].ThinkingConfig, "phase 1 config for %s", model)
+		assert.Equal(t, want, generateConfigs[model].ThinkingConfig, "phase 2 config for %s", model)
+	}
+}
+
+// TestApplyAggregateSpend_PricesAsOfInstant verifies the aggregation wrapper
+// prices each model's spend as of the instant it is given, so a review is
+// billed at the rate in effect when it finished.
+func TestApplyAggregateSpend_PricesAsOfInstant(t *testing.T) {
+	t.Parallel()
+
+	spends := []modelSpend{{model: "gemini-3.7-flash", usage: tokenUsage{PromptTokens: 1_000_000}}}
+
+	introductory := &Result{}
+	applyAggregateSpend(introductory, spends, flashIntroductoryPricingEnd.Add(-time.Second))
+	assert.InDelta(t, 0.75, introductory.CostUSD, 1e-9)
+
+	standard := &Result{}
+	applyAggregateSpend(standard, spends, flashIntroductoryPricingEnd)
+	assert.InDelta(t, 1.50, standard.CostUSD, 1e-9)
 }

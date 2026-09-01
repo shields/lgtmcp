@@ -39,14 +39,14 @@ If you ever genuinely need a raw `git commit` (e.g., emergency recovery), make t
 
 ## Overview
 
-LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.6 Flash and either commits them (if approved) or returns review comments. Setup, configuration, usage, and troubleshooting are covered in `README.md`; every configuration option is documented in `config.example.yaml`.
+LGTMCP is a Model Context Protocol server that reviews code changes using Google Gemini 3.7 Flash and either commits them (if approved) or returns review comments. Setup, configuration, usage, and troubleshooting are covered in `README.md`; every configuration option is documented in `config.example.yaml`.
 
 **Note**: The `mcp__lgtmcp__` tools may run a different version than this repository. Always test with actual code.
 
 ## Architecture
 
 - **MCP Server** (`pkg/mcp/`) - Protocol implementation using mark3labs/mcp-go
-- **Review Engine** (`internal/review/`) - Gemini 3.6 Flash integration with file retrieval
+- **Review Engine** (`internal/review/`) - Gemini 3.7 Flash integration with file retrieval
 - **Git Operations** (`internal/git/`) - Diff generation, commit management, instruction file discovery
 - **Security** (`internal/security/`) - Gitleaks v8 for secret detection
 - **Prompts** (`internal/prompts/`) - Customizable review prompts with embedded defaults
@@ -85,16 +85,17 @@ Implementation details live in doc comments on the functions named below; these 
 
 - **MCP error semantics** (`pkg/mcp/server.go`): following MCP guidance that tool-execution failures belong inside the result object, only malformed requests (non-object arguments, a non-string `directory` or `commit_message`) return protocol-level Go errors; every failure while the tool runs is an in-band `IsError` result the model can read and react to. A detected secret and "no changes to review" are non-error results — findings, not failures. The per-case classification is commented in `server.go` and asserted by `assertInBandToolError` in the tests.
 - **New-file diff synthesis** (`writeNewFileDiff`/`gitFileMode`/`newFileForDiff` in `internal/git/git.go`): synthesized blocks match real `git diff` byte-for-byte; see the doc comments. One cross-file guarantee: an empty new file's header-only block (no hunk) still registers in `security.ExtractChangedFilesDetailed`, which keys off the `diff --git` header, so `review_and_commit`'s diff-derived staging list commits empty new files instead of dropping them.
-- **Context caching** (`internal/review/review.go`): only Gemini's implicit caching is used; explicit caches (`Caches.Create`) were deliberately rejected because, at one review at a time, the hourly storage floor plus per-cache create overhead exceed the read discount — explicit caching would lose money. Implicit caching engages across Phase 1's tool-calling loop (the growing history, including the diff, is resent each turn) and never fires on prompts below the model's minimum (4096 tokens for `gemini-3.6-flash`) — expected, not a bug.
+- **Context caching** (`internal/review/review.go`): only Gemini's implicit caching is used; explicit caches (`Caches.Create`) were deliberately rejected because, at one review at a time, the hourly storage floor plus per-cache create overhead exceed the read discount — explicit caching would lose money. Implicit caching engages across Phase 1's tool-calling loop (the growing history, including the diff, is resent each turn) and never fires on prompts below the model's minimum (4096 tokens for `gemini-3.7-flash`) — expected, not a bug.
 - **Response footer** (`formatUsageFooter` in `pkg/mcp/server.go`): `formatCount` hand-rolls thousands separators rather than using `golang.org/x/text/message`, deliberately keeping `x/text` an indirect-only dependency; the footer is always ASCII English, so locale-aware formatting isn't needed.
 - **Gemini API constraint**: function calling and Google Search grounding cannot be combined in one request. The review's `get_file_content` tool already relies on function calling, so a search-grounded review would require a redesign.
+- **No sampling parameters**: `temperature`, `top_p`, and `top_k` are deliberately not sent (a `temperature` option was removed in 2026). Gemini 3 models do not support them — Google's Gemini 3.7 Flash migration checklist says to strip them — so `thinking_level` is the review's only generation knob.
 
 ## Technical Choices
 
 - **Go**: Single binary, excellent performance, native git ops
 - **mark3labs/mcp-go**: Most mature MCP implementation
 - **Gitleaks v8**: MIT licensed, embedded library (no subprocess)
-- **Gemini 3.6 Flash**: Fast, capable model for code understanding
+- **Gemini 3.7 Flash**: Fast, capable model for code understanding
 
 ## Why the git CLI (not go-git)
 

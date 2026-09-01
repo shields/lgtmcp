@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strings"
 
 	"sigs.k8s.io/yaml"
 )
@@ -37,6 +39,10 @@ var ErrPathTraversal = errors.New("path contains parent-directory segments")
 // ErrPathOutsideBase indicates a config-supplied absolute path is not under
 // the allowed base directory.
 var ErrPathOutsideBase = errors.New("absolute path is outside the allowed directory")
+
+// ErrInvalidThinkingLevel indicates gemini.thinking_level is not one of the
+// accepted values.
+var ErrInvalidThinkingLevel = errors.New("invalid gemini.thinking_level")
 
 const defaultMaxBackoff = "60s"
 
@@ -119,15 +125,29 @@ type RetryConfig struct {
 // FallbackModelNone disables quota fallback when set as FallbackModel.
 const FallbackModelNone = "none"
 
+// ThinkingLevelNone omits the thinking_level parameter from requests when set
+// as ThinkingLevel, so the model applies its own default.
+const ThinkingLevelNone = "none"
+
+// DefaultThinkingLevel is the ThinkingLevel Load applies when the key is
+// unset. review.New applies the same default to hand-built configs.
+const DefaultThinkingLevel = "high"
+
+// validThinkingLevels are the accepted ThinkingLevel values: ThinkingLevelNone
+// plus the Gemini thinking_level enum in lowercase. Whether a given model
+// supports a level (gemini-3.7-flash rejects "minimal") is enforced by the API
+// at request time, not here.
+var validThinkingLevels = []string{ThinkingLevelNone, "minimal", "low", "medium", "high"}
+
 // GeminiConfig represents Gemini model configuration.
 type GeminiConfig struct {
 	Retry         *RetryConfig `json:"retry,omitempty"`
 	Model         string       `json:"model"`
 	FallbackModel string       `json:"fallback_model,omitempty"`
-	// Temperature is the sampling temperature. Use a pointer to distinguish
-	// unset (nil = default 0.2) from an explicit 0, which requests fully
-	// deterministic output.
-	Temperature *float32 `json:"temperature,omitempty"`
+	// ThinkingLevel is the Gemini thinking_level sent with every request:
+	// "minimal", "low", "medium", "high", or ThinkingLevelNone to omit it.
+	// Load defaults it to DefaultThinkingLevel.
+	ThinkingLevel string `json:"thinking_level,omitempty"`
 }
 
 // Config represents the application configuration.
@@ -169,13 +189,17 @@ func Load() (*Config, error) {
 
 	// Set defaults.
 	if cfg.Gemini.Model == "" {
-		cfg.Gemini.Model = "gemini-3.6-flash"
+		cfg.Gemini.Model = "gemini-3.7-flash"
 	}
 	if cfg.Gemini.FallbackModel == "" {
 		cfg.Gemini.FallbackModel = FallbackModelNone
 	}
-	if cfg.Gemini.Temperature == nil {
-		cfg.Gemini.Temperature = new(float32(0.2))
+	if cfg.Gemini.ThinkingLevel == "" {
+		cfg.Gemini.ThinkingLevel = DefaultThinkingLevel
+	}
+	if !slices.Contains(validThinkingLevels, cfg.Gemini.ThinkingLevel) {
+		return nil, fmt.Errorf("%w: %q (expected one of: %s)",
+			ErrInvalidThinkingLevel, cfg.Gemini.ThinkingLevel, strings.Join(validThinkingLevels, ", "))
 	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
@@ -331,8 +355,8 @@ func NewTestConfig() *Config {
 			APIKey: "test-api-key",
 		},
 		Gemini: GeminiConfig{
-			Model:       "gemini-3.6-flash",
-			Temperature: new(float32(0.2)),
+			Model:         "gemini-3.7-flash",
+			ThinkingLevel: DefaultThinkingLevel,
 			Retry: &RetryConfig{
 				MaxRetries:        new(5),
 				InitialBackoff:    "1s",

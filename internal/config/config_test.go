@@ -150,7 +150,8 @@ google:
 		cfg, err := Load()
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
-		assert.Equal(t, "gemini-3.6-flash", cfg.Gemini.Model) // Default.
+		assert.Equal(t, "gemini-3.7-flash", cfg.Gemini.Model) // Default.
+		assert.Equal(t, "high", cfg.Gemini.ThinkingLevel)     // Default.
 		assert.Equal(t, "info", cfg.Logging.Level)            // Default.
 	})
 
@@ -324,48 +325,54 @@ gemini:
 	assert.InDelta(t, 1.4, cfg.Gemini.Retry.BackoffMultiplier, 0.01)
 }
 
-// TestLoad_TemperatureZero verifies an explicit temperature of 0 is honored
-// (fully deterministic output) rather than silently bumped to the 0.2 default.
-func TestLoad_TemperatureZero(t *testing.T) {
+// writeGeminiConfig writes a config whose gemini section is geminiSection into
+// a temporary XDG_CONFIG_HOME and returns that directory for t.Setenv.
+func writeGeminiConfig(t *testing.T, geminiSection string) string {
+	t.Helper()
 	tmpDir := t.TempDir()
 	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
 	require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
-
-	configContent := `
-google:
-  api_key: "test-api-key"
-gemini:
-  temperature: 0
-`
-	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"), []byte(configContent), 0o600))
-
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
-
-	cfg, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, cfg.Gemini.Temperature)
-	assert.InDelta(t, 0.0, *cfg.Gemini.Temperature, 0.0001)
+	content := "google:\n  api_key: \"test-api-key\"\n" + geminiSection
+	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"), []byte(content), 0o600))
+	return tmpDir
 }
 
-// TestLoad_TemperatureUnset verifies that omitting temperature falls back to
-// the 0.2 default.
-func TestLoad_TemperatureUnset(t *testing.T) {
-	tmpDir := t.TempDir()
-	lgtmcpDir := filepath.Join(tmpDir, "lgtmcp")
-	require.NoError(t, os.MkdirAll(lgtmcpDir, 0o750))
+// TestLoad_ThinkingLevel verifies thinking_level defaults to high, accepts the
+// documented values verbatim, and rejects anything else at load time.
+func TestLoad_ThinkingLevel(t *testing.T) {
+	t.Run("defaults to high", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, ""))
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "high", cfg.Gemini.ThinkingLevel)
+	})
 
-	configContent := `
-google:
-  api_key: "test-api-key"
-`
-	require.NoError(t, os.WriteFile(filepath.Join(lgtmcpDir, "config.yaml"), []byte(configContent), 0o600))
+	t.Run("explicit level is honored", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, "gemini:\n  thinking_level: low\n"))
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "low", cfg.Gemini.ThinkingLevel)
+	})
 
-	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Run("none is accepted", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, "gemini:\n  thinking_level: none\n"))
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, ThinkingLevelNone, cfg.Gemini.ThinkingLevel)
+	})
 
-	cfg, err := Load()
-	require.NoError(t, err)
-	require.NotNil(t, cfg.Gemini.Temperature)
-	assert.InDelta(t, 0.2, *cfg.Gemini.Temperature, 0.01)
+	t.Run("unknown value is rejected", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, "gemini:\n  thinking_level: extreme\n"))
+		_, err := Load()
+		require.ErrorIs(t, err, ErrInvalidThinkingLevel)
+		assert.ErrorContains(t, err, `"extreme"`)
+	})
+
+	t.Run("values are case-sensitive", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, "gemini:\n  thinking_level: HIGH\n"))
+		_, err := Load()
+		require.ErrorIs(t, err, ErrInvalidThinkingLevel)
+	})
 }
 
 // TestLoad_MaxRetriesZero verifies an explicit max_retries of 0 is honored
@@ -396,9 +403,8 @@ func TestNewTestConfig(t *testing.T) {
 	t.Parallel()
 	cfg := NewTestConfig()
 	assert.Equal(t, "test-api-key", cfg.Google.APIKey)
-	assert.Equal(t, "gemini-3.6-flash", cfg.Gemini.Model)
-	require.NotNil(t, cfg.Gemini.Temperature)
-	assert.InDelta(t, 0.2, *cfg.Gemini.Temperature, 0.01)
+	assert.Equal(t, "gemini-3.7-flash", cfg.Gemini.Model)
+	assert.Equal(t, "high", cfg.Gemini.ThinkingLevel)
 	assert.NotNil(t, cfg.Gemini.Retry)
 	require.NotNil(t, cfg.Gemini.Retry.MaxRetries)
 	assert.Equal(t, 5, *cfg.Gemini.Retry.MaxRetries)

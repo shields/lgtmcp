@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -720,12 +720,12 @@ func TestFormatReviewResponse(t *testing.T) {
 		result := &review.Result{
 			LGTM:     true,
 			Comments: "LGTM",
-			Model:    "gemini-3.6-flash",
+			Model:    "gemini-3.7-flash",
 		}
 
 		response := formatReviewResponse(result, "")
 		assert.Contains(t, response, "---")
-		assert.Contains(t, response, "Model: gemini-3.6-flash")
+		assert.Contains(t, response, "Model: gemini-3.7-flash")
 		// With no token usage the second footer line is dropped entirely.
 		assert.NotContains(t, response, "Tokens:")
 		assert.NotContains(t, response, "Cached:")
@@ -783,7 +783,7 @@ func TestFormatReviewResponse(t *testing.T) {
 				TotalTokens:      15000,
 			},
 			CostUSD: 0.05,
-			Model:   "gemini-3.6-flash",
+			Model:   "gemini-3.7-flash",
 		}
 
 		response := formatReviewResponse(result, "")
@@ -792,7 +792,7 @@ func TestFormatReviewResponse(t *testing.T) {
 		_, footer, ok := strings.Cut(response, "\n\n---\n")
 		require.True(t, ok, "response should carry a usage footer")
 		assert.Equal(t,
-			"Model: gemini-3.6-flash · Duration: 15.0 s · Cost: $0.05\n"+
+			"Model: gemini-3.7-flash · Duration: 15.0 s · Cost: $0.05\n"+
 				"Tokens: 15,000 (in: 12,000, out: 3,000) · Cached: 0 (no hit)",
 			footer)
 	})
