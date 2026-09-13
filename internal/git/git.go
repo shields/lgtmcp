@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -32,8 +32,13 @@ import (
 )
 
 const (
-	// gitCommandTimeout is the maximum duration for a git command to complete.
+	// gitCommandTimeout bounds the plumbing commands lgtmcp runs for itself.
 	gitCommandTimeout = 30 * time.Second
+	// gitCommitTimeout bounds `git commit`, the one command that also runs the
+	// repository's own hooks. A pre-commit lane that lints, type-checks, or
+	// tests a large tree legitimately runs for minutes, and how long it runs
+	// is the repository's decision, not lgtmcp's.
+	gitCommitTimeout = 10 * time.Minute
 )
 
 var (
@@ -61,6 +66,7 @@ var (
 type Git struct {
 	repoPath         string
 	diffContextLines int
+	commitTimeout    time.Duration
 }
 
 // New creates a new Git instance for the given repository path.
@@ -83,6 +89,7 @@ func New(repoPath string, cfg *config.GitConfig) (*Git, error) {
 	return &Git{
 		repoPath:         absPath,
 		diffContextLines: contextLines,
+		commitTimeout:    gitCommitTimeout,
 	}, nil
 }
 
@@ -93,7 +100,9 @@ func (g *Git) GetDiff(ctx context.Context) (string, error) {
 	// does not (unborn branch). Anything else — a real git failure, not an
 	// initial commit — must surface as an error rather than mislabel the
 	// whole repository as new files.
-	res, err := runGit(ctx, g.repoPath, nil, nil, "rev-parse", "--verify", "--quiet", "HEAD")
+	res, err := runGit(
+		ctx, gitCommandTimeout, g.repoPath, nil, nil, "rev-parse", "--verify", "--quiet", "HEAD",
+	)
 	if err != nil {
 		return "", fmt.Errorf("failed to check for HEAD: %w", err)
 	}
@@ -359,7 +368,7 @@ func (g *Git) StageFiles(ctx context.Context, files []string) error {
 	}
 
 	if _, err := g.runGitCommandStdin(
-		ctx, &stdin, []string{"GIT_LITERAL_PATHSPECS=1"},
+		ctx, gitCommandTimeout, &stdin, []string{"GIT_LITERAL_PATHSPECS=1"},
 		"add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
 	); err != nil {
 		return fmt.Errorf("failed to stage files: %w", err)
@@ -384,8 +393,12 @@ func (g *Git) Commit(ctx context.Context, message string) (string, error) {
 		return "", ErrNoChanges
 	}
 
-	// Commit with the provided message.
-	if _, commitErr := g.runGitCommand(ctx, "commit", "-m", message); commitErr != nil {
+	// Commit with the provided message. This is the command that runs the
+	// repository's hooks, so it gets the commit bound rather than the
+	// plumbing one.
+	if _, commitErr := g.runGitCommandStdin(
+		ctx, g.commitTimeout, nil, nil, "commit", "-m", message,
+	); commitErr != nil {
 		return "", fmt.Errorf("failed to commit: %w", commitErr)
 	}
 
@@ -590,13 +603,13 @@ func (g *Git) newFileForDiff(relativePath string) (string, os.FileMode, error) {
 }
 
 func (g *Git) runGitCommand(ctx context.Context, args ...string) (string, error) {
-	return g.runGitCommandStdin(ctx, nil, nil, args...)
+	return g.runGitCommandStdin(ctx, gitCommandTimeout, nil, nil, args...)
 }
 
 func (g *Git) runGitCommandStdin(
-	ctx context.Context, stdin io.Reader, extraEnv []string, args ...string,
+	ctx context.Context, timeout time.Duration, stdin io.Reader, extraEnv []string, args ...string,
 ) (string, error) {
-	res, err := runGit(ctx, g.repoPath, stdin, extraEnv, args...)
+	res, err := runGit(ctx, timeout, g.repoPath, stdin, extraEnv, args...)
 	if err != nil {
 		if errors.Is(err, ErrCommandTimeout) {
 			return "", err
@@ -633,7 +646,7 @@ func (g *Git) runGitCommandStdin(
 // repository or ignore file when lgtmcp runs inside another git process such as a
 // pre-commit hook.
 func IsIgnored(ctx context.Context, repoPath, relativePath string) (bool, error) {
-	res, err := runGit(ctx, repoPath, nil, nil, "check-ignore", "--", relativePath)
+	res, err := runGit(ctx, gitCommandTimeout, repoPath, nil, nil, "check-ignore", "--", relativePath)
 	if err != nil {
 		return false, fmt.Errorf("failed to execute git check-ignore: %w", err)
 	}
@@ -660,7 +673,7 @@ type gitResult struct {
 	exitCode int
 }
 
-// runGit runs git in repoPath with a sanitized environment and the standard
+// runGit runs git in repoPath with a sanitized environment and the given
 // timeout, returning the command's stdout, stderr, and process exit code. All
 // GIT_* variables are stripped so the command operates on repoPath rather than
 // being redirected by an inherited GIT_DIR/GIT_INDEX_FILE/GIT_AUTHOR_* (which
@@ -670,9 +683,14 @@ type gitResult struct {
 // on deadline, the underlying exec error when git cannot be started, or the
 // signal error when git is killed instead of exiting (exitCode -1).
 func runGit(
-	ctx context.Context, repoPath string, stdin io.Reader, extraEnv []string, args ...string,
+	ctx context.Context,
+	timeout time.Duration,
+	repoPath string,
+	stdin io.Reader,
+	extraEnv []string,
+	args ...string,
 ) (gitResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitCommandTimeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // args are constructed internally, not from user input

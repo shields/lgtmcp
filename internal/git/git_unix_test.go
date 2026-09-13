@@ -178,7 +178,7 @@ func TestRunGit_SignalKilledSurfacesSignal(t *testing.T) {
 	require.NoError(t, os.WriteFile(fakeGit, []byte("#!/bin/sh\nkill -SEGV $$\n"), 0o755))
 	t.Setenv("PATH", binDir)
 
-	res, err := runGit(t.Context(), t.TempDir(), nil, nil, "status")
+	res, err := runGit(t.Context(), gitCommandTimeout, t.TempDir(), nil, nil, "status")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "signal")
 	assert.Equal(t, -1, res.exitCode)

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1282,6 +1283,29 @@ func TestStageFiles_Error(t *testing.T) {
 	err = g.StageFiles(t.Context(), []string{"file.txt"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to stage files")
+}
+
+func TestCommit_HookRunsUnderTheCommitTimeout(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, tmpDir, "file.txt", "content")
+	testutil.RunGitCmd(t, tmpDir, "add", "file.txt")
+	hooksDir := filepath.Join(tmpDir, "hooks")
+	require.NoError(t, os.MkdirAll(hooksDir, 0o700))
+	hook := filepath.Join(hooksDir, "pre-commit")
+	require.NoError(t, os.WriteFile(hook, []byte("#!/bin/sh\nsleep 5\n"), 0o700)) //nolint:gosec // an executable hook
+	testutil.RunGitCmd(t, tmpDir, "config", "core.hooksPath", hooksDir)
+
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+	// A commit runs the repository's hooks, so it is bounded on its own,
+	// well above the plumbing commands.
+	assert.Equal(t, gitCommitTimeout, g.commitTimeout)
+	assert.Greater(t, g.commitTimeout, gitCommandTimeout)
+
+	g.commitTimeout = 200 * time.Millisecond
+	_, err = g.Commit(t.Context(), "slow hook")
+	require.ErrorIs(t, err, ErrCommandTimeout)
 }
 
 func TestCommit_StatusError(t *testing.T) {
