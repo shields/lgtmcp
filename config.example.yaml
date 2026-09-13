@@ -37,11 +37,11 @@ google:
 # Model configuration
 gemini:
   # Model to use for code review
-  # Default: gemini-3.7-flash
-  model: "gemini-3.7-flash"
+  # Default: gemini-3.8-flash
+  model: "gemini-3.8-flash"
 
   # Thinking level: how much reasoning the model does before answering.
-  # One of minimal, low, medium, or high (gemini-3.7-flash accepts only low,
+  # One of minimal, low, medium, or high (gemini-3.8-flash accepts only low,
   # medium, and high), or none to omit the parameter and let the model apply
   # its own default. Thinking tokens are billed as output tokens.
   # Default: high (the most thorough review)
@@ -50,7 +50,7 @@ gemini:
   # Fallback model to use when primary model quota is exhausted
   # Only triggered on QuotaFailure errors (daily limit exceeded),
   # not on rate limiting (which uses retry with backoff)
-  # Default: none (disabled). gemini-3.7-flash is generally available with
+  # Default: none (disabled). gemini-3.8-flash is generally available with
   # generous daily limits, so a fallback is rarely needed. Uncomment and set
   # a model name (e.g. gemini-3.1-pro-preview) to enable a safety net. The
   # fallback receives the same thinking_level.

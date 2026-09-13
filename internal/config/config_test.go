@@ -150,7 +150,7 @@ google:
 		cfg, err := Load()
 		require.NoError(t, err)
 		assert.NotNil(t, cfg)
-		assert.Equal(t, "gemini-3.7-flash", cfg.Gemini.Model) // Default.
+		assert.Equal(t, "gemini-3.8-flash", cfg.Gemini.Model) // Default.
 		assert.Equal(t, "high", cfg.Gemini.ThinkingLevel)     // Default.
 		assert.Equal(t, "info", cfg.Logging.Level)            // Default.
 	})
@@ -403,7 +403,7 @@ func TestNewTestConfig(t *testing.T) {
 	t.Parallel()
 	cfg := NewTestConfig()
 	assert.Equal(t, "test-api-key", cfg.Google.APIKey)
-	assert.Equal(t, "gemini-3.7-flash", cfg.Gemini.Model)
+	assert.Equal(t, "gemini-3.8-flash", cfg.Gemini.Model)
 	assert.Equal(t, "high", cfg.Gemini.ThinkingLevel)
 	assert.NotNil(t, cfg.Gemini.Retry)
 	require.NotNil(t, cfg.Gemini.Retry.MaxRetries)
