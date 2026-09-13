@@ -318,6 +318,40 @@ func TestHandleFileRetrieval_GitEnvLeak(t *testing.T) {
 	assert.Equal(t, "normal content", allowed.FunctionResponse.Response["content"])
 }
 
+// TestHandleFileRetrieval_EchoesCallID verifies every function response,
+// success or error, carries the call's ID and name so the API can match the
+// response to its call, as Gemini 3 requires.
+func TestHandleFileRetrieval_EchoesCallID(t *testing.T) {
+	t.Parallel()
+
+	repoDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "ok.txt"), []byte("ok"), 0o600))
+
+	tests := []struct {
+		name    string
+		args    map[string]any
+		wantKey string
+	}{
+		{name: "successful read", args: map[string]any{"filepath": "ok.txt"}, wantKey: "content"},
+		{name: "error response", args: map[string]any{"filepath": 42}, wantKey: errorKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			part := (&Reviewer{}).handleFileRetrieval(t.Context(), &genai.FunctionCall{
+				ID:   "call-123",
+				Name: "get_file_content",
+				Args: tt.args,
+			}, repoDir, nil)
+			require.NotNil(t, part.FunctionResponse)
+			assert.Equal(t, "call-123", part.FunctionResponse.ID)
+			assert.Equal(t, "get_file_content", part.FunctionResponse.Name)
+			assert.Contains(t, part.FunctionResponse.Response, tt.wantKey)
+		})
+	}
+}
+
 type fileRetrievalTest struct {
 	name          string
 	filepath      string
@@ -576,7 +610,7 @@ func TestNew(t *testing.T) {
 	t.Run("uses default model when not specified", func(t *testing.T) {
 		t.Parallel()
 		cfg := config.NewTestConfig()
-		// Cfg already has default model set to gemini-3.7-flash.
+		// Cfg already has default model set to gemini-3.8-flash.
 
 		reviewer, err := New(cfg, testutil.NewTestLogger())
 		require.NoError(t, err)
@@ -1537,15 +1571,15 @@ func TestTokenUsage(t *testing.T) {
 				expectedCost:     0.032,
 			},
 			{
-				name:             "gemini-3.7-flash introductory pricing",
-				modelName:        "gemini-3.7-flash",
+				name:             "gemini-3.8-flash introductory pricing",
+				modelName:        "gemini-3.8-flash",
 				promptTokens:     1_000_000, // 1M input = $0.75
 				candidatesTokens: 1_000_000, // 1M output = $3.75
 				expectedCost:     4.50,
 			},
 			{
-				name:             "gemini-3.7-flash standard pricing once the introductory period ends",
-				modelName:        "gemini-3.7-flash",
+				name:             "gemini-3.8-flash standard pricing once the introductory period ends",
+				modelName:        "gemini-3.8-flash",
 				at:               flashIntroductoryPricingEnd,
 				promptTokens:     1_000_000, // 1M input = $1.50
 				candidatesTokens: 1_000_000, // 1M output = $7.50
@@ -2912,16 +2946,23 @@ func TestPricingFor(t *testing.T) {
 	}{
 		{
 			name:  "introductory rate before the cutoff",
-			model: "gemini-3.7-flash",
+			model: "gemini-3.8-flash",
 			at:    before,
 			want:  modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
 			known: true,
 		},
 		{
 			name:  "standard rate from the cutoff instant",
-			model: "gemini-3.7-flash",
+			model: "gemini-3.8-flash",
 			at:    flashIntroductoryPricingEnd,
 			want:  modelPricing{InputPrice: 1.50, OutputPrice: 7.50},
+			known: true,
+		},
+		{
+			name:  "3.7 flash shares the introductory rate",
+			model: "gemini-3.7-flash",
+			at:    before,
+			want:  modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
 			known: true,
 		},
 		{
@@ -3016,7 +3057,7 @@ func TestReviewDiff_FallbackCarriesThinkingConfig(t *testing.T) {
 func TestApplyAggregateSpend_PricesAsOfInstant(t *testing.T) {
 	t.Parallel()
 
-	spends := []modelSpend{{model: "gemini-3.7-flash", usage: tokenUsage{PromptTokens: 1_000_000}}}
+	spends := []modelSpend{{model: "gemini-3.8-flash", usage: tokenUsage{PromptTokens: 1_000_000}}}
 
 	introductory := &Result{}
 	applyAggregateSpend(introductory, spends, flashIntroductoryPricingEnd.Add(-time.Second))

@@ -33,7 +33,7 @@ func NewForTesting() *Reviewer {
 	}
 	return &Reviewer{
 		client:        newDefaultStubClient(),
-		modelName:     defaultModel,
+		modelName:     config.DefaultModel,
 		thinkingLevel: thinkingLevelFromConfig(config.DefaultThinkingLevel),
 		promptManager: prompts.New("", ""),
 		logger:        logger,
@@ -92,7 +92,7 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 	}
 	return &Reviewer{
 		client:        newStubClient("Analysis complete for testing.", string(responseJSON)),
-		modelName:     defaultModel,
+		modelName:     config.DefaultModel,
 		thinkingLevel: thinkingLevelFromConfig(config.DefaultThinkingLevel),
 		retryConfig:   nil, // No retry for testing by default.
 		promptManager: prompts.New("", ""),

@@ -133,9 +133,15 @@ const ThinkingLevelNone = "none"
 // unset. review.New applies the same default to hand-built configs.
 const DefaultThinkingLevel = "high"
 
+// DefaultModel is the Gemini model Load applies when the key is unset.
+// internal/review's test helpers (NewForTesting, WithStubResponse) apply the
+// same default to hand-built Reviewers, so this is the single place a model
+// bump needs to change instead of three independently maintained literals.
+const DefaultModel = "gemini-3.8-flash"
+
 // validThinkingLevels are the accepted ThinkingLevel values: ThinkingLevelNone
 // plus the Gemini thinking_level enum in lowercase. Whether a given model
-// supports a level (gemini-3.7-flash rejects "minimal") is enforced by the API
+// supports a level (gemini-3.8-flash rejects "minimal") is enforced by the API
 // at request time, not here.
 var validThinkingLevels = []string{ThinkingLevelNone, "minimal", "low", "medium", "high"}
 
@@ -189,7 +195,7 @@ func Load() (*Config, error) {
 
 	// Set defaults.
 	if cfg.Gemini.Model == "" {
-		cfg.Gemini.Model = "gemini-3.7-flash"
+		cfg.Gemini.Model = DefaultModel
 	}
 	if cfg.Gemini.FallbackModel == "" {
 		cfg.Gemini.FallbackModel = FallbackModelNone
@@ -355,7 +361,7 @@ func NewTestConfig() *Config {
 			APIKey: "test-api-key",
 		},
 		Gemini: GeminiConfig{
-			Model:         "gemini-3.7-flash",
+			Model:         DefaultModel,
 			ThinkingLevel: DefaultThinkingLevel,
 			Retry: &RetryConfig{
 				MaxRetries:        new(5),

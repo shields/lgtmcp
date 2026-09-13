@@ -166,7 +166,6 @@ type Reviewer struct {
 }
 
 const (
-	defaultModel      = "gemini-3.7-flash"
 	errorKey          = "error"
 	errDeletedFileMsg = "file was deleted or renamed away in this change; the diff records the removal, " +
 		"and a renamed file's content lives at its new path"
@@ -183,11 +182,22 @@ type modelPricing struct {
 	OutputPrice float64 // USD per 1M output tokens
 }
 
+// flashStandardPricing and flashIntroPricing are the standard and promotional
+// per-million-token rates shared by every Gemini Flash model released under
+// this pricing generation (3.6, 3.7, 3.8 so far). Defining them once means a
+// price change, or a new Flash release at the same rates, is a single edit
+// instead of synchronized copies across both maps below.
+var (
+	flashStandardPricing = modelPricing{InputPrice: 1.50, OutputPrice: 7.50}
+	flashIntroPricing    = modelPricing{InputPrice: 0.75, OutputPrice: 3.75}
+)
+
 // pricingByModel maps model names to their standard pricing (≤200K context).
 // Pricing from https://ai.google.dev/gemini-api/docs/pricing (no API available).
 var pricingByModel = map[string]modelPricing{
-	"gemini-3.7-flash":       {InputPrice: 1.50, OutputPrice: 7.50},
-	"gemini-3.6-flash":       {InputPrice: 1.50, OutputPrice: 7.50},
+	"gemini-3.8-flash":       flashStandardPricing,
+	"gemini-3.7-flash":       flashStandardPricing,
+	"gemini-3.6-flash":       flashStandardPricing,
 	"gemini-3.1-pro-preview": {InputPrice: 2.00, OutputPrice: 12.00},
 }
 
@@ -199,8 +209,8 @@ type introductoryPricing struct {
 	Until time.Time
 }
 
-// flashIntroductoryPricingEnd is the first instant at which Gemini 3.7 Flash
-// and 3.6 Flash bill at their standard rates. Google's announcement says the
+// flashIntroductoryPricingEnd is the first instant at which Gemini 3.8, 3.7,
+// and 3.6 Flash bill at their standard rates. Google's announcements say the
 // introductory pricing runs "through December 31, 2026" without naming a time
 // zone, so the switch is placed at UTC midnight.
 var flashIntroductoryPricingEnd = time.Date(2027, time.January, 1, 0, 0, 0, 0, time.UTC)
@@ -210,14 +220,9 @@ var flashIntroductoryPricingEnd = time.Date(2027, time.January, 1, 0, 0, 0, 0, t
 // the schedule keeps cost reporting correct across the boundary with no
 // follow-up change.
 var introductoryPricingByModel = map[string]introductoryPricing{
-	"gemini-3.7-flash": {
-		modelPricing: modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
-		Until:        flashIntroductoryPricingEnd,
-	},
-	"gemini-3.6-flash": {
-		modelPricing: modelPricing{InputPrice: 0.75, OutputPrice: 3.75},
-		Until:        flashIntroductoryPricingEnd,
-	},
+	"gemini-3.8-flash": {modelPricing: flashIntroPricing, Until: flashIntroductoryPricingEnd},
+	"gemini-3.7-flash": {modelPricing: flashIntroPricing, Until: flashIntroductoryPricingEnd},
+	"gemini-3.6-flash": {modelPricing: flashIntroPricing, Until: flashIntroductoryPricingEnd},
 }
 
 // pricingFor returns the pricing in effect for modelName at the instant at,
@@ -998,6 +1003,29 @@ func (r *Reviewer) reviewDiffWithModel(
 	return nil, ErrEmptyResponse
 }
 
+// newFunctionResponse builds the Part answering funcCall. Unlike
+// genai.NewPartFromFunctionResponse it echoes the call's ID alongside its
+// name: Google's Gemini 3 function-calling checklist requires generateContent
+// function responses to carry the matching call ID, and the SDK helper drops
+// it. An empty ID is omitted from the request, as before.
+func newFunctionResponse(funcCall *genai.FunctionCall, response map[string]any) *genai.Part {
+	return &genai.Part{
+		FunctionResponse: &genai.FunctionResponse{
+			ID:       funcCall.ID,
+			Name:     funcCall.Name,
+			Response: response,
+		},
+	}
+}
+
+// errorResponse builds the Part answering funcCall with an error message,
+// formatted as fmt.Sprintf(format, args...). It collapses the
+// map[string]any{errorKey: ...} boilerplate every failure branch in
+// handleFileRetrieval below would otherwise repeat.
+func errorResponse(funcCall *genai.FunctionCall, format string, args ...any) *genai.Part {
+	return newFunctionResponse(funcCall, map[string]any{errorKey: fmt.Sprintf(format, args...)})
+}
+
 // handleFileRetrieval handles file retrieval tool calls from Gemini. The
 // deleted set contains paths the caller has identified as deletions in the
 // diff under review; requests for those paths return a clear deleted-file
@@ -1008,31 +1036,18 @@ func (*Reviewer) handleFileRetrieval(
 	// Extract the filepath argument.
 	requestedPath, ok := funcCall.Args["filepath"].(string)
 	if !ok {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: "filepath parameter must be a string",
-			},
-		)
+		return errorResponse(funcCall, "filepath parameter must be a string")
 	}
 
 	// Short-circuit deletions so the model gets a deletion-specific message
 	// instead of a generic ENOENT it might think is transient.
 	if deleted[filepath.Clean(requestedPath)] {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{errorKey: errDeletedFileMsg},
-		)
+		return errorResponse(funcCall, errDeletedFileMsg)
 	}
 
 	// Validate and resolve the file path.
 	if strings.Contains(requestedPath, "..") {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: "invalid filepath: path traversal not allowed",
-			},
-		)
+		return errorResponse(funcCall, "invalid filepath: path traversal not allowed")
 	}
 
 	// Clean and join the path.
@@ -1042,53 +1057,28 @@ func (*Reviewer) handleFileRetrieval(
 	// This prevents symlink attacks and other path traversal techniques.
 	absPath, err := filepath.Abs(fullPath)
 	if err != nil {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("failed to resolve path: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "failed to resolve path: %v", err)
 	}
 
 	absRepoPath, err := filepath.Abs(repoPath)
 	if err != nil {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("failed to resolve repository path: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "failed to resolve repository path: %v", err)
 	}
 
 	// First check if the path (before symlink resolution) is within the repository
 	// This handles the case where the file doesn't exist yet.
 	if !strings.HasPrefix(absPath, absRepoPath+string(filepath.Separator)) && absPath != absRepoPath {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: "access denied: path is outside repository",
-			},
-		)
+		return errorResponse(funcCall, "access denied: path is outside repository")
 	}
 
 	// SECURITY CHECK: Check if file is gitignored
 	isIgnored, err := git.IsIgnored(ctx, repoPath, requestedPath)
 	if err != nil {
 		// Fail closed on any error for security
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("access denied: unable to verify gitignore status: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "access denied: unable to verify gitignore status: %v", err)
 	}
 	if isIgnored {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: "access denied: file is gitignored",
-			},
-		)
+		return errorResponse(funcCall, "access denied: file is gitignored")
 	}
 
 	// git check-ignore matches the requested name only, while the rooted open
@@ -1106,43 +1096,21 @@ func (*Reviewer) handleFileRetrieval(
 		// unresolved root would misreport every file as outside the repo.
 		resolvedRepo, repoErr := filepath.EvalSymlinks(absRepoPath)
 		if repoErr != nil {
-			return genai.NewPartFromFunctionResponse(
-				funcCall.Name,
-				map[string]any{
-					errorKey: fmt.Sprintf("failed to resolve repository path: %v", repoErr),
-				},
-			)
+			return errorResponse(funcCall, "failed to resolve repository path: %v", repoErr)
 		}
 		relResolved, relErr := filepath.Rel(resolvedRepo, resolved)
 		if relErr != nil || relResolved == ".." ||
 			strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
-			return genai.NewPartFromFunctionResponse(
-				funcCall.Name,
-				map[string]any{
-					errorKey: "access denied: path is outside repository",
-				},
-			)
+			return errorResponse(funcCall, "access denied: path is outside repository")
 		}
 		if relResolved != filepath.Clean(requestedPath) {
 			targetIgnored, targetErr := git.IsIgnored(ctx, repoPath, relResolved)
 			if targetErr != nil {
 				// Fail closed on any error for security.
-				return genai.NewPartFromFunctionResponse(
-					funcCall.Name,
-					map[string]any{
-						errorKey: fmt.Sprintf(
-							"access denied: unable to verify gitignore status: %v", targetErr,
-						),
-					},
-				)
+				return errorResponse(funcCall, "access denied: unable to verify gitignore status: %v", targetErr)
 			}
 			if targetIgnored {
-				return genai.NewPartFromFunctionResponse(
-					funcCall.Name,
-					map[string]any{
-						errorKey: "access denied: file is gitignored",
-					},
-				)
+				return errorResponse(funcCall, "access denied: file is gitignored")
 			}
 		}
 	}
@@ -1159,12 +1127,7 @@ func (*Reviewer) handleFileRetrieval(
 	// repo, which we never want to read).
 	root, err := os.OpenRoot(repoPath)
 	if err != nil {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("failed to open repository: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "failed to open repository: %v", err)
 	}
 	defer root.Close() //nolint:errcheck // read-only handle, close error is inconsequential
 
@@ -1172,31 +1135,16 @@ func (*Reviewer) handleFileRetrieval(
 	relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
 	f, err := root.OpenFile(relPath, os.O_RDONLY|openNonblockFlag, 0)
 	if err != nil {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("failed to read file: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "failed to read file: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only file, close error is inconsequential
 
 	openedInfo, err := f.Stat()
 	if err != nil {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("failed to stat opened file: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "failed to stat opened file: %v", err)
 	}
 	if !openedInfo.Mode().IsRegular() {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: "access denied: not a regular file",
-			},
-		)
+		return errorResponse(funcCall, "access denied: not a regular file")
 	}
 
 	// Bound the read so an attacker (or a runaway request from the model)
@@ -1206,24 +1154,14 @@ func (*Reviewer) handleFileRetrieval(
 	limited := io.LimitReader(f, maxRetrievedFileSize+1)
 	content, err := io.ReadAll(limited)
 	if err != nil {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("failed to read file: %v", err),
-			},
-		)
+		return errorResponse(funcCall, "failed to read file: %v", err)
 	}
 	if int64(len(content)) > maxRetrievedFileSize {
-		return genai.NewPartFromFunctionResponse(
-			funcCall.Name,
-			map[string]any{
-				errorKey: fmt.Sprintf("file too large: exceeds %d bytes", maxRetrievedFileSize),
-			},
-		)
+		return errorResponse(funcCall, "file too large: exceeds %d bytes", maxRetrievedFileSize)
 	}
 
-	return genai.NewPartFromFunctionResponse(
-		funcCall.Name,
+	return newFunctionResponse(
+		funcCall,
 		map[string]any{
 			"content": string(content),
 		},
