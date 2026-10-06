@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"msrl.dev/lgtmcp/internal/appinfo"
@@ -31,7 +32,11 @@ import (
 	mcpserver "msrl.dev/lgtmcp/pkg/mcp"
 )
 
-var versionFlag = flag.Bool("version", false, "Show version information")
+var (
+	versionFlag = flag.Bool("version", false, "Show version information")
+	toolsFlag   = flag.String("tools", strings.Join(mcpserver.AllTools(), ","),
+		"Comma-separated list of MCP tools to enable")
+)
 
 func main() {
 	flag.Parse()
@@ -39,9 +44,26 @@ func main() {
 }
 
 func run() int {
+	// The flag package stops at the first non-flag argument, so a flag after
+	// one (such as -tools) would be silently ignored.
+	if flag.NArg() > 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "lgtmcp: unexpected argument %q (lgtmcp takes only flags)\n", flag.Arg(0))
+
+		return 2
+	}
+
 	if *versionFlag {
 		_, _ = fmt.Fprintln(os.Stdout, appinfo.String()) //nolint:errcheck // stdout write failure is not actionable
 		return 0
+	}
+
+	// Validate before loading config or opening logs so a typo is reported on
+	// stderr, not buried in a log file.
+	tools, err := mcpserver.ParseTools(*toolsFlag)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "lgtmcp: invalid -tools: %v\n", err)
+
+		return 1
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,7 +120,7 @@ func run() int {
 	}()
 
 	// Create server.
-	server, err := mcpserver.New(cfg, appLogger)
+	server, err := mcpserver.New(cfg, appLogger, mcpserver.WithTools(tools...))
 	if err != nil {
 		appLogger.Error("Error creating server", "error", err)
 

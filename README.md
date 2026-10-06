@@ -115,11 +115,18 @@ safety net. The fallback receives the same `thinking_level`.
 claude mcp add lgtmcp -- lgtmcp
 ```
 
+To expose only some of the tools (see [Enabling tools](#enabling-tools)), add
+the `-tools` flag to that command instead:
+
+```bash
+claude mcp add lgtmcp -- lgtmcp -tools review_only
+```
+
 ## Usage
 
 ### Basic Usage
 
-The MCP server exposes two tools:
+By default the MCP server exposes two tools:
 
 #### `review_only`
 
@@ -138,6 +145,20 @@ you can set tool permissions on it differently from `review`.
 
 - `directory`: Path to the git repository
 - `commit_message`: Message for the commit if approved
+
+### Enabling tools
+
+The `-tools` command-line flag takes a comma-separated list of the tools to
+expose. It defaults to both: `-tools review_only,review_and_commit`. To make the
+server unable to commit at all, rather than relying on tool permissions, enable
+only the reviewer:
+
+```bash
+lgtmcp -tools review_only
+```
+
+Tools that are not listed are not advertised to the client and cannot be
+called. An unknown tool name, or an empty list, is an error at startup.
 
 ### Example Workflows
 
@@ -173,7 +194,9 @@ review prompt. Files are deduplicated and sorted root-first (shallowest depth fi
 
 ## Configuration
 
-All configuration is managed through the YAML configuration file located at:
+All configuration except the set of enabled tools (the `-tools` flag; see
+[Enabling tools](#enabling-tools)) is managed through the YAML configuration
+file located at:
 
 - `$XDG_CONFIG_HOME/lgtmcp/config.yaml` (if XDG_CONFIG_HOME is set)
 - `~/.config/lgtmcp/config.yaml` (default)

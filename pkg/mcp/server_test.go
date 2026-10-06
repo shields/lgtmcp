@@ -16,9 +16,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -240,6 +243,197 @@ func TestRegisterTools(t *testing.T) {
 			server.registerTools()
 		})
 	})
+}
+
+func TestParseTools(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		spec    string
+		want    []string
+		wantErr error
+	}{
+		{"both", "review_only,review_and_commit", []string{"review_only", "review_and_commit"}, nil},
+		{"review only", "review_only", []string{"review_only"}, nil},
+		{"review and commit only", "review_and_commit", []string{"review_and_commit"}, nil},
+		{"order preserved", "review_and_commit,review_only", []string{"review_and_commit", "review_only"}, nil},
+		{"whitespace trimmed", " review_only , review_and_commit ", []string{"review_only", "review_and_commit"}, nil},
+		{"duplicates collapsed", "review_only,review_only", []string{"review_only"}, nil},
+		{"empty", "", nil, ErrNoTools},
+		{"blank", "  ", nil, ErrNoTools},
+		{"unknown", "bogus", nil, ErrUnknownTool},
+		{"known and unknown", "review_only,bogus", nil, ErrUnknownTool},
+		{"trailing comma", "review_only,", nil, ErrUnknownTool},
+		{"hyphenated name", "review-only", nil, ErrUnknownTool},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseTools(tt.spec)
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+				assert.Nil(t, got)
+
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+
+	t.Run("unknown tool error names the valid tools", func(t *testing.T) {
+		t.Parallel()
+		_, err := ParseTools("bogus")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), `"bogus"`)
+		assert.Contains(t, err.Error(), "review_only, review_and_commit")
+	})
+}
+
+func TestAllTools(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, []string{ToolReviewOnly, ToolReviewAndCommit}, AllTools())
+
+	tools := AllTools()
+	tools[0] = "mutated"
+	assert.Equal(t, ToolReviewOnly, AllTools()[0])
+}
+
+func registeredTools(s *Server) []string {
+	return slices.Sorted(maps.Keys(s.mcpServer.ListTools()))
+}
+
+func TestRegisterTools_EnabledSet(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		tools []string
+		want  []string
+	}{
+		{"both", []string{ToolReviewOnly, ToolReviewAndCommit}, []string{ToolReviewAndCommit, ToolReviewOnly}},
+		{"review only", []string{ToolReviewOnly}, []string{ToolReviewOnly}},
+		{"review and commit only", []string{ToolReviewAndCommit}, []string{ToolReviewAndCommit}},
+		{"none", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := &Server{mcpServer: mcpsrv.NewMCPServer("lgtmcp", "test"), tools: tt.tools}
+			s.registerTools()
+			assert.Equal(t, tt.want, registeredTools(s))
+		})
+	}
+}
+
+func TestRegisterTools_EveryValidatedNameRegisters(t *testing.T) {
+	t.Parallel()
+	for _, name := range AllTools() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := &Server{mcpServer: mcpsrv.NewMCPServer("lgtmcp", "test"), tools: []string{name}}
+			s.registerTools()
+			assert.Equal(t, []string{name}, registeredTools(s))
+		})
+	}
+}
+
+func TestNewForTesting_RegistersAllTools(t *testing.T) {
+	t.Parallel()
+	s := newForTesting(config.NewTestConfig(), testutil.NewTestLogger(), nil, nil)
+	assert.Equal(t, slices.Sorted(slices.Values(AllTools())), registeredTools(s))
+}
+
+func TestNew_Tools(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unknown tool is rejected", func(t *testing.T) {
+		t.Parallel()
+		server, err := New(config.NewTestConfig(), testutil.NewTestLogger(), WithTools("bogus"))
+		require.ErrorIs(t, err, ErrUnknownTool)
+		assert.Nil(t, server)
+	})
+
+	t.Run("empty list is rejected", func(t *testing.T) {
+		t.Parallel()
+		server, err := New(config.NewTestConfig(), testutil.NewTestLogger(), WithTools())
+		require.ErrorIs(t, err, ErrNoTools)
+		assert.Nil(t, server)
+	})
+
+	t.Run("default enables every tool", func(t *testing.T) {
+		t.Parallel()
+		server, err := New(config.NewTestConfig(), testutil.NewTestLogger())
+		require.NoError(t, err)
+		assert.Equal(t, []string{ToolReviewAndCommit, ToolReviewOnly}, registeredTools(server))
+	})
+
+	t.Run("WithTools restricts the registered tools", func(t *testing.T) {
+		t.Parallel()
+		server, err := New(config.NewTestConfig(), testutil.NewTestLogger(), WithTools(" review_only", "review_only "))
+		require.NoError(t, err)
+		assert.Equal(t, []string{ToolReviewOnly}, registeredTools(server))
+	})
+}
+
+func TestDisabledToolIsNotCallable(t *testing.T) {
+	t.Parallel()
+	s := &Server{mcpServer: mcpsrv.NewMCPServer("lgtmcp", "test"), tools: []string{ToolReviewOnly}}
+	s.registerTools()
+
+	list := s.mcpServer.HandleMessage(t.Context(),
+		[]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+	listResp, ok := list.(mcp.JSONRPCResponse)
+	require.True(t, ok, "expected a JSON-RPC response, got %T", list)
+	listed, ok := listResp.Result.(mcp.ListToolsResult)
+	require.True(t, ok, "expected a tool list, got %T", listResp.Result)
+	require.Len(t, listed.Tools, 1)
+	assert.Equal(t, ToolReviewOnly, listed.Tools[0].Name)
+
+	call := s.mcpServer.HandleMessage(t.Context(), []byte(
+		`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"review_and_commit",`+
+			`"arguments":{"directory":"/","commit_message":"x"}}}`))
+	callErr, ok := call.(mcp.JSONRPCError)
+	require.True(t, ok, "expected a JSON-RPC error, got %T", call)
+	assert.Equal(t, mcp.INVALID_PARAMS, callErr.Error.Code)
+	assert.Contains(t, callErr.Error.Message, "not found")
+}
+
+func TestRegisteredToolsRouteToTheirHandlers(t *testing.T) {
+	t.Parallel()
+	s, dir := createTestServer(t)
+
+	testutil.CreateFile(t, dir, "file.go", "package main\n")
+	testutil.RunGitCmd(t, dir, "add", ".")
+	testutil.RunGitCmd(t, dir, "commit", "-m", "initial")
+	testutil.CreateFile(t, dir, "file.go", "package main\n\nfunc main() {}\n")
+	head := func() string { return strings.TrimSpace(testutil.RunGitCmd(t, dir, "rev-parse", "HEAD")) }
+	initial := head()
+
+	callTool := func(name string, arguments map[string]any) string {
+		t.Helper()
+		message, err := json.Marshal(map[string]any{
+			"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+			"params": map[string]any{"name": name, "arguments": arguments},
+		})
+		require.NoError(t, err)
+		resp, ok := s.mcpServer.HandleMessage(t.Context(), message).(mcp.JSONRPCResponse)
+		require.True(t, ok, "tools/call %s did not return a JSON-RPC response", name)
+		result, ok := resp.Result.(*mcp.CallToolResult)
+		require.True(t, ok, "expected a tool result, got %T", resp.Result)
+		require.Len(t, result.Content, 1)
+		text, ok := result.Content[0].(mcp.TextContent)
+		require.True(t, ok, "expected text content, got %T", result.Content[0])
+
+		return text.Text
+	}
+
+	text := callTool(ToolReviewOnly, map[string]any{"directory": dir})
+	assert.Contains(t, text, "APPROVED")
+	assert.Equal(t, initial, head(), "review_only must not commit")
+
+	text = callTool(ToolReviewAndCommit, map[string]any{"directory": dir, "commit_message": "test commit"})
+	assert.Contains(t, text, "committed successfully")
+	assert.NotEqual(t, initial, head(), "review_and_commit must commit")
 }
 
 func TestRun(t *testing.T) {

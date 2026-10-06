@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,16 @@ var (
 	ErrInvalidArguments = errors.New("invalid arguments format")
 	// ErrCommitMessageNotString indicates commit_message argument is not a string.
 	ErrCommitMessageNotString = errors.New("commit_message must be a string")
+	// ErrNoTools indicates that the set of enabled tools is empty.
+	ErrNoTools = errors.New("no tools enabled")
+	// ErrUnknownTool indicates a tool name the server does not offer.
+	ErrUnknownTool = errors.New("unknown tool")
+)
+
+// Names of the tools the server can expose.
+const (
+	ToolReviewOnly      = "review_only"
+	ToolReviewAndCommit = "review_and_commit"
 )
 
 const (
@@ -56,6 +67,53 @@ const (
 	footerSeparator = " · "
 )
 
+// AllTools returns the names of every tool the server offers. They are all
+// enabled unless [WithTools] says otherwise.
+func AllTools() []string {
+	return []string{ToolReviewOnly, ToolReviewAndCommit}
+}
+
+// ParseTools parses a comma-separated list of tool names, such as the value of
+// a command-line flag, into a validated, de-duplicated list. It returns
+// [ErrNoTools] for an empty list and [ErrUnknownTool] for a name that is not
+// one of [AllTools].
+func ParseTools(spec string) ([]string, error) {
+	if strings.TrimSpace(spec) == "" {
+		return nil, ErrNoTools
+	}
+
+	return normalizeTools(strings.Split(spec, ","))
+}
+
+func normalizeTools(names []string) ([]string, error) {
+	known := AllTools()
+	var tools []string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if !slices.Contains(known, name) {
+			return nil, fmt.Errorf("%w: %q (expected one or more of: %s)",
+				ErrUnknownTool, name, strings.Join(known, ", "))
+		}
+		if !slices.Contains(tools, name) {
+			tools = append(tools, name)
+		}
+	}
+	if len(tools) == 0 {
+		return nil, ErrNoTools
+	}
+
+	return tools, nil
+}
+
+// Option configures a [Server] created by [New].
+type Option func(*Server)
+
+// WithTools restricts the server to the named tools; the default is
+// [AllTools]. [New] rejects an empty list or an unknown name.
+func WithTools(tools ...string) Option {
+	return func(s *Server) { s.tools = tools }
+}
+
 // Server implements the MCP server for LGTMCP.
 type Server struct {
 	mcpServer *server.MCPServer
@@ -64,10 +122,27 @@ type Server struct {
 	logger    logging.Logger
 	config    *config.Config
 	serveFunc func(*server.MCPServer, ...server.StdioOption) error
+	tools     []string
 }
 
 // New creates a new MCP server instance.
-func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
+func New(cfg *config.Config, logger logging.Logger, opts ...Option) (*Server, error) {
+	s := &Server{
+		logger:    logger,
+		config:    cfg,
+		serveFunc: server.ServeStdio,
+		tools:     AllTools(),
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	tools, err := normalizeTools(s.tools)
+	if err != nil {
+		return nil, err
+	}
+	s.tools = tools
+
 	// Create MCP server with stdio transport. The version reported during MCP
 	// initialization is the build version injected via ldflags, matching
 	// the --version flag.
@@ -76,37 +151,27 @@ func New(cfg *config.Config, logger logging.Logger) (*Server, error) {
 	// ("mcp" output); otherwise the server emits no notifications/message and
 	// claiming the capability would mislead the client. main builds the matching
 	// LogSender and binds it via BindLogSender once this server exists.
-	var opts []server.ServerOption
+	var serverOpts []server.ServerOption
 	if cfg.Logging.Output == "mcp" {
-		opts = append(opts, server.WithLogging())
+		serverOpts = append(serverOpts, server.WithLogging())
 	}
-	mcpServer := server.NewMCPServer(
+	s.mcpServer = server.NewMCPServer(
 		"lgtmcp",
 		appinfo.Version,
-		opts...,
+		serverOpts...,
 	)
 
 	// Initialize components.
-	reviewer, err := review.New(cfg, logger)
+	s.reviewer, err = review.New(cfg, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reviewer: %w", err)
 	}
 
-	scanner, err := security.New(cfg.Gitleaks.Config)
+	s.scanner, err = security.New(cfg.Gitleaks.Config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create security scanner: %w", err)
 	}
 
-	s := &Server{
-		mcpServer: mcpServer,
-		reviewer:  reviewer,
-		scanner:   scanner,
-		logger:    logger,
-		config:    cfg,
-		serveFunc: server.ServeStdio,
-	}
-
-	// Register the review_only and review_and_commit tools.
 	s.registerTools()
 
 	return s, nil
@@ -124,6 +189,7 @@ func newForTesting(cfg *config.Config, logger logging.Logger, reviewer *review.R
 		logger:    logger,
 		config:    cfg,
 		serveFunc: server.ServeStdio,
+		tools:     AllTools(),
 	}
 	s.registerTools()
 	return s
@@ -137,11 +203,18 @@ func (s *Server) BindLogSender(ls *LogSender) {
 	ls.Bind(s.mcpServer)
 }
 
-// registerTools registers all MCP tools.
 func (s *Server) registerTools() { //nolint:funcorder // Helper method
-	// Register review_only tool.
+	if slices.Contains(s.tools, ToolReviewOnly) {
+		s.registerReviewOnly()
+	}
+	if slices.Contains(s.tools, ToolReviewAndCommit) {
+		s.registerReviewAndCommit()
+	}
+}
+
+func (s *Server) registerReviewOnly() { //nolint:funcorder // Helper method
 	s.mcpServer.AddTool(mcp.Tool{
-		Name: "review_only",
+		Name: ToolReviewOnly,
 		Description: "Review code changes using Gemini and return feedback without committing. " +
 			"Reviews all workspace changes (staged, unstaged, and untracked), not just staged " +
 			"files; stash anything you want to exclude first. Returns review comments and " +
@@ -157,10 +230,11 @@ func (s *Server) registerTools() { //nolint:funcorder // Helper method
 			Required: []string{argDirectory},
 		},
 	}, s.HandleReviewOnly)
+}
 
-	// Register review_and_commit tool.
+func (s *Server) registerReviewAndCommit() { //nolint:funcorder // Helper method
 	s.mcpServer.AddTool(mcp.Tool{
-		Name: "review_and_commit",
+		Name: ToolReviewAndCommit,
 		Description: "Review code changes using Gemini and commit if approved (LGTM). " +
 			"Reviews and commits all workspace changes (staged, unstaged, and untracked), not " +
 			"just staged files; stash anything you want to exclude first for a partial commit. " +
@@ -504,7 +578,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 
 	s.logger.Info("Review request started",
 		"request_id", requestID,
-		"tool", "review_only")
+		"tool", ToolReviewOnly)
 
 	// Create progress reporter based on whether client requested progress.
 	reporter := s.createProgressReporter(request)
@@ -514,7 +588,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 	if !ok {
 		s.logger.Error("Invalid arguments format",
 			"request_id", requestID,
-			"tool", "review_only")
+			"tool", ToolReviewOnly)
 		return nil, ErrInvalidArguments
 	}
 
@@ -604,7 +678,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	// Log request start without exposing arguments.
 	s.logger.Info("Review and commit request started",
 		"request_id", requestID,
-		"tool", "review_and_commit")
+		"tool", ToolReviewAndCommit)
 
 	// Create progress reporter based on whether client requested progress.
 	reporter := s.createProgressReporter(request)
@@ -757,7 +831,7 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 
 // Run starts the MCP server.
 func (s *Server) Run(_ context.Context) error {
-	s.logger.Info("Starting LGTMCP server", "version", appinfo.Version)
+	s.logger.Info("Starting LGTMCP server", "version", appinfo.Version, "tools", s.tools)
 
 	return s.serveFunc(s.mcpServer) //nolint:wrapcheck // ServeStdio errors are top-level
 }
