@@ -8,7 +8,8 @@ tool (
 )
 
 require (
-	github.com/mark3labs/mcp-go v1.2.1
+	github.com/mark3labs/mcp-go v1.3.0
+	github.com/mark3labs/mcp-go/v2 v2.0.0
 	github.com/stretchr/testify v1.12.1
 	github.com/zricethezav/gitleaks/v8 v8.30.1
 	google.golang.org/genai v1.74.0
