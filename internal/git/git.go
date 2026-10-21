@@ -367,10 +367,11 @@ func (g *Git) StageFiles(ctx context.Context, files []string) error {
 		_ = stdin.WriteByte(0)
 	}
 
-	if _, err := g.runGitCommandStdin(
+	_, err = g.runGitCommandStdin(
 		ctx, gitCommandTimeout, &stdin, []string{"GIT_LITERAL_PATHSPECS=1"},
 		"add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("failed to stage files: %w", err)
 	}
 
@@ -396,9 +397,10 @@ func (g *Git) Commit(ctx context.Context, message string) (string, error) {
 	// Commit with the provided message. This is the command that runs the
 	// repository's hooks, so it gets the commit bound rather than the
 	// plumbing one.
-	if _, commitErr := g.runGitCommandStdin(
+	_, commitErr := g.runGitCommandStdin(
 		ctx, g.commitTimeout, nil, nil, "commit", "-m", message,
-	); commitErr != nil {
+	)
+	if commitErr != nil {
 		return "", fmt.Errorf("failed to commit: %w", commitErr)
 	}
 
