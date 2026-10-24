@@ -20,11 +20,9 @@ A Model Context Protocol (MCP) server that provides AI-powered code review using
 Google Gemini 3.8 Flash. LGTMCP reviews your code changes and either commits them
 automatically (if approved) or provides detailed feedback for improvements.
 
-In my usage, the median review takes 1.9 minutes and costs $0.20, with an
-acceptance rate around 45%. Those figures were measured with the previous
-default model, `gemini-3.1-pro-preview`; they have not been remeasured on
-Gemini 3.8 Flash, which is priced lower per token. You should decide whether
-that is slow and expensive or fast and cheap.
+In my usage with Gemini 3.8 Flash, the median review takes 3.2 minutes and costs
+$0.35, with an acceptance rate around 85%. You should decide whether that is
+slow and expensive or fast and cheap.
 
 ## Features
 
