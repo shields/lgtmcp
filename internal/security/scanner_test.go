@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -15,14 +15,18 @@
 package security
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/zricethezav/gitleaks/v8/report"
+
+	"msrl.dev/lgtmcp/internal/git"
 )
 
 var fakeSecrets = FakeSecrets{}
@@ -30,7 +34,52 @@ var fakeSecrets = FakeSecrets{}
 const (
 	testMainGo    = "main.go"
 	testGoSumHash = "cloud.google.com/go/auth v0.15.0 h1:Ly0u4aA5vG/fsSsxu98qCQBemXtAtJf+95z9HK+cxps=" // gitleaks:allow
+
+	// testRuleConfig defines one rule and does not extend the defaults, so a
+	// scanner built from it sees test_secret and nothing else.
+	testRuleConfig = `
+title = "test config"
+[[rules]]
+id = "test-rule"
+description = "Test rule"
+regex = '''(?i)test_secret'''
+`
 )
+
+// writeConfigFile writes a gitleaks config into a fresh temp directory and
+// returns its path.
+func writeConfigFile(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), RepoConfigName)
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+
+	return path
+}
+
+// scanOne scans content as the file named path.
+func scanOne(t *testing.T, scanner *Scanner, path, content string) []report.Finding {
+	t.Helper()
+	diff := "diff --git a/" + path + " b/" + path + "\n+" + content
+	findings, err := scanner.ScanDiff(t.Context(), diff, func(p string) (string, error) {
+		if p == path {
+			return content, nil
+		}
+
+		return "", os.ErrNotExist
+	})
+	require.NoError(t, err)
+
+	return findings
+}
+
+func ruleIDs(findings []report.Finding) []string {
+	ids := make([]string, 0, len(findings))
+	for _, f := range findings {
+		ids = append(ids, f.RuleID)
+	}
+
+	return ids
+}
 
 func TestNew(t *testing.T) {
 	t.Parallel()
@@ -40,48 +89,235 @@ func TestNew(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, scanner)
 		assert.NotNil(t, scanner.detector)
+		assert.False(t, scanner.pinned)
+		assert.Equal(t, "default rules", scanner.Source())
+		assert.NotEmpty(t, scanOne(t, scanner, testMainGo, `token := "`+fakeSecrets.GitHubPAT()+`"`))
 	})
 
-	t.Run("custom config file not supported", func(t *testing.T) {
+	t.Run("custom config file", func(t *testing.T) {
 		t.Parallel()
-		// Create a temporary config file.
-		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, ".gitleaks.toml")
-		configContent := `
-title = "test config"
-[[rules]]
-id = "test-rule"
-description = "Test rule"
-regex = '''(?i)test_secret'''
-`
-		err := os.WriteFile(configPath, []byte(configContent), 0o600)
-		require.NoError(t, err)
+		configPath := writeConfigFile(t, testRuleConfig)
 
 		scanner, err := New(configPath)
-		require.Error(t, err)
-		assert.Nil(t, scanner)
-		assert.Contains(t, err.Error(), "custom config not supported")
+		require.NoError(t, err)
+		assert.True(t, scanner.pinned)
+		assert.Equal(t, configPath, scanner.Source())
+		assert.Equal(t, []string{"test-rule"}, ruleIDs(scanOne(t, scanner, testMainGo, `x := "test_secret"`)))
+		// Without extend.useDefault the default rules do not apply.
+		assert.Empty(t, scanOne(t, scanner, testMainGo, `token := "`+fakeSecrets.GitHubPAT()+`"`))
 	})
 
-	t.Run("invalid config file", func(t *testing.T) {
+	t.Run("missing config file", func(t *testing.T) {
 		t.Parallel()
 		scanner, err := New("/nonexistent/config.toml")
 		require.Error(t, err)
 		assert.Nil(t, scanner)
-		assert.Contains(t, err.Error(), "custom config not supported")
+		assert.Contains(t, err.Error(), "failed to read gitleaks config")
 	})
 
 	t.Run("malformed config file", func(t *testing.T) {
 		t.Parallel()
-		tmpDir := t.TempDir()
-		configPath := filepath.Join(tmpDir, ".gitleaks.toml")
-		err := os.WriteFile(configPath, []byte("invalid toml content {{"), 0o600)
-		require.NoError(t, err)
+		configPath := writeConfigFile(t, "invalid toml content {{")
 
 		scanner, err := New(configPath)
-		require.Error(t, err)
+		require.ErrorIs(t, err, ErrInvalidConfig)
 		assert.Nil(t, scanner)
-		assert.Contains(t, err.Error(), "custom config not supported")
+		assert.Contains(t, err.Error(), configPath)
+	})
+}
+
+func TestLoadConfig(t *testing.T) {
+	t.Parallel()
+	t.Run("extends the default rules and allowlists a path", func(t *testing.T) {
+		t.Parallel()
+		configPath := writeConfigFile(t, `
+[extend]
+useDefault = true
+[[allowlists]]
+paths = ['''^sealed/''']
+`)
+		scanner, err := New(configPath)
+		require.NoError(t, err)
+		content := `token := "` + fakeSecrets.GitHubPAT() + `"`
+		assert.NotEmpty(t, scanOne(t, scanner, testMainGo, content))
+		assert.Empty(t, scanOne(t, scanner, "sealed/secret.yaml", content))
+	})
+
+	t.Run("disables a default rule", func(t *testing.T) {
+		t.Parallel()
+		configPath := writeConfigFile(t, `
+[extend]
+useDefault = true
+disabledRules = ["private-key"]
+`)
+		scanner, err := New(configPath)
+		require.NoError(t, err)
+		assert.Empty(t, scanOne(t, scanner, "key.pem", fakeSecrets.FullPrivateKey()))
+		assert.NotEmpty(t, scanOne(t, scanner, testMainGo, `token := "`+fakeSecrets.GitHubPAT()+`"`))
+	})
+
+	t.Run("merges a redefined default rule", func(t *testing.T) {
+		t.Parallel()
+		// Only the fields the config sets replace the default's; the default
+		// regex stays, so the rule still detects and reports the new description.
+		configPath := writeConfigFile(t, `
+[extend]
+useDefault = true
+[[rules]]
+id = "private-key"
+description = "Private key, redefined"
+`)
+		scanner, err := New(configPath)
+		require.NoError(t, err)
+		findings := scanOne(t, scanner, "key.pem", fakeSecrets.FullPrivateKey())
+		require.NotEmpty(t, findings)
+		assert.Equal(t, "Private key, redefined", findings[0].Description)
+	})
+
+	t.Run("targets default rules", func(t *testing.T) {
+		t.Parallel()
+		configPath := writeConfigFile(t, `
+[extend]
+useDefault = true
+[[allowlists]]
+targetRules = ["github-pat", "generic-api-key"]
+regexes = ['''`+regexp.QuoteMeta(fakeSecrets.GitHubPAT()[:12])+`''']
+`)
+		scanner, err := New(configPath)
+		require.NoError(t, err)
+		assert.Empty(t, scanOne(t, scanner, testMainGo, `token := "`+fakeSecrets.GitHubPAT()+`"`))
+		assert.NotEmpty(t, scanOne(t, scanner, "key.pem", fakeSecrets.FullPrivateKey()))
+	})
+
+	t.Run("unknown target rule", func(t *testing.T) {
+		t.Parallel()
+		_, err := loadConfig(`
+[extend]
+useDefault = true
+[[allowlists]]
+targetRules = ["no-such-rule"]
+paths = ['''^vendor/''']
+`)
+		require.ErrorIs(t, err, ErrUnknownTargetRule)
+	})
+
+	t.Run("rejects extend.path", func(t *testing.T) {
+		t.Parallel()
+		_, err := loadConfig(`
+[extend]
+path = "other.toml"
+`)
+		require.ErrorIs(t, err, ErrExtendUnsupported)
+	})
+
+	t.Run("invalid regex is an error, not a panic", func(t *testing.T) {
+		t.Parallel()
+		_, err := loadConfig(`
+[[rules]]
+id = "broken"
+regex = '''('''
+`)
+		require.ErrorIs(t, err, ErrInvalidConfig)
+	})
+
+	t.Run("repeated loads keep extending", func(t *testing.T) {
+		t.Parallel()
+		// The library stops extending after two translations in a process;
+		// the merge here must not.
+		for range 3 {
+			cfg, err := loadConfig("[extend]\nuseDefault = true\n")
+			require.NoError(t, err)
+			assert.Contains(t, cfg.Rules, "github-pat")
+		}
+	})
+}
+
+// repoFiles returns a ForRepo reader over an in-memory repository, reporting
+// absent paths the way the git client does.
+func repoFiles(files map[string]string) func(string) (string, error) {
+	return func(path string) (string, error) {
+		content, ok := files[path]
+		if !ok {
+			return "", fmt.Errorf("%w: %s", git.ErrFileNotFound, path)
+		}
+
+		return content, nil
+	}
+}
+
+func TestForRepo(t *testing.T) {
+	t.Parallel()
+	t.Run("no repository config", func(t *testing.T) {
+		t.Parallel()
+		scanner, err := New("")
+		require.NoError(t, err)
+		repoScanner, err := scanner.ForRepo(repoFiles(nil))
+		require.NoError(t, err)
+		assert.Same(t, scanner, repoScanner)
+	})
+
+	t.Run("repository config", func(t *testing.T) {
+		t.Parallel()
+		scanner, err := New("")
+		require.NoError(t, err)
+		repoScanner, err := scanner.ForRepo(repoFiles(map[string]string{RepoConfigName: testRuleConfig}))
+		require.NoError(t, err)
+		assert.NotSame(t, scanner, repoScanner)
+		assert.False(t, repoScanner.pinned)
+		assert.Equal(t, RepoConfigName, repoScanner.Source())
+		assert.Equal(t, []string{"test-rule"}, ruleIDs(scanOne(t, repoScanner, testMainGo, `x := "test_secret"`)))
+		assert.Empty(t, scanOne(t, repoScanner, testMainGo, `token := "`+fakeSecrets.GitHubPAT()+`"`))
+	})
+
+	t.Run("explicit config wins", func(t *testing.T) {
+		t.Parallel()
+		scanner, err := New(writeConfigFile(t, testRuleConfig))
+		require.NoError(t, err)
+		repoScanner, err := scanner.ForRepo(repoFiles(map[string]string{RepoConfigName: "[extend]\nuseDefault = true\n"}))
+		require.NoError(t, err)
+		assert.Same(t, scanner, repoScanner)
+	})
+
+	t.Run("the config file itself is not scanned", func(t *testing.T) {
+		t.Parallel()
+		content := "[extend]\nuseDefault = true\n# " + fakeSecrets.GitHubPAT() + "\n"
+		scanner, err := New("")
+		require.NoError(t, err)
+		repoScanner, err := scanner.ForRepo(repoFiles(map[string]string{RepoConfigName: content}))
+		require.NoError(t, err)
+		assert.Empty(t, scanOne(t, repoScanner, RepoConfigName, content))
+		assert.NotEmpty(t, scanOne(t, repoScanner, "notes.txt", content))
+	})
+
+	t.Run("malformed repository config", func(t *testing.T) {
+		t.Parallel()
+		scanner, err := New("")
+		require.NoError(t, err)
+		repoScanner, err := scanner.ForRepo(repoFiles(map[string]string{RepoConfigName: "invalid toml content {{"}))
+		require.ErrorIs(t, err, ErrInvalidConfig)
+		assert.Nil(t, repoScanner)
+		assert.Contains(t, err.Error(), RepoConfigName)
+	})
+
+	t.Run("oversized repository config", func(t *testing.T) {
+		t.Parallel()
+		scanner, err := New("")
+		require.NoError(t, err)
+		huge := "[extend]\nuseDefault = true\n" + strings.Repeat("#", maxRepoConfigSize)
+		repoScanner, err := scanner.ForRepo(repoFiles(map[string]string{RepoConfigName: huge}))
+		require.ErrorIs(t, err, ErrConfigTooLarge)
+		assert.Nil(t, repoScanner)
+	})
+
+	t.Run("unreadable repository config", func(t *testing.T) {
+		t.Parallel()
+		scanner, err := New("")
+		require.NoError(t, err)
+		repoScanner, err := scanner.ForRepo(func(string) (string, error) {
+			return "", git.ErrPathOutsideRepo
+		})
+		require.ErrorIs(t, err, git.ErrPathOutsideRepo)
+		assert.Nil(t, repoScanner)
 	})
 }
 

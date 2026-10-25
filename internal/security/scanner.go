@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -18,52 +18,99 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	stdpath "path"
 	"strconv"
 	"strings"
-	"sync"
 
+	"github.com/zricethezav/gitleaks/v8/config"
 	"github.com/zricethezav/gitleaks/v8/detect"
 	"github.com/zricethezav/gitleaks/v8/report"
+
+	"msrl.dev/lgtmcp/internal/git"
 )
-
-// ErrCustomConfigNotSupported indicates that custom gitleaks config is not supported.
-var ErrCustomConfigNotSupported = errors.New("custom config not supported in this version")
-
-// detectorMutex protects the creation of new detectors to avoid race conditions
-// in the gitleaks library which uses a global viper instance.
-var detectorMutex sync.Mutex
 
 // Scanner provides secret detection capabilities using gitleaks.
 type Scanner struct {
 	detector *detect.Detector
+	// source names where the rules came from, for logs.
+	source string
+	// pinned is set when the rules came from an explicit config file, which
+	// then applies to every repository as the gitleaks --config flag does.
+	pinned bool
 }
 
-// New creates a new Scanner with optional custom configuration.
+// New creates a Scanner. With an empty configPath it uses the default rules
+// until [Scanner.ForRepo] finds a repository config; with a path it uses that
+// file for every repository, like the gitleaks --config flag.
 func New(configPath string) (*Scanner, error) {
-	if configPath != "" {
-		// For custom config, we need to load it ourselves.
-		// The v8 API doesn't have a LoadConfig function exposed.
-		// So we'll use the default and note this limitation.
-		return nil, ErrCustomConfigNotSupported
+	if configPath == "" {
+		cfg, err := defaultConfig()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load default gitleaks config: %w", err)
+		}
+
+		return newScanner(cfg, "default rules", false), nil
 	}
 
-	// Synchronize detector creation to avoid race conditions in gitleaks.
-	// The gitleaks library uses a global viper instance which causes races
-	// when multiple detectors are created concurrently.
-	detectorMutex.Lock()
-	detector, err := detect.NewDetectorDefaultConfig()
-	detectorMutex.Unlock()
-
+	data, err := os.ReadFile(configPath) //nolint:gosec // The operator names this file in lgtmcp's own config.
 	if err != nil {
-		return nil, fmt.Errorf("failed to create detector with default config: %w", err)
+		return nil, fmt.Errorf("failed to read gitleaks config: %w", err)
 	}
+	cfg, err := loadConfig(string(data))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", configPath, err)
+	}
+	cfg.Path = configPath
 
+	return newScanner(cfg, configPath, true), nil
+}
+
+func newScanner(cfg config.Config, source string, pinned bool) *Scanner {
+	detector := detect.NewDetector(cfg)
 	detector.FollowSymlinks = false // Never follow symlinks for security.
 
-	return &Scanner{
-		detector: detector,
-	}, nil
+	return &Scanner{detector: detector, source: source, pinned: pinned}
+}
+
+// ForRepo returns the scanner to use for a repository: s itself when it was
+// built from an explicit config or readFile reports no .gitleaks.toml at the
+// repository root, otherwise one built from that file. readFile takes a
+// repository-relative path and must bring the caller's safeguards, as
+// [git.Git.GetFileContent] does by refusing symlinks that leave the repository
+// and anything but a regular file; the repository, not the operator, controls
+// this file.
+func (s *Scanner) ForRepo(readFile func(path string) (string, error)) (*Scanner, error) {
+	if s.pinned {
+		return s, nil
+	}
+
+	content, err := readFile(RepoConfigName)
+	if err != nil {
+		if errors.Is(err, git.ErrFileNotFound) {
+			return s, nil
+		}
+
+		return nil, fmt.Errorf("failed to read %s: %w", RepoConfigName, err)
+	}
+	if len(content) > maxRepoConfigSize {
+		return nil, fmt.Errorf("%w: %s is %d bytes, limit %d",
+			ErrConfigTooLarge, RepoConfigName, len(content), maxRepoConfigSize)
+	}
+	cfg, err := loadConfig(content)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", RepoConfigName, err)
+	}
+	// The detector compares this against the repository-relative paths that
+	// ScanDiff passes, so the config's own regexes are not reported as secrets.
+	cfg.Path = RepoConfigName
+
+	return newScanner(cfg, RepoConfigName, false), nil
+}
+
+// Source describes where the scanner's rules came from, for logging.
+func (s *Scanner) Source() string {
+	return s.source
 }
 
 // ScanDiff scans a git diff for secrets by extracting changed files.
@@ -345,23 +392,16 @@ func splitDiffPathsFallback(rest, sep string) string {
 	return after
 }
 
-// scanContent scans arbitrary content for secrets, stamping the given filename
-// onto each finding. DetectString leaves Finding.File empty, so this attributes
-// the secret to the right file for downstream reporting. A blank filename
-// leaves the field as-is.
+// scanContent scans one file's content. The path goes to the detector with it
+// so that path allowlists and the config file's own exclusion apply; the
+// detector records it on each finding.
 func (s *Scanner) scanContent(content, filename string) []report.Finding {
 	if content == "" {
 		return nil
 	}
 
-	findings := s.detector.DetectString(content)
-	if filename != "" {
-		for i := range findings {
-			findings[i].File = filename
-		}
-	}
-
-	return findings
+	//nolint:staticcheck // Detect takes this deprecated alias; its sources.Fragment replacement comes with v9.
+	return s.detector.Detect(detect.Fragment{Raw: content, FilePath: filename})
 }
 
 // FormatFindings formats findings into a human-readable string.

@@ -88,8 +88,14 @@ git:
 
 # Security configuration
 gitleaks:
-  # Custom gitleaks configuration file (optional)
-  # Note: Custom configs are not currently supported in the embedded library
+  # Gitleaks configuration file used for every repository (optional), like the
+  # gitleaks --config flag. When unset, a repository's own .gitleaks.toml at
+  # its root is used if present, otherwise the default rules.
+  #
+  # The config has the gitleaks CLI's semantics: without
+  # [extend] useDefault = true it replaces the default rules rather than adding
+  # to them, and gitleaks:allow comments are honored. extend.path, extend.url
+  # and .gitleaksignore are not supported.
   config: ""
 
 # Logging configuration

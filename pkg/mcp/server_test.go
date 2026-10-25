@@ -1231,6 +1231,62 @@ func TestPrepareReview_SecurityFindings(t *testing.T) {
 	assert.Contains(t, textContent.Text, "Security scan detected secrets")
 }
 
+func TestPrepareReview_RepositoryGitleaksConfig(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+
+	// The repository's own config keeps the default rules but exempts the
+	// sealed file, so the secret there must not block the review.
+	testutil.CreateFile(t, tmpDir, security.RepoConfigName, `
+[extend]
+useDefault = true
+[[allowlists]]
+paths = ['''^sealed\.yaml$''']
+`)
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+	testutil.CreateFile(t, tmpDir, "sealed.yaml", "token: "+fakeSecrets.GitHubPAT()+"\n")
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{"directory": tmpDir}
+
+	result, err := s.HandleReviewOnly(t.Context(), request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	require.True(t, ok)
+	assert.NotContains(t, textContent.Text, "Security scan detected secrets")
+
+	// The same secret in a file the allowlist does not cover is still caught.
+	testutil.CreateFile(t, tmpDir, "config.txt", "token: "+fakeSecrets.GitHubPAT()+"\n")
+	result, err = s.HandleReviewOnly(t.Context(), request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	textContent, ok = result.Content[0].(mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "Security scan detected secrets")
+	assert.Contains(t, textContent.Text, "config.txt")
+	assert.NotContains(t, textContent.Text, "sealed.yaml")
+}
+
+func TestPrepareReview_GitleaksConfigSymlinkOutsideRepo(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+
+	// A repository cannot make the server read a file outside itself by
+	// linking .gitleaks.toml to one; the git client refuses the path.
+	outside := filepath.Join(t.TempDir(), "outside.toml")
+	require.NoError(t, os.WriteFile(outside, []byte("[extend]\nuseDefault = true\n"), 0o600))
+	require.NoError(t, os.Symlink(outside, filepath.Join(tmpDir, security.RepoConfigName)))
+	testutil.CreateFile(t, tmpDir, "file.go", "package main\n")
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{"directory": tmpDir}
+
+	result, err := s.HandleReviewOnly(t.Context(), request)
+	assertInBandToolError(t, result, err, "security scan failed")
+}
+
 func TestPrepareReview_SplitsDeletionsFromChangedFiles(t *testing.T) {
 	t.Parallel()
 	s, tmpDir := createTestServer(t)

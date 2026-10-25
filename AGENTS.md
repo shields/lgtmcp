@@ -89,6 +89,7 @@ Implementation details live in doc comments on the functions named below; these 
 - **Response footer** (`formatUsageFooter` in `pkg/mcp/server.go`): `formatCount` hand-rolls thousands separators rather than using `golang.org/x/text/message`, deliberately keeping `x/text` an indirect-only dependency; the footer is always ASCII English, so locale-aware formatting isn't needed.
 - **Gemini API constraint**: function calling and Google Search grounding cannot be combined in one request. The review's `get_file_content` tool already relies on function calling, so a search-grounded review would require a redesign.
 - **No sampling parameters**: `temperature`, `top_p`, and `top_k` are deliberately not sent (a `temperature` option was removed in 2026). Gemini 3 models do not support them — Google's Gemini 3.8 Flash migration checklist says to strip them — so `thinking_level` is the review's only generation knob.
+- **Gitleaks config loading** (`loadConfig` in `internal/security/config.go`): a repository's `.gitleaks.toml` is parsed through a private viper instance and `extend.useDefault` is merged by lgtmcp, not by the library's `Translate`, whose extension depth lives in a package-level counter that is never reset and so works for at most two configs per process. Files are scanned as `detect.Fragment`s carrying their repository-relative path, because path allowlists and the config file's own exclusion match on that path and `DetectString` passes none.
 
 ## Technical Choices
 

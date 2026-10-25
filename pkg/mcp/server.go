@@ -459,19 +459,30 @@ func (s *Server) prepareReview(
 	// Report progress: security scan.
 	reporter.Report(ctx, 2, totalSteps, "Running security scan...")
 
-	// Security scan on the changed files using secure git client.
+	// Security scan on the changed files using secure git client, with the
+	// repository's own gitleaks config when it has one.
 	getFileContent := func(path string) (string, error) {
 		return gitClient.GetFileContent(ctx, path)
 	}
+	scanner, err := s.scanner.ForRepo(getFileContent)
+	if err != nil {
+		s.logger.Error("Security scan configuration failed",
+			"repo", filepath.Base(directory),
+			"error", err)
+
+		return nil, nil, fmt.Errorf("security scan failed: %w", err)
+	}
 	scanStart := time.Now()
-	findings, err := s.scanner.ScanDiff(ctx, diff, getFileContent)
+	findings, err := scanner.ScanDiff(ctx, diff, getFileContent)
 	scanDuration := time.Since(scanStart)
 	if err != nil {
 		s.logger.Error("Security scan failed",
+			"config", scanner.Source(),
 			"duration_ms", scanDuration.Milliseconds(),
 			"error", err)
 	} else {
 		s.logger.Info("Security scan completed",
+			"config", scanner.Source(),
 			"duration_ms", scanDuration.Milliseconds(),
 			"findings", len(findings))
 	}

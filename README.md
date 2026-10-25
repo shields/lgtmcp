@@ -28,7 +28,7 @@ slow and expensive or fast and cheap.
 
 - **AI Code Review**: Leverages Google Gemini 3.8 Flash for intelligent code analysis
 - **Automatic Commit**: Commits changes when code passes review (optional)
-- **Security Scanning**: Built-in secret detection using Gitleaks
+- **Security Scanning**: Built-in secret detection using Gitleaks, honoring a repository's `.gitleaks.toml`
 - **Gitignore Protection**: Prevents access to gitignored files during review
 - **Project Guidelines**: Discovers `AGENTS.md` and `REVIEW.md` for project-specific review rules
 - **MCP Integration**: Works seamlessly with Claude Desktop and other MCP clients
@@ -174,7 +174,13 @@ review_and_commit("/path/to/repo", "Add new feature")
 
 ### What Happens
 
-1. **Security check**: Scans files for secrets using Gitleaks
+1. **Security check**: Scans the changed files for secrets using Gitleaks
+   - Uses the repository's `.gitleaks.toml` when it has one, with the CLI's
+     semantics: a config without `[extend] useDefault = true` replaces the
+     default rules, allowlists apply, and `gitleaks:allow` comments are honored
+   - A `gitleaks.config` file in LGTMCP's own configuration applies to every
+     repository instead, like `gitleaks --config`
+   - `extend.path`, `extend.url` and `.gitleaksignore` are not supported
 2. **Diff generation**: Creates diff of all staged and unstaged changes
 3. **AI review**: Sends diff to Gemini 3.8 Flash for analysis
    - Gemini can request file contents for context

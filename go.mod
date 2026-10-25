@@ -9,6 +9,7 @@ tool (
 
 require (
 	github.com/mark3labs/mcp-go v1.3.0
+	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.12.1
 	github.com/zricethezav/gitleaks/v8 v8.30.1
 	google.golang.org/genai v1.76.0
@@ -225,7 +226,6 @@ require (
 	github.com/spf13/cast v1.9.2 // indirect
 	github.com/spf13/cobra v1.10.2 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
-	github.com/spf13/viper v1.20.1 // indirect
 	github.com/ssgreg/nlreturn/v2 v2.2.1 // indirect
 	github.com/stbenjam/no-sprintf-host-port v0.3.1 // indirect
 	github.com/stretchr/objx v0.5.3 // indirect
