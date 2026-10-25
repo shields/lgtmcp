@@ -3097,3 +3097,17 @@ func TestHandleFileRetrieval_GitDirectory(t *testing.T) {
 
 	runFileRetrievalTests(t, reviewer, repoDir, tests)
 }
+
+func TestHandleFileRetrieval_ParentComponent(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, "docs"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "docs", "v1..v2.md"), []byte("notes"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "top.txt"), []byte("top"), 0o600))
+
+	reviewer := &Reviewer{logger: testutil.NewTestLogger()}
+	runFileRetrievalTests(t, reviewer, repoDir, []fileRetrievalTest{
+		{name: "dots inside a name", filepath: "docs/v1..v2.md", shouldSucceed: true, expectContent: "notes"},
+		{name: "parent component", filepath: "docs/../top.txt", expectedError: "path traversal not allowed"},
+	})
+}

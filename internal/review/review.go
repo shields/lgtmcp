@@ -26,6 +26,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -1061,7 +1062,7 @@ func (*Reviewer) handleFileRetrieval(
 	}
 
 	// Validate and resolve the file path.
-	if strings.Contains(requestedPath, "..") {
+	if slices.Contains(strings.Split(filepath.ToSlash(requestedPath), "/"), "..") {
 		return errorResponse(funcCall, "invalid filepath: path traversal not allowed")
 	}
 
