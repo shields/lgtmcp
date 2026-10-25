@@ -185,7 +185,14 @@ const (
 	// maxToolTurns bounds the tool-calling loop. Each turn can fetch up to
 	// maxFilesPerTurn files, so this is generous for a code review while
 	// stopping a model that keeps asking for one more file.
-	maxToolTurns = 32
+	maxToolTurns = 20
+
+	// maxPromptTokens bounds the prompt tokens (cached included) a review may
+	// spend across all its requests before it must conclude. Every request
+	// resends the whole growing conversation, so a long review's cost grows
+	// quadratically with its turns. It limits cumulative spend, not the size
+	// of any one request.
+	maxPromptTokens = 1_500_000
 )
 
 var reviewResponseSchema = &genai.Schema{
@@ -908,10 +915,13 @@ func (r *Reviewer) reviewDiffWithModel(
 		}
 		contents = append(contents, content)
 
-		if turn >= maxToolTurns {
+		if limit := retrievalLimit(turn, usage.PromptTokens); limit != "" {
 			r.logger.Warn("File retrieval limit reached; requesting verdict",
+				"limit", limit,
 				"turns", turn,
-				"max_turns", maxToolTurns)
+				"max_turns", maxToolTurns,
+				"prompt_tokens", usage.PromptTokens,
+				"max_prompt_tokens", maxPromptTokens)
 
 			// The API requires one response per call, so the pending calls
 			// are answered with a refusal before tools are switched off.
@@ -952,6 +962,17 @@ func (r *Reviewer) reviewDiffWithModel(
 		if err != nil {
 			return nil, err
 		}
+	}
+}
+
+func retrievalLimit(turns int, promptTokens int32) string {
+	switch {
+	case turns >= maxToolTurns:
+		return "turns"
+	case promptTokens >= maxPromptTokens:
+		return "prompt_tokens"
+	default:
+		return ""
 	}
 }
 

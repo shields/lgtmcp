@@ -2267,9 +2267,12 @@ func TestReviewDiffWithModel_NilContent(t *testing.T) {
 			reason: genai.FinishReasonMaxTokens,
 		},
 		{
-			name:      "final verdict request",
-			responses: append(turnLimitCalls(), nilContent(genai.FinishReasonOther)),
-			reason:    genai.FinishReasonOther,
+			name: "final verdict request",
+			responses: []*genai.GenerateContentResponse{
+				withUsage(callResponse(fileCall("c1", "a.go")), maxPromptTokens, 0),
+				nilContent(genai.FinishReasonOther),
+			},
+			reason: genai.FinishReasonOther,
 		},
 	}
 
@@ -2643,26 +2646,71 @@ func TestReviewDiffWithModel_ToolTurnLimit(t *testing.T) {
 	}
 }
 
-// turnLimitCalls scripts a model that requests a file on every turn until the
-// turn limit forces its verdict.
-func turnLimitCalls() []*genai.GenerateContentResponse {
-	responses := make([]*genai.GenerateContentResponse, 0, maxToolTurns+1)
-	for i := range maxToolTurns + 1 {
-		responses = append(responses, callResponse(fileCall(fmt.Sprintf("c%d", i), "a.go")))
-	}
+func TestReviewDiffWithModel_PromptTokenBudget(t *testing.T) {
+	t.Parallel()
 
-	return responses
+	t.Run("budget reached", func(t *testing.T) {
+		t.Parallel()
+		client, requests := scriptedClient(t,
+			withUsage(callResponse(fileCall("c1", "a.go")), maxPromptTokens-100, 5),
+			withUsage(callResponse(fileCall("c2", "b.go")), 100, 5),
+			verdictResponse(),
+		)
+
+		result, err := newTestReviewer(client).ReviewDiff(
+			t.Context(), "diff content", []string{"a.go", "b.go"}, t.TempDir())
+		require.NoError(t, err)
+		assert.True(t, result.LGTM)
+		require.Len(t, *requests, 3)
+
+		assert.Nil(t, (*requests)[1].config.ToolConfig)
+		final := (*requests)[2]
+		assertToolsDisabled(t, final.config)
+		refusals := functionResponses(final.contents[len(final.contents)-1])
+		require.Len(t, refusals, 1)
+		assert.Equal(t, "c2", refusals[0].ID)
+		assert.Equal(t, map[string]any{errorKey: errRetrievalLimitMsg}, refusals[0].Response)
+	})
+
+	t.Run("budget not reached", func(t *testing.T) {
+		t.Parallel()
+		client, requests := scriptedClient(t,
+			withUsage(callResponse(fileCall("c1", "a.go")), maxPromptTokens-1, 5),
+			verdictResponse(),
+		)
+
+		result, err := newTestReviewer(client).ReviewDiff(
+			t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+		require.NoError(t, err)
+		assert.True(t, result.LGTM)
+		require.Len(t, *requests, 2)
+		assert.Nil(t, (*requests)[1].config.ToolConfig)
+	})
+
+	t.Run("a verdict is accepted over budget", func(t *testing.T) {
+		t.Parallel()
+		client, requests := scriptedClient(t, withUsage(verdictResponse(), maxPromptTokens*2, 5))
+
+		result, err := newTestReviewer(client).ReviewDiff(
+			t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+		require.NoError(t, err)
+		assert.True(t, result.LGTM)
+		assert.Len(t, *requests, 1)
+	})
 }
 
 func TestReviewDiffWithModel_ToolCallAfterLimit(t *testing.T) {
 	t.Parallel()
-	client, requests := scriptedClient(t, append(turnLimitCalls(), callResponse(fileCall("c2", "b.go")))...)
+	client, requests := scriptedClient(t,
+		withUsage(callResponse(fileCall("c1", "a.go")), maxPromptTokens, 5),
+		callResponse(fileCall("c2", "b.go")),
+	)
 
 	result, err := newTestReviewer(client).ReviewDiff(
 		t.Context(), "diff content", []string{"a.go", "b.go"}, t.TempDir())
 	require.ErrorIs(t, err, ErrToolCallAfterLimit)
 	assert.Nil(t, result)
-	assert.Len(t, *requests, maxToolTurns+2)
+	assert.Len(t, *requests, 2)
 }
 
 func TestReviewDiff_RequestConfig(t *testing.T) {
@@ -2737,11 +2785,13 @@ func TestReviewDiffWithModel_RequestErrors(t *testing.T) {
 			wantOp:    "function_response",
 		},
 		{
-			name:      "final verdict",
-			responses: turnLimitCalls(),
-			failure:   errTest,
-			wantIs:    errTest,
-			wantOp:    "final_verdict",
+			name: "final verdict",
+			responses: []*genai.GenerateContentResponse{
+				withUsage(callResponse(fileCall("c1", "a.go")), maxPromptTokens, 0),
+			},
+			failure: errTest,
+			wantIs:  errTest,
+			wantOp:  "final_verdict",
 		},
 		{
 			name:      "quota exhausted mid-review",
