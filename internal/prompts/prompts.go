@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -159,9 +160,9 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []st
 	data := ReviewPromptData{
 		AnalysisSection:     analysisSection,
 		InstructionsSection: instructions,
-		FilesList:           strings.Join(changedFiles, "\n- "),
-		ExistingFilesList:   strings.Join(existing, "\n- "),
-		DeletedFilesList:    strings.Join(deleted, "\n- "),
+		FilesList:           joinNames(changedFiles),
+		ExistingFilesList:   joinNames(existing),
+		DeletedFilesList:    joinNames(deleted),
 		Diff:                diff,
 		CurrentDate:         time.Now().Format("January 2, 2006"),
 	}
@@ -205,9 +206,9 @@ func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles, deleted
 
 	data := ContextGatheringPromptData{
 		InstructionsSection: instructions,
-		FilesList:           strings.Join(changedFiles, "\n- "),
-		ExistingFilesList:   strings.Join(existing, "\n- "),
-		DeletedFilesList:    strings.Join(deleted, "\n- "),
+		FilesList:           joinNames(changedFiles),
+		ExistingFilesList:   joinNames(existing),
+		DeletedFilesList:    joinNames(deleted),
 		Diff:                diff,
 	}
 
@@ -222,6 +223,20 @@ func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles, deleted
 	}
 
 	return buf.String(), nil
+}
+
+// joinNames quotes any name containing a character that does not print (a
+// newline, say) so that it cannot start a new line of the prompt.
+func joinNames(names []string) string {
+	items := make([]string, len(names))
+	for i, name := range names {
+		items[i] = name
+		if strings.IndexFunc(name, func(r rune) bool { return !strconv.IsPrint(r) }) >= 0 {
+			items[i] = strconv.Quote(name)
+		}
+	}
+
+	return strings.Join(items, "\n- ")
 }
 
 // stripLeadingComment removes a single leading HTML comment block (e.g. the
