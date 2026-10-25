@@ -127,7 +127,8 @@ type Options struct {
 	FileFetchCallback FileFetchCallback
 	Instructions      string
 	// DeletedFiles is the subset of changed paths that the diff marks as deletions.
-	DeletedFiles []string
+	DeletedFiles     []string
+	DirectoryListing string
 }
 
 // Option is a functional option for ReviewDiff.
@@ -144,6 +145,14 @@ func WithFileFetchCallback(callback FileFetchCallback) Option {
 func WithInstructions(instructions string) Option {
 	return func(opts *Options) {
 		opts.Instructions = instructions
+	}
+}
+
+// WithDirectoryListing supplies the listing of directories containing changed
+// files, so the model requests paths that exist instead of guessing.
+func WithDirectoryListing(listing string) Option {
+	return func(opts *Options) {
+		opts.DirectoryListing = listing
 	}
 }
 
@@ -180,6 +189,7 @@ const (
 	errTooManyFilesMsg = "not retrieved: too many files in one turn; request the remaining files in a later turn"
 	errTurnBudgetMsg   = "not retrieved: the files already returned this turn leave no room for this one; " +
 		"request it in a later turn"
+	errDirectoryMsg    = "not retrieved: this path is a directory; request the files inside it by their own paths"
 	errFileTooLargeFmt = "file too large: exceeds %d bytes"
 
 	// maxToolTurns bounds the tool-calling loop. Each turn can fetch up to
@@ -862,7 +872,7 @@ func (r *Reviewer) reviewDiffWithModel(
 	}
 
 	reviewPrompt, err := r.promptManager.BuildReviewPrompt(
-		diff, changedFiles, opts.DeletedFiles, opts.Instructions,
+		diff, changedFiles, opts.DeletedFiles, opts.Instructions, opts.DirectoryListing,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build review prompt: %w", err)
@@ -1229,6 +1239,9 @@ func retrieveFile(
 	openedInfo, err := f.Stat()
 	if err != nil {
 		return fileError(requestedPath, "failed to stat opened file: %v", err)
+	}
+	if openedInfo.IsDir() {
+		return fileError(requestedPath, errDirectoryMsg)
 	}
 	if !openedInfo.Mode().IsRegular() {
 		return fileError(requestedPath, "access denied: not a regular file")

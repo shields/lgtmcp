@@ -289,6 +289,7 @@ type reviewContext struct {
 	changedFiles []string
 	deletedFiles []string
 	instructions string
+	listing      string
 }
 
 // createProgressReporter creates a progress reporter based on whether the request includes a progress token.
@@ -527,6 +528,11 @@ func (s *Server) prepareReview(
 		}
 	}
 
+	listings, listErr := gitClient.ListChangedDirectories(ctx, changedFiles, cf.Deleted)
+	if listErr != nil {
+		return nil, nil, listErr
+	}
+
 	return &reviewContext{
 		gitClient:    gitClient,
 		diff:         diff,
@@ -534,6 +540,7 @@ func (s *Server) prepareReview(
 		deletedFiles: cf.Deleted,
 		absPath:      directory,
 		instructions: instructionsBuf.String(),
+		listing:      git.FormatDirectoryListings(listings),
 	}, nil, nil
 }
 
@@ -560,7 +567,8 @@ func (s *Server) performReview(
 	reviewResult, err := s.reviewer.ReviewDiff(ctx, rc.diff, rc.changedFiles, rc.absPath,
 		review.WithFileFetchCallback(fileFetchCallback),
 		review.WithInstructions(rc.instructions),
-		review.WithDeletedFiles(rc.deletedFiles))
+		review.WithDeletedFiles(rc.deletedFiles),
+		review.WithDirectoryListing(rc.listing))
 
 	duration := time.Since(start)
 	if err != nil {

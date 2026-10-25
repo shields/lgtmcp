@@ -67,6 +67,12 @@ Files deleted by this change. The diff below shows their full removed content; d
 
 - {{.DeletedFilesList}}
   {{- end}}
+  {{- if .DirectoryListing}}
+
+Contents of the directories this change touches (subdirectories end in "/"; paths are relative to the repository root). Request files by these exact paths rather than guessing names:
+
+{{.DirectoryListing}}
+{{- end}}
 
 Git diff to review:
 {{.Diff}}

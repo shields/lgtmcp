@@ -758,6 +758,16 @@ func TestHandleFileRetrieval(t *testing.T) {
 			"path traversal not allowed")
 	})
 
+	t.Run("a directory is explained", func(t *testing.T) {
+		t.Parallel()
+		dir := testutil.CreateTempGitRepo(t)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o750))
+
+		for _, path := range []string{"docs", "docs/"} {
+			assert.Equal(t, errDirectoryMsg, retrieveSingle(t, r, dir, path, nil)["error"], path)
+		}
+	})
+
 	t.Run("file not found", func(t *testing.T) {
 		t.Parallel()
 		files := retrieveSingle(t, r, tmpDir, "nonexistent.txt", nil)
@@ -2406,6 +2416,7 @@ func TestReviewDiffWithModel_PromptSections(t *testing.T) {
 	result, err := newTestReviewer(client).ReviewDiff(
 		t.Context(), "diff content", []string{"pkg/a.go"}, t.TempDir(),
 		WithInstructions("INSTRUCTIONS-MARKER"),
+		WithDirectoryListing("pkg/\n- LISTING-MARKER\n"),
 	)
 	require.NoError(t, err)
 	assert.True(t, result.LGTM)
@@ -2414,8 +2425,15 @@ func TestReviewDiffWithModel_PromptSections(t *testing.T) {
 	prompt := (*requests)[0].contents[0].Parts[0].Text
 	instructions := strings.Index(prompt, "INSTRUCTIONS-MARKER")
 	criteria := strings.Index(prompt, "Review criteria:")
+	header := strings.Index(prompt, "Contents of the directories this change touches")
+	listing := strings.Index(prompt, "LISTING-MARKER")
+	diff := strings.Index(prompt, "Git diff to review:")
 	require.NotEqual(t, -1, instructions, "the instructions must reach the prompt")
+	require.NotEqual(t, -1, header, "the listing header must be in the prompt")
+	require.NotEqual(t, -1, listing, "the directory listing must reach the prompt")
 	assert.Less(t, instructions, criteria, "instructions come before the review criteria")
+	assert.Less(t, header, listing, "the listing sits under its header")
+	assert.Less(t, listing, diff, "the listing comes before the diff")
 }
 
 func TestReviewDiffWithModel_HistoryGrows(t *testing.T) {

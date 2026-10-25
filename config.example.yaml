@@ -144,6 +144,7 @@ prompts:
   #   - {{.ExistingFilesList}} - Changed files that still exist
   #   - {{.DeletedFilesList}} - Files deleted by the change
   #   - {{.FilesList}} - All changed paths, including deletions
+  #   - {{.DirectoryListing}} - Contents of the directories holding changed files
   #   - {{.Diff}} - Git diff content
   #   - {{.CurrentDate}} - Today's date
   # If not specified, uses the embedded default prompt

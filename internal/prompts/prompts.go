@@ -125,6 +125,7 @@ type ReviewPromptData struct {
 	FilesList         string
 	ExistingFilesList string
 	DeletedFilesList  string
+	DirectoryListing  string
 	Diff              string
 	CurrentDate       string
 }
@@ -134,7 +135,7 @@ type ReviewPromptData struct {
 // deletions and excluded from the existing-files section.
 //
 //nolint:lll // Long function signature
-func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []string, instructions string) (string, error) {
+func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []string, instructions, directoryListing string) (string, error) {
 	promptTemplate, err := m.LoadPrompt(ReviewPrompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to load review prompt: %w", err)
@@ -147,6 +148,7 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []st
 		FilesList:           joinNames(changedFiles),
 		ExistingFilesList:   joinNames(existing),
 		DeletedFilesList:    joinNames(deleted),
+		DirectoryListing:    directoryListing,
 		Diff:                diff,
 		CurrentDate:         time.Now().Format("January 2, 2006"),
 	}

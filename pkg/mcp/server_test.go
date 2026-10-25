@@ -29,6 +29,7 @@ import (
 	mcpsrv "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/genai"
 	"msrl.dev/lgtmcp/internal/config"
 	"msrl.dev/lgtmcp/internal/progress"
 	"msrl.dev/lgtmcp/internal/review"
@@ -1123,6 +1124,41 @@ func TestHandleReviewOnly_SuccessfulReview(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.NotEmpty(t, result.Content)
+}
+
+func TestHandleReviewOnly_PromptListsChangedDirectories(t *testing.T) {
+	t.Parallel()
+
+	var prompt string
+	client := &review.StubGeminiClient{
+		GenerateContentFunc: func(
+			_ context.Context, _ string, contents []*genai.Content, _ *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			prompt = contents[0].Parts[0].Text
+
+			return &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: &genai.Content{
+				Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "ok"}`}},
+			}}}}, nil
+		},
+	}
+	scanner, err := security.New("")
+	require.NoError(t, err)
+	s := newForTesting(config.NewTestConfig(), testutil.NewTestLogger(), review.NewForTestingWithClient(client), scanner)
+
+	tmpDir := testutil.CreateTempGitRepo(t)
+	testutil.CreateFile(t, tmpDir, "pkg/changed.go", "package pkg\n")
+	testutil.CreateFile(t, tmpDir, "pkg/sibling.go", "package pkg\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+	testutil.CreateFile(t, tmpDir, "pkg/changed.go", "package pkg\n\nfunc F() {}\n")
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{"directory": tmpDir}
+
+	result, err := s.HandleReviewOnly(t.Context(), request)
+	require.NoError(t, err)
+	require.False(t, result.IsError, "%+v", result.Content)
+	assert.Contains(t, prompt, "pkg/\n- pkg/changed.go\n- pkg/sibling.go\n")
 }
 
 func TestHandleReviewAndCommit_Approved(t *testing.T) {
