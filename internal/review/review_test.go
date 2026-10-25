@@ -1372,14 +1372,11 @@ func TestRetryableOperation(t *testing.T) {
 
 		ctx, cancel := context.WithCancel(t.Context())
 
-		// Cancel context after first attempt.
-		go func() {
-			time.Sleep(50 * time.Millisecond)
-			cancel()
-		}()
-
+		// Cancel during the first attempt, so the backoff wait that follows
+		// ends at once however slowly the test is scheduled.
 		err := reviewer.retryableOperation(ctx, func() error {
 			callCount++
+			cancel()
 
 			return errors.New("Error 429: Rate limit exceeded") //nolint:err113 // test case
 		}, "test_operation")
