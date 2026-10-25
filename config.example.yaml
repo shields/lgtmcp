@@ -36,7 +36,9 @@ google:
 
 # Model configuration
 gemini:
-  # Model to use for code review
+  # Model to use for code review. It must be a Gemini 3 (or later) model:
+  # every request sends function calling together with a JSON response
+  # schema, which earlier models reject.
   # Default: gemini-3.8-flash
   model: "gemini-3.8-flash"
 
@@ -53,7 +55,8 @@ gemini:
   # Default: none (disabled). gemini-3.8-flash is generally available with
   # generous daily limits, so a fallback is rarely needed. Uncomment and set
   # a model name (e.g. gemini-3.1-pro-preview) to enable a safety net. The
-  # fallback receives the same thinking_level.
+  # fallback receives the same thinking_level and must meet the same
+  # Gemini 3 requirement as model.
   # fallback_model: "gemini-3.1-pro-preview"
 
   # Retry configuration for handling rate limits and transient errors
@@ -131,9 +134,12 @@ logging:
 # it; absolute paths outside it are rejected.
 prompts:
   # Path to custom review prompt file (optional)
+  # This prompt drives the whole review: the model reads it, fetches files
+  # with the get_file_content tool, and answers with the JSON verdict.
+  # The tool is always available and takes a "filepaths" list, but the model
+  # may review from the diff alone unless the prompt tells it to call it.
   # The file should be a Markdown template with Go template syntax
   # Available template variables:
-  #   - {{.AnalysisSection}} - Previous analysis from context gathering
   #   - {{.InstructionsSection}} - Discovered AGENTS.md/REVIEW.md instructions
   #   - {{.ExistingFilesList}} - Changed files that still exist
   #   - {{.DeletedFilesList}} - Files deleted by the change
@@ -142,14 +148,3 @@ prompts:
   #   - {{.CurrentDate}} - Today's date
   # If not specified, uses the embedded default prompt
   # review_prompt_path: "review_prompt.md"
-
-  # Path to custom context gathering prompt file (optional)
-  # The file should be a Markdown template with Go template syntax
-  # Available template variables:
-  #   - {{.InstructionsSection}} - Discovered AGENTS.md/REVIEW.md instructions
-  #   - {{.ExistingFilesList}} - Changed files that still exist
-  #   - {{.DeletedFilesList}} - Files deleted by the change
-  #   - {{.FilesList}} - All changed paths, including deletions
-  #   - {{.Diff}} - Git diff content
-  # If not specified, uses the embedded default prompt
-  # context_gathering_prompt_path: "context_prompt.md"

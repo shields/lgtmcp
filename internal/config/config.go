@@ -44,6 +44,14 @@ var ErrPathOutsideBase = errors.New("absolute path is outside the allowed direct
 // accepted values.
 var ErrInvalidThinkingLevel = errors.New("invalid gemini.thinking_level")
 
+// ErrContextGatheringPromptUnsupported indicates the config sets
+// prompts.context_gathering_prompt_path, which the single-conversation review
+// cannot honor.
+var ErrContextGatheringPromptUnsupported = errors.New(
+	"prompts.context_gathering_prompt_path is not supported: the review runs as one conversation " +
+		"driven by the review prompt; move any custom instructions into prompts.review_prompt_path",
+)
+
 const defaultMaxBackoff = "60s"
 
 // NotFoundError indicates the config file was not found.
@@ -107,7 +115,10 @@ type LoggingConfig struct {
 
 // PromptsConfig holds prompt file configuration.
 type PromptsConfig struct {
-	ReviewPromptPath           string `json:"review_prompt_path,omitempty"`
+	ReviewPromptPath string `json:"review_prompt_path,omitempty"`
+	// ContextGatheringPromptPath exists only so Load can reject it with
+	// ErrContextGatheringPromptUnsupported; YAML parsing ignores unknown keys,
+	// so without the field a stale setting would be dropped silently.
 	ContextGatheringPromptPath string `json:"context_gathering_prompt_path,omitempty"`
 }
 
@@ -191,6 +202,10 @@ func Load() (*Config, error) {
 	var cfg Config
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("cannot parse %s: %w", configPath, err)
+	}
+
+	if cfg.Prompts.ContextGatheringPromptPath != "" {
+		return nil, fmt.Errorf("%s: %w", configPath, ErrContextGatheringPromptUnsupported)
 	}
 
 	// Set defaults.

@@ -22,7 +22,9 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/genai"
 	"msrl.dev/lgtmcp/internal/config"
+	"msrl.dev/lgtmcp/internal/logging"
 	"msrl.dev/lgtmcp/internal/prompts"
 	"msrl.dev/lgtmcp/internal/testutil"
 )
@@ -376,29 +379,6 @@ func retrieveSingle(
 	assert.Equal(t, path, files[0]["filepath"])
 
 	return files[0]
-}
-
-func fileCall(id string, paths ...string) *genai.FunctionCall {
-	args := make([]any, len(paths))
-	for i, p := range paths {
-		args[i] = p
-	}
-
-	return &genai.FunctionCall{ID: id, Name: "get_file_content", Args: map[string]any{"filepaths": args}}
-}
-
-func responseFiles(t *testing.T, resp *genai.FunctionResponse) []map[string]any {
-	t.Helper()
-
-	list, ok := resp.Response["files"].([]any)
-	require.True(t, ok, "response must hold a files list, got %+v", resp.Response)
-	files := make([]map[string]any, len(list))
-	for i, entry := range list {
-		files[i], ok = entry.(map[string]any)
-		require.True(t, ok, "files entry %d must be an object, got %+v", i, entry)
-	}
-
-	return files
 }
 
 func runFileRetrievalTests(t *testing.T, reviewer *Reviewer, repoDir string, tests []fileRetrievalTest) {
@@ -766,14 +746,16 @@ func TestHandleFileRetrieval(t *testing.T) {
 		assert.Contains(t, files["error"], "path traversal not allowed")
 	})
 
-	t.Run("a directory is not a regular file", func(t *testing.T) {
+	t.Run("only a parent component is traversal", func(t *testing.T) {
 		t.Parallel()
 		dir := testutil.CreateTempGitRepo(t)
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o750))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "docs", "v1..v2.md"), []byte("notes"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "top.txt"), []byte("top"), 0o600))
 
-		entry := retrieveSingle(t, r, dir, "docs", nil)
-		assert.Equal(t, "access denied: not a regular file", entry["error"])
-		assert.NotContains(t, entry, "content")
+		assert.Equal(t, "notes", retrieveSingle(t, r, dir, "docs/v1..v2.md", nil)["content"])
+		assert.Contains(t, retrieveSingle(t, r, dir, "docs/../top.txt", nil)["error"],
+			"path traversal not allowed")
 	})
 
 	t.Run("file not found", func(t *testing.T) {
@@ -952,19 +934,13 @@ func TestReviewDiff_ErrorCases(t *testing.T) {
 
 		// Create a reviewer that checks context.
 		reviewer := &Reviewer{
-			client: &StubGeminiClient{
-				CreateChatFunc: func(ctx context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-					// Check if context is canceled.
-					select {
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					default:
-						return &StubGeminiChat{}, nil
-					}
-				},
-			},
+			client: newStubClientWithGenerateContent(func(
+				ctx context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+			) (*genai.GenerateContentResponse, error) {
+				return nil, ctx.Err()
+			}),
 			modelName:     "gemini-3.1-pro-preview",
-			promptManager: prompts.New("", ""),
+			promptManager: prompts.New(""),
 			logger:        testutil.NewTestLogger(),
 		}
 
@@ -1938,22 +1914,11 @@ func TestStubGeminiClient_DefaultPaths(t *testing.T) {
 	t.Parallel()
 	client := &StubGeminiClient{}
 
-	// CreateChat default returns a StubGeminiChat.
-	chat, err := client.CreateChat(t.Context(), "model", nil)
-	require.NoError(t, err)
-	assert.NotNil(t, chat)
-
 	// GenerateContent default returns approval.
 	resp, err := client.GenerateContent(t.Context(), "model", nil, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, resp)
 	assert.NotEmpty(t, resp.Candidates)
-
-	// StubGeminiChat default returns approval.
-	stubChat := &StubGeminiChat{}
-	resp, err = stubChat.SendMessage(t.Context(), genai.Part{Text: "hi"})
-	require.NoError(t, err)
-	assert.NotNil(t, resp)
 }
 
 func TestReviewDiff_FallbackOnQuota(t *testing.T) {
@@ -1972,18 +1937,14 @@ func TestReviewDiff_FallbackOnQuota(t *testing.T) {
 			})
 		}
 		// Fallback model succeeds.
-		return &genai.GenerateContentResponse{
-			Candidates: []*genai.Candidate{{Content: &genai.Content{
-				Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
-			}}},
-		}, nil
+		return textResponse(`{"lgtm": true, "comments": "OK"}`), nil
 	})
 
 	r := &Reviewer{
 		client:        client,
 		modelName:     "primary-model",
 		fallbackModel: "fallback-model",
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        testutil.NewTestLogger(),
 	}
 
@@ -1999,64 +1960,36 @@ func TestReviewDiff_FallbackOnQuota(t *testing.T) {
 // priced at its own rate.
 func TestReviewDiff_FallbackAggregatesSpend(t *testing.T) {
 	t.Parallel()
-	genCalls := 0
-	client := &StubGeminiClient{
-		// Phase 1 (context gathering) runs for both the primary and the
-		// fallback attempt and accrues 100 prompt tokens each time.
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: "Analysis"}},
-						}}},
-						UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
-							PromptTokenCount: 100,
-						},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			genCalls++
-			if genCalls == 1 {
-				// Primary model's review phase hits the daily quota.
-				return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
-					Code:    http.StatusTooManyRequests,
-					Message: "Quota exceeded",
-					Details: []map[string]any{{"@type": quotaFailureType}},
-				})
+	client, requests := recordingClient(func(n int, req recordedRequest) (*genai.GenerateContentResponse, error) {
+		if req.model == "gemini-3.1-pro-preview" {
+			if n == 0 {
+				// The primary model spends 100 prompt tokens on a file request
+				// before its next request hits the daily quota.
+				return withUsage(callResponse(fileCall("c1", "a.go")), 100, 0), nil
 			}
-			// Fallback model succeeds.
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
-				}}},
-				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
-					PromptTokenCount:     200,
-					CandidatesTokenCount: 80,
-				},
-			}, nil
-		},
-	}
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "gemini-3.1-pro-preview",
-		fallbackModel: "gemini-3.7-flash",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
+			return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "Quota exceeded",
+				Details: []map[string]any{{"@type": quotaFailureType}},
+			})
+		}
 
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+		return withUsage(verdictResponse(), 200, 80), nil
+	})
+
+	r := newTestReviewer(client)
+	r.modelName = "gemini-3.1-pro-preview"
+	r.fallbackModel = "gemini-3.7-flash"
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, t.TempDir())
 	require.NoError(t, err)
 	require.NotNil(t, result.TokenUsage)
+	assert.Len(t, *requests, 3)
 
-	// Prompt tokens span both attempts: primary Phase 1 (100) plus fallback
-	// Phase 1 (100) and Phase 2 (200); candidates come from the fallback only.
-	assert.Equal(t, int32(400), result.TokenUsage.PromptTokens)
+	// Prompt tokens span both attempts: primary (100) plus fallback (200);
+	// candidates come from the fallback only.
+	assert.Equal(t, int32(300), result.TokenUsage.PromptTokens)
 	assert.Equal(t, int32(80), result.TokenUsage.CandidatesTokens)
 	assert.Equal(t, "gemini-3.7-flash", result.Model)
 
@@ -2065,7 +1998,7 @@ func TestReviewDiff_FallbackAggregatesSpend(t *testing.T) {
 	// expected figures are priced at the wall clock, as ReviewDiff does.
 	now := time.Now()
 	primaryOnly := (&tokenUsage{PromptTokens: 100}).cost("gemini-3.1-pro-preview", now)
-	fallbackOnly := (&tokenUsage{PromptTokens: 300, CandidatesTokens: 80}).cost("gemini-3.7-flash", now)
+	fallbackOnly := (&tokenUsage{PromptTokens: 200, CandidatesTokens: 80}).cost("gemini-3.7-flash", now)
 	assert.InDelta(t, primaryOnly+fallbackOnly, result.CostUSD, 1e-9)
 	assert.Greater(t, result.CostUSD, fallbackOnly)
 }
@@ -2082,7 +2015,7 @@ func TestReviewDiff_FallbackNone(t *testing.T) {
 		client:        client,
 		modelName:     "primary-model",
 		fallbackModel: config.FallbackModelNone,
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        testutil.NewTestLogger(),
 	}
 
@@ -2103,7 +2036,7 @@ func TestReviewDiff_FallbackSameModel(t *testing.T) {
 		client:        client,
 		modelName:     "same-model",
 		fallbackModel: "same-model",
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        testutil.NewTestLogger(),
 	}
 
@@ -2123,7 +2056,7 @@ func TestReviewDiffWithModel_NoResponse(t *testing.T) {
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        testutil.NewTestLogger(),
 	}
 
@@ -2131,86 +2064,242 @@ func TestReviewDiffWithModel_NoResponse(t *testing.T) {
 	require.ErrorIs(t, err, ErrNoResponse)
 }
 
-// TestReviewDiffWithModel_NilContentReviewPhase ensures a candidate returned
-// with no Content (e.g. blocked by safety filters or stopped on MAX_TOKENS)
-// in the structured review phase yields a clean error rather than a nil
-// pointer panic.
-func TestReviewDiffWithModel_NilContentReviewPhase(t *testing.T) {
+func newStubClientWithGenerateContent(fn generateContentFn) *StubGeminiClient {
+	return &StubGeminiClient{GenerateContentFunc: fn}
+}
+
+type recordedRequest struct {
+	model    string
+	contents []*genai.Content
+	config   *genai.GenerateContentConfig
+}
+
+func recordingClient(
+	respond func(n int, req recordedRequest) (*genai.GenerateContentResponse, error),
+) (*StubGeminiClient, *[]recordedRequest) {
+	var requests []recordedRequest
+
+	return &StubGeminiClient{
+		GenerateContentFunc: func(
+			_ context.Context, model string, contents []*genai.Content, cfg *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			// The reviewer keeps appending to its history after this call returns.
+			req := recordedRequest{model: model, contents: slices.Clone(contents), config: cfg}
+			n := len(requests)
+			requests = append(requests, req)
+
+			return respond(n, req)
+		},
+	}, &requests
+}
+
+func scriptedClient(
+	t *testing.T, responses ...*genai.GenerateContentResponse,
+) (*StubGeminiClient, *[]recordedRequest) {
+	t.Helper()
+
+	return recordingClient(func(n int, _ recordedRequest) (*genai.GenerateContentResponse, error) {
+		if n >= len(responses) {
+			t.Errorf("unexpected request %d; the script has %d responses", n+1, len(responses))
+
+			return nil, errTest
+		}
+
+		return responses[n], nil
+	})
+}
+
+func contentResponse(parts ...*genai.Part) *genai.GenerateContentResponse {
+	return &genai.GenerateContentResponse{
+		Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: parts}}},
+	}
+}
+
+func verdictResponse() *genai.GenerateContentResponse {
+	return textResponse(stubReviewJSON)
+}
+
+func fileCall(id string, paths ...string) *genai.FunctionCall {
+	args := make([]any, len(paths))
+	for i, p := range paths {
+		args[i] = p
+	}
+
+	return &genai.FunctionCall{ID: id, Name: "get_file_content", Args: map[string]any{"filepaths": args}}
+}
+
+func callResponse(calls ...*genai.FunctionCall) *genai.GenerateContentResponse {
+	parts := make([]*genai.Part, len(calls))
+	for i, call := range calls {
+		parts[i] = &genai.Part{FunctionCall: call}
+	}
+
+	return contentResponse(parts...)
+}
+
+func withUsage(resp *genai.GenerateContentResponse, prompt, candidates int32) *genai.GenerateContentResponse {
+	resp.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:     prompt,
+		CandidatesTokenCount: candidates,
+	}
+
+	return resp
+}
+
+func newTestReviewer(client GeminiClient) *Reviewer {
+	return &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		promptManager: prompts.New(""),
+		logger:        testutil.NewTestLogger(),
+	}
+}
+
+func functionResponses(content *genai.Content) []*genai.FunctionResponse {
+	var responses []*genai.FunctionResponse
+	for _, part := range content.Parts {
+		if part.FunctionResponse != nil {
+			responses = append(responses, part.FunctionResponse)
+		}
+	}
+
+	return responses
+}
+
+func responseFiles(t *testing.T, resp *genai.FunctionResponse) []map[string]any {
+	t.Helper()
+
+	list, ok := resp.Response["files"].([]any)
+	require.True(t, ok, "response must hold a files list, got %+v", resp.Response)
+	files := make([]map[string]any, len(list))
+	for i, entry := range list {
+		files[i], ok = entry.(map[string]any)
+		require.True(t, ok, "files entry %d must be an object, got %+v", i, entry)
+	}
+
+	return files
+}
+
+func assertRequestConfig(t *testing.T, cfg *genai.GenerateContentConfig, thinking *genai.ThinkingConfig) {
+	t.Helper()
+
+	require.NotNil(t, cfg)
+	require.Len(t, cfg.Tools, 1)
+	assert.Same(t, fileRetrievalTool, cfg.Tools[0])
+	assert.Equal(t, "application/json", cfg.ResponseMIMEType)
+	assert.Same(t, reviewResponseSchema, cfg.ResponseSchema)
+	assert.Equal(t, thinking, cfg.ThinkingConfig)
+}
+
+func assertToolsDisabled(t *testing.T, cfg *genai.GenerateContentConfig) {
+	t.Helper()
+
+	require.NotNil(t, cfg.ToolConfig)
+	require.NotNil(t, cfg.ToolConfig.FunctionCallingConfig)
+	assert.Equal(t, genai.FunctionCallingConfigModeNone, cfg.ToolConfig.FunctionCallingConfig.Mode)
+}
+
+type capturingLogger struct {
+	logging.Logger
+
+	mu    sync.Mutex
+	infos map[string][]any
+}
+
+func newCapturingLogger() *capturingLogger {
+	return &capturingLogger{Logger: testutil.NewTestLogger(), infos: map[string][]any{}}
+}
+
+func (l *capturingLogger) Info(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.infos[msg] = args
+}
+
+func (l *capturingLogger) field(msg, key string) (any, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	args := l.infos[msg]
+	for i := 0; i+1 < len(args); i += 2 {
+		if args[i] == key {
+			return args[i+1], true
+		}
+	}
+
+	return nil, false
+}
+
+func TestReviewDiffWithModel_NilContent(t *testing.T) {
 	t.Parallel()
-	client := newStubClientWithGenerateContent(func(
-		_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-	) (*genai.GenerateContentResponse, error) {
+
+	nilContent := func(reason genai.FinishReason) *genai.GenerateContentResponse {
 		return &genai.GenerateContentResponse{
-			Candidates: []*genai.Candidate{{Content: nil, FinishReason: genai.FinishReasonSafety}},
-		}, nil
+			Candidates: []*genai.Candidate{{Content: nil, FinishReason: reason}},
+		}
+	}
+
+	noParts := func(reason genai.FinishReason) *genai.GenerateContentResponse {
+		return &genai.GenerateContentResponse{
+			Candidates: []*genai.Candidate{{Content: &genai.Content{Role: genai.RoleModel}, FinishReason: reason}},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		responses []*genai.GenerateContentResponse
+		reason    genai.FinishReason
+	}{
+		{
+			name:      "initial request",
+			responses: []*genai.GenerateContentResponse{nilContent(genai.FinishReasonSafety)},
+			reason:    genai.FinishReasonSafety,
+		},
+		{
+			name:      "content without parts",
+			responses: []*genai.GenerateContentResponse{noParts(genai.FinishReasonMaxTokens)},
+			reason:    genai.FinishReasonMaxTokens,
+		},
+		{
+			name: "after a tool turn",
+			responses: []*genai.GenerateContentResponse{
+				callResponse(fileCall("c1", "a.go")), nilContent(genai.FinishReasonMaxTokens),
+			},
+			reason: genai.FinishReasonMaxTokens,
+		},
+		{
+			name:      "final verdict request",
+			responses: append(turnLimitCalls(), nilContent(genai.FinishReasonOther)),
+			reason:    genai.FinishReasonOther,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, requests := scriptedClient(t, tt.responses...)
+
+			result, err := newTestReviewer(client).ReviewDiff(
+				t.Context(), "diff content", []string{"file.go"}, t.TempDir())
+			require.ErrorIs(t, err, ErrEmptyResponse)
+			assert.Contains(t, err.Error(), string(tt.reason))
+			assert.Nil(t, result)
+			assert.Len(t, *requests, len(tt.responses))
+		})
+	}
+}
+
+func TestReviewDiffWithModel_PromptBlocked(t *testing.T) {
+	t.Parallel()
+	client, requests := scriptedClient(t, &genai.GenerateContentResponse{
+		PromptFeedback: &genai.GenerateContentResponsePromptFeedback{BlockReason: genai.BlockedReasonSafety},
 	})
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.ErrorIs(t, err, ErrEmptyResponse)
-}
-
-// TestReviewDiffWithModel_NilContentContextPhase ensures a candidate returned
-// with no Content during the context-gathering phase does not panic; the
-// review proceeds to the structured phase and succeeds.
-func TestReviewDiffWithModel_NilContentContextPhase(t *testing.T) {
-	t.Parallel()
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: nil, FinishReason: genai.FinishReasonMaxTokens}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
-				}}},
-			}, nil
-		},
-	}
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.NoError(t, err)
-	assert.True(t, result.LGTM)
-}
-
-// newStubClientWithGenerateContent creates a StubGeminiClient where chat
-// always succeeds and GenerateContentFunc is provided by the caller.
-func newStubClientWithGenerateContent(fn generateContentFn) *StubGeminiClient {
-	return &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: "Analysis done"}},
-						}}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: fn,
-	}
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"file.go"}, t.TempDir())
+	require.ErrorIs(t, err, ErrNoResponse)
+	assert.Contains(t, err.Error(), string(genai.BlockedReasonSafety))
+	assert.Nil(t, result)
+	assert.Len(t, *requests, 1)
 }
 
 func TestReviewDiffWithModel_EmptyResponse(t *testing.T) {
@@ -2219,18 +2308,14 @@ func TestReviewDiffWithModel_EmptyResponse(t *testing.T) {
 		func(
 			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
 		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: ""}}, // Empty text.
-				}}},
-			}, nil
+			return textResponse(""), nil
 		},
 	)
 
 	r := &Reviewer{
 		client:        client,
 		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        testutil.NewTestLogger(),
 	}
 
@@ -2260,18 +2345,14 @@ func TestReviewDiffWithModel_JSONParseError(t *testing.T) {
 				func(
 					_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
 				) (*genai.GenerateContentResponse, error) {
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: tt.response}},
-						}}},
-					}, nil
+					return textResponse(tt.response), nil
 				},
 			)
 
 			r := &Reviewer{
 				client:        client,
 				modelName:     "test-model",
-				promptManager: prompts.New("", ""),
+				promptManager: prompts.New(""),
 				logger:        testutil.NewTestLogger(),
 			}
 
@@ -2284,57 +2365,16 @@ func TestReviewDiffWithModel_JSONParseError(t *testing.T) {
 
 func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	t.Parallel()
-	callCount := 0
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					callCount++
-					if callCount == 1 {
-						// First call: return a function call.
-						return &genai.GenerateContentResponse{
-							Candidates: []*genai.Candidate{{Content: &genai.Content{
-								Parts: []*genai.Part{{
-									FunctionCall: &genai.FunctionCall{
-										Name: "get_file_content",
-										Args: map[string]any{"filepaths": []any{"main.go"}},
-									},
-								}},
-							}}},
-						}, nil
-					}
-					// Second call (function response): return text analysis.
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: "Analysis with file context"}},
-						}}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "Good"}`}},
-				}}},
-			}, nil
-		},
-	}
+	client, requests := scriptedClient(t,
+		callResponse(fileCall("call-1", "main.go")),
+		verdictResponse(),
+	)
 
 	tmpDir := testutil.CreateTempGitRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0o600))
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	fetchedFiles := []string{}
-	result, err := r.ReviewDiff(
+	var fetchedFiles []string
+	result, err := newTestReviewer(client).ReviewDiff(
 		t.Context(), "diff content", []string{"main.go"}, tmpDir,
 		WithFileFetchCallback(func(path string) { fetchedFiles = append(fetchedFiles, path) }),
 		WithInstructions("test instructions"),
@@ -2342,70 +2382,456 @@ func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, result.LGTM)
 	assert.Equal(t, []string{"main.go"}, fetchedFiles)
+	require.Len(t, *requests, 2)
+
+	reply := (*requests)[1].contents[len((*requests)[1].contents)-1]
+	assert.Equal(t, genai.RoleUser, reply.Role)
+	responses := functionResponses(reply)
+	require.Len(t, responses, 1)
+	assert.Equal(t, "call-1", responses[0].ID)
+	assert.Equal(t, "get_file_content", responses[0].Name)
+	files := responseFiles(t, responses[0])
+	require.Len(t, files, 1)
+	assert.Equal(t, "main.go", files[0]["filepath"])
+	assert.Equal(t, "package main", files[0]["content"])
 }
 
-func TestReviewDiffWithModel_ChatCreationError(t *testing.T) {
+func TestReviewDiffWithModel_PromptSections(t *testing.T) {
 	t.Parallel()
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return nil, fmt.Errorf("chat creation failed: %w", errTest)
-		},
-	}
+	client, requests := scriptedClient(t, verdictResponse())
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"pkg/a.go"}, t.TempDir(),
+		WithInstructions("INSTRUCTIONS-MARKER"),
+	)
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	require.Len(t, *requests, 1)
 
-	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to create chat session")
+	prompt := (*requests)[0].contents[0].Parts[0].Text
+	instructions := strings.Index(prompt, "INSTRUCTIONS-MARKER")
+	criteria := strings.Index(prompt, "Review criteria:")
+	require.NotEqual(t, -1, instructions, "the instructions must reach the prompt")
+	assert.Less(t, instructions, criteria, "instructions come before the review criteria")
 }
 
-func TestReviewDiffWithModel_InitialPromptError(t *testing.T) {
+func TestReviewDiffWithModel_HistoryGrows(t *testing.T) {
 	t.Parallel()
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					return nil, fmt.Errorf("send failed: %w", errTest)
-				},
-			}, nil
-		},
+
+	signature := []byte("opaque-signature")
+	firstTurn := &genai.Content{Parts: []*genai.Part{
+		{Text: "weighing the change", Thought: true},
+		{FunctionCall: fileCall("c1", "a.go"), ThoughtSignature: signature},
+	}}
+	secondTurn := &genai.Content{Role: genai.RoleModel, Parts: []*genai.Part{
+		{FunctionCall: fileCall("c2", "b.go")},
+	}}
+	client, requests := scriptedClient(t,
+		&genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: firstTurn}}},
+		&genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: secondTurn}}},
+		verdictResponse(),
+	)
+
+	tmpDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package a"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package b"), 0o600))
+
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"a.go", "b.go"}, tmpDir)
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	require.Len(t, *requests, 3)
+
+	wantRoles := []string{genai.RoleUser, genai.RoleModel, genai.RoleUser, genai.RoleModel, genai.RoleUser}
+	for i, req := range *requests {
+		n := 1 + 2*i
+		require.Len(t, req.contents, n, "request %d history length", i+1)
+		for j, content := range req.contents {
+			assert.Equal(t, wantRoles[j], content.Role, "request %d content %d role", i+1, j+1)
+		}
 	}
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
+	last := (*requests)[2].contents
+	assert.Same(t, firstTurn, last[1], "model turn is resent verbatim")
+	assert.Equal(t, genai.RoleModel, firstTurn.Role)
+	require.Len(t, last[1].Parts, 2)
+	assert.True(t, last[1].Parts[0].Thought)
+	assert.Equal(t, signature, last[1].Parts[1].ThoughtSignature)
+	assert.Same(t, secondTurn, last[3])
 
-	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to send message to Gemini")
+	first := functionResponses(last[2])
+	require.Len(t, first, 1)
+	assert.Equal(t, "c1", first[0].ID)
+	assert.Equal(t, "package a", responseFiles(t, first[0])[0]["content"])
+	second := functionResponses(last[4])
+	require.Len(t, second, 1)
+	assert.Equal(t, "c2", second[0].ID)
+	assert.Equal(t, "package b", responseFiles(t, second[0])[0]["content"])
 }
 
-func TestReviewDiffWithModel_ReviewPromptError(t *testing.T) {
+// TestReviewDiffWithModel_ParallelFunctionCalls: the Gemini API rejects a
+// reply whose function response count does not match the call count.
+func TestReviewDiffWithModel_ParallelFunctionCalls(t *testing.T) {
 	t.Parallel()
-	client := newStubClientWithGenerateContent(func(
-		_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-	) (*genai.GenerateContentResponse, error) {
-		return nil, fmt.Errorf("generate failed: %w", errTest)
+	client, requests := scriptedClient(t,
+		callResponse(fileCall("first", "a.go"), fileCall("second", "b.go", "missing.go")),
+		verdictResponse(),
+	)
+
+	tmpDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package a"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package b"), 0o600))
+
+	var fetchedFiles []string
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"a.go", "b.go"}, tmpDir,
+		WithFileFetchCallback(func(path string) { fetchedFiles = append(fetchedFiles, path) }),
+	)
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	assert.Equal(t, []string{"a.go", "b.go", "missing.go"}, fetchedFiles)
+	require.Len(t, *requests, 2)
+
+	history := (*requests)[1].contents
+	reply := history[len(history)-1]
+	require.Len(t, reply.Parts, 2, "one reply message carrying one response part per function call")
+	responses := functionResponses(reply)
+	require.Len(t, responses, 2)
+
+	assert.Equal(t, "first", responses[0].ID)
+	assert.Equal(t, "package a", responseFiles(t, responses[0])[0]["content"])
+
+	assert.Equal(t, "second", responses[1].ID)
+	secondFiles := responseFiles(t, responses[1])
+	require.Len(t, secondFiles, 2)
+	assert.Equal(t, "package b", secondFiles[0]["content"])
+	assert.Contains(t, secondFiles[1]["error"], "failed to read file")
+}
+
+func TestReviewDiffWithModel_DeletedFile(t *testing.T) {
+	t.Parallel()
+	client, requests := scriptedClient(t,
+		callResponse(fileCall("c1", "gone.go", "kept.go")),
+		verdictResponse(),
+	)
+
+	tmpDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "kept.go"), []byte("package kept"), 0o600))
+
+	_, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"gone.go", "kept.go"}, tmpDir,
+		WithDeletedFiles([]string{"gone.go"}),
+	)
+	require.NoError(t, err)
+	require.Len(t, *requests, 2)
+
+	history := (*requests)[1].contents
+	responses := functionResponses(history[len(history)-1])
+	require.Len(t, responses, 1)
+	files := responseFiles(t, responses[0])
+	require.Len(t, files, 2)
+	assert.Equal(t, errDeletedFileMsg, files[0]["error"])
+	assert.Equal(t, "package kept", files[1]["content"])
+}
+
+func TestReviewDiffWithModel_RetrievalBudgetSpansParallelCalls(t *testing.T) {
+	t.Parallel()
+	paths := make([]string, maxFilesPerTurn/2+1)
+	for i := range paths {
+		paths[i] = "../outside.txt"
+	}
+	client, requests := scriptedClient(t,
+		callResponse(fileCall("first", paths...), fileCall("second", paths...)),
+		verdictResponse(),
+	)
+
+	_, err := newTestReviewer(client).ReviewDiff(t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+	require.NoError(t, err)
+	require.Len(t, *requests, 2)
+
+	history := (*requests)[1].contents
+	responses := functionResponses(history[len(history)-1])
+	require.Len(t, responses, 2)
+	first, second := responseFiles(t, responses[0]), responseFiles(t, responses[1])
+	require.Len(t, first, len(paths))
+	require.Len(t, second, len(paths))
+
+	for _, entry := range first {
+		assert.NotEqual(t, errTooManyFilesMsg, entry["error"])
+	}
+	var served, refused int
+	for _, entry := range second {
+		if entry["error"] == errTooManyFilesMsg {
+			refused++
+		} else {
+			served++
+		}
+	}
+	assert.Equal(t, maxFilesPerTurn-len(paths), served)
+	assert.Equal(t, 2*len(paths)-maxFilesPerTurn, refused)
+}
+
+func TestReviewDiffWithModel_RetrievalBudgetResetsEachTurn(t *testing.T) {
+	t.Parallel()
+	paths := make([]string, maxFilesPerTurn*3/5)
+	for i := range paths {
+		paths[i] = "../outside.txt"
+	}
+	client, requests := scriptedClient(t,
+		callResponse(fileCall("first", paths...)),
+		callResponse(fileCall("second", paths...)),
+		verdictResponse(),
+	)
+
+	_, err := newTestReviewer(client).ReviewDiff(t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+	require.NoError(t, err)
+	require.Len(t, *requests, 3)
+
+	history := (*requests)[2].contents
+	for _, reply := range []*genai.Content{history[len(history)-3], history[len(history)-1]} {
+		responses := functionResponses(reply)
+		require.Len(t, responses, 1)
+		for _, entry := range responseFiles(t, responses[0]) {
+			assert.NotEqual(t, errTooManyFilesMsg, entry["error"], "every turn gets a fresh budget")
+		}
+	}
+}
+
+// TestReviewDiffWithModel_ToolTurnLimit: a model that requests files on every
+// turn must not loop (and bill) forever.
+func TestReviewDiffWithModel_ToolTurnLimit(t *testing.T) {
+	t.Parallel()
+	client, requests := recordingClient(func(_ int, req recordedRequest) (*genai.GenerateContentResponse, error) {
+		if req.config.ToolConfig != nil {
+			return verdictResponse(), nil
+		}
+
+		return callResponse(fileCall("a", "main.go"), fileCall("b", "main.go")), nil
 	})
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
+	tmpDir := testutil.CreateTempGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0o600))
+
+	var fetched int
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"main.go"}, tmpDir,
+		WithFileFetchCallback(func(string) { fetched++ }),
+	)
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	assert.Equal(t, "test-model", result.Model)
+
+	// The initial prompt, one request per completed tool turn, and the final
+	// verdict request.
+	require.Len(t, *requests, 1+maxToolTurns+1)
+	assert.Equal(t, 2*maxToolTurns, fetched, "refused calls are not fetched")
+
+	for _, req := range (*requests)[:len(*requests)-1] {
+		assertRequestConfig(t, req.config, nil)
+		assert.Nil(t, req.config.ToolConfig)
 	}
 
-	_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to get review response")
+	final := (*requests)[len(*requests)-1]
+	assertRequestConfig(t, final.config, nil)
+	assertToolsDisabled(t, final.config)
+
+	refusals := functionResponses(final.contents[len(final.contents)-1])
+	require.Len(t, refusals, 2, "every pending call is answered")
+	for i, id := range []string{"a", "b"} {
+		assert.Equal(t, id, refusals[i].ID)
+		assert.Equal(t, map[string]any{errorKey: errRetrievalLimitMsg}, refusals[i].Response)
+	}
+}
+
+// turnLimitCalls scripts a model that requests a file on every turn until the
+// turn limit forces its verdict.
+func turnLimitCalls() []*genai.GenerateContentResponse {
+	responses := make([]*genai.GenerateContentResponse, 0, maxToolTurns+1)
+	for i := range maxToolTurns + 1 {
+		responses = append(responses, callResponse(fileCall(fmt.Sprintf("c%d", i), "a.go")))
+	}
+
+	return responses
+}
+
+func TestReviewDiffWithModel_ToolCallAfterLimit(t *testing.T) {
+	t.Parallel()
+	client, requests := scriptedClient(t, append(turnLimitCalls(), callResponse(fileCall("c2", "b.go")))...)
+
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"a.go", "b.go"}, t.TempDir())
+	require.ErrorIs(t, err, ErrToolCallAfterLimit)
+	assert.Nil(t, result)
+	assert.Len(t, *requests, maxToolTurns+2)
+}
+
+func TestReviewDiff_RequestConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		level genai.ThinkingLevel
+		want  *genai.ThinkingConfig
+	}{
+		{
+			name:  "configured level is sent on every request",
+			level: genai.ThinkingLevelHigh,
+			want:  &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh},
+		},
+		{
+			name:  "unset level omits the config",
+			level: "",
+			want:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, requests := scriptedClient(t,
+				callResponse(fileCall("c1", "a.go")),
+				callResponse(fileCall("c2", "b.go")),
+				verdictResponse(),
+			)
+
+			r := newTestReviewer(client)
+			r.thinkingLevel = tt.level
+			_, err := r.ReviewDiff(t.Context(), "diff content", []string{"a.go", "b.go"}, t.TempDir())
+			require.NoError(t, err)
+			require.Len(t, *requests, 3)
+
+			for _, req := range *requests {
+				assertRequestConfig(t, req.config, tt.want)
+				assert.Nil(t, req.config.ToolConfig)
+			}
+		})
+	}
+}
+
+func TestReviewDiffWithModel_RequestErrors(t *testing.T) {
+	t.Parallel()
+
+	quotaErr := &genai.APIError{
+		Code:    http.StatusTooManyRequests,
+		Message: "Quota exceeded",
+		Details: []map[string]any{{"@type": quotaFailureType}},
+	}
+	tests := []struct {
+		name      string
+		responses []*genai.GenerateContentResponse
+		failure   error
+		wantIs    error
+		wantOp    string
+	}{
+		{
+			name:    "initial prompt",
+			failure: errTest,
+			wantIs:  errTest,
+			wantOp:  "review_prompt",
+		},
+		{
+			name:      "function response",
+			responses: []*genai.GenerateContentResponse{callResponse(fileCall("c1", "a.go"))},
+			failure:   errTest,
+			wantIs:    errTest,
+			wantOp:    "function_response",
+		},
+		{
+			name:      "final verdict",
+			responses: turnLimitCalls(),
+			failure:   errTest,
+			wantIs:    errTest,
+			wantOp:    "final_verdict",
+		},
+		{
+			name:      "quota exhausted mid-review",
+			responses: []*genai.GenerateContentResponse{callResponse(fileCall("c1", "a.go"))},
+			failure:   quotaErr,
+			wantIs:    ErrQuotaExhausted,
+			wantOp:    "function_response",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, requests := recordingClient(func(n int, _ recordedRequest) (*genai.GenerateContentResponse, error) {
+				if n < len(tt.responses) {
+					return tt.responses[n], nil
+				}
+
+				return nil, tt.failure
+			})
+
+			result, err := newTestReviewer(client).ReviewDiff(
+				t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+			require.ErrorIs(t, err, tt.wantIs)
+			assert.Contains(t, err.Error(), "gemini request "+tt.wantOp+" failed")
+			assert.Nil(t, result)
+			assert.Len(t, *requests, len(tt.responses)+1)
+		})
+	}
+}
+
+func TestReviewDiffWithModel_RetriesResendConversation(t *testing.T) {
+	t.Parallel()
+	client, requests := recordingClient(func(n int, _ recordedRequest) (*genai.GenerateContentResponse, error) {
+		switch n {
+		case 0:
+			return callResponse(fileCall("c1", "a.go")), nil
+		case 1:
+			return nil, &genai.APIError{Code: http.StatusServiceUnavailable, Message: "overloaded"}
+		default:
+			return verdictResponse(), nil
+		}
+	})
+
+	r := newTestReviewer(client)
+	r.retryConfig = &config.RetryConfig{
+		MaxRetries:        new(2),
+		InitialBackoff:    "1ms",
+		MaxBackoff:        "2ms",
+		BackoffMultiplier: 1,
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	require.Len(t, *requests, 3)
+	assert.Len(t, (*requests)[1].contents, 3)
+	assert.Equal(t, (*requests)[1].contents, (*requests)[2].contents)
+}
+
+func TestReviewDiffWithModel_TokenUsage(t *testing.T) {
+	t.Parallel()
+	first := callResponse(fileCall("c1", "a.go"))
+	first.UsageMetadata = &genai.GenerateContentResponseUsageMetadata{
+		PromptTokenCount:        100,
+		CandidatesTokenCount:    50,
+		CachedContentTokenCount: 10,
+		ThoughtsTokenCount:      20,
+	}
+	client, _ := scriptedClient(t, first, withUsage(verdictResponse(), 200, 80))
+
+	logger := newCapturingLogger()
+	r := newTestReviewer(client)
+	r.modelName = "gemini-3.1-pro-preview"
+	r.logger = logger
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, t.TempDir())
+	require.NoError(t, err)
+	require.NotNil(t, result.TokenUsage)
+	assert.Equal(t, int32(300), result.TokenUsage.PromptTokens)
+	assert.Equal(t, int32(130), result.TokenUsage.CandidatesTokens)
+	assert.Equal(t, int32(10), result.TokenUsage.CachedTokens)
+	assert.Equal(t, int32(20), result.TokenUsage.ThoughtsTokens)
+	assert.Greater(t, result.CostUSD, float64(0))
+	// The 10 cached tokens flow through to a positive savings on the result.
+	assert.Greater(t, result.CacheSavingsUSD, float64(0))
+
+	requests, ok := logger.field("Token usage", "requests")
+	require.True(t, ok, "the token usage log line must report the request count")
+	assert.Equal(t, 2, requests)
 }
 
 func TestRetryableOperation_NilConfig(t *testing.T) {
@@ -2482,60 +2908,6 @@ func TestCalculateBackoff_CappedAtMax(t *testing.T) {
 	}
 	backoff := calculateBackoff(10, cfg)
 	assert.LessOrEqual(t, backoff, 6*time.Second) // 5s max + jitter.
-}
-
-func TestReviewDiffWithModel_TokenUsage(t *testing.T) {
-	t.Parallel()
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: "Analysis"}},
-						}}},
-						UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
-							PromptTokenCount:        100,
-							CandidatesTokenCount:    50,
-							CachedContentTokenCount: 10,
-							ThoughtsTokenCount:      20,
-						},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
-				}}},
-				UsageMetadata: &genai.GenerateContentResponseUsageMetadata{
-					PromptTokenCount:     200,
-					CandidatesTokenCount: 80,
-				},
-			}, nil
-		},
-	}
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "gemini-3.1-pro-preview",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.NoError(t, err)
-	require.NotNil(t, result.TokenUsage)
-	assert.Equal(t, int32(300), result.TokenUsage.PromptTokens)
-	assert.Equal(t, int32(130), result.TokenUsage.CandidatesTokens)
-	assert.Equal(t, int32(10), result.TokenUsage.CachedTokens)
-	assert.Equal(t, int32(20), result.TokenUsage.ThoughtsTokens)
-	assert.Greater(t, result.CostUSD, float64(0))
-	// The 10 cached tokens flow through to a positive savings on the result.
-	assert.Greater(t, result.CacheSavingsUSD, float64(0))
 }
 
 // TestHandleFileRetrieval_TOCTOUHappyPath is a regression test for the
@@ -2674,220 +3046,39 @@ func TestHandleFileRetrieval_SymlinkToIgnoredFile(t *testing.T) {
 	runFileRetrievalTests(t, reviewer, repoDir, tests)
 }
 
-// TestReviewDiffWithModel_ParallelFunctionCalls ensures that when the model
-// makes several function calls in a single turn, every call gets a response
-// part in the single reply message. The Gemini API rejects a reply whose
-// function response count does not match the call count.
-func TestReviewDiffWithModel_ParallelFunctionCalls(t *testing.T) {
+// TestHandleFileRetrieval_GitDirectory: ignore rules never cover .git, whose
+// config can hold remote URLs with embedded credentials.
+func TestHandleFileRetrieval_GitDirectory(t *testing.T) {
 	t.Parallel()
-	var responsePartCounts []int
-	callCount := 0
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error) {
-					callCount++
-					if callCount == 1 {
-						// Initial prompt: respond with two parallel calls.
-						return &genai.GenerateContentResponse{
-							Candidates: []*genai.Candidate{{Content: &genai.Content{
-								Parts: []*genai.Part{
-									{FunctionCall: &genai.FunctionCall{
-										Name: "get_file_content",
-										Args: map[string]any{"filepaths": []any{"a.go"}},
-									}},
-									{FunctionCall: &genai.FunctionCall{
-										Name: "get_file_content",
-										Args: map[string]any{"filepaths": []any{"b.go"}},
-									}},
-								},
-							}}},
-						}, nil
-					}
-					responsePartCounts = append(responsePartCounts, len(parts))
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: "Analysis done"}},
-						}}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "Good"}`}},
-				}}},
-			}, nil
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "normal.txt"), []byte("normal content"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(".git", "config"), filepath.Join(repoDir, "config-link")))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".github"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".github", "ci.yml"), []byte("ci content"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, "vendor", "dep", ".git"), 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoDir, "vendor", "dep", ".git", "config"), []byte("nested config"), 0o600))
+
+	reviewer := &Reviewer{logger: testutil.NewTestLogger()}
+	tests := []fileRetrievalTest{
+		{name: "repository config", filepath: ".git/config", expectedError: errGitDirMsg},
+		{name: "repository HEAD", filepath: ".git/HEAD", expectedError: errGitDirMsg},
+		{name: "the directory itself", filepath: ".git", expectedError: errGitDirMsg},
+		{name: "redundant components", filepath: "./.git/config", expectedError: errGitDirMsg},
+		{name: "different case", filepath: ".GIT/config", expectedError: errGitDirMsg},
+		{name: "nested repository", filepath: "vendor/dep/.git/config", expectedError: errGitDirMsg},
+		{name: "symlink into .git", filepath: "config-link", expectedError: errGitDirMsg},
+		{name: "ordinary file", filepath: "normal.txt", shouldSucceed: true, expectContent: "normal content"},
+		{
+			name:          "directory with a similar name",
+			filepath:      ".github/ci.yml",
+			shouldSucceed: true,
+			expectContent: "ci content",
 		},
 	}
 
-	tmpDir := testutil.CreateTempGitRepo(t)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "a.go"), []byte("package a"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "b.go"), []byte("package b"), 0o600))
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	var fetchedFiles []string
-	result, err := r.ReviewDiff(
-		t.Context(), "diff content", []string{"a.go", "b.go"}, tmpDir,
-		WithFileFetchCallback(func(path string) { fetchedFiles = append(fetchedFiles, path) }),
-	)
-	require.NoError(t, err)
-	assert.True(t, result.LGTM)
-	assert.Equal(t, []string{"a.go", "b.go"}, fetchedFiles)
-	// One reply message carrying one response part per function call.
-	assert.Equal(t, []int{2}, responsePartCounts)
-}
-
-// TestReviewDiffWithModel_RetrievalBudgetPerTurn ensures the file budget is
-// shared by all the parallel calls of one model turn and restored for the
-// next turn.
-func TestReviewDiffWithModel_RetrievalBudgetPerTurn(t *testing.T) {
-	t.Parallel()
-	const perCall = maxFilesPerTurn * 3 / 5
-	paths := make([]string, perCall)
-	for i := range paths {
-		paths[i] = "../outside.txt"
-	}
-	turns := [][]*genai.FunctionCall{
-		{fileCall("first", paths...), fileCall("second", paths...)},
-		{fileCall("third", paths...)},
-	}
-
-	var replies [][]genai.Part
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error) {
-					turn := len(replies)
-					replies = append(replies, parts)
-					if turn >= len(turns) {
-						return &genai.GenerateContentResponse{
-							Candidates: []*genai.Candidate{{Content: &genai.Content{
-								Parts: []*genai.Part{{Text: "Analysis done"}},
-							}}},
-						}, nil
-					}
-					callParts := make([]*genai.Part, len(turns[turn]))
-					for i, call := range turns[turn] {
-						callParts[i] = &genai.Part{FunctionCall: call}
-					}
-
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: callParts}}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "Good"}`}},
-				}}},
-			}, nil
-		},
-	}
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"a.go"}, testutil.CreateTempGitRepo(t))
-	require.NoError(t, err)
-	assert.True(t, result.LGTM)
-	require.Len(t, replies, 3, "the initial prompt and one reply per tool turn")
-
-	countRefused := func(part genai.Part) (int, int) {
-		require.NotNil(t, part.FunctionResponse)
-		files := responseFiles(t, part.FunctionResponse)
-		var refused int
-		for _, entry := range files {
-			if entry["error"] == errTooManyFilesMsg {
-				refused++
-			}
-		}
-
-		return refused, len(files)
-	}
-
-	// The first turn's two calls draw on one budget: 60 + 40 served, 20 refused.
-	require.Len(t, replies[1], 2)
-	refused, total := countRefused(replies[1][0])
-	assert.Zero(t, refused)
-	assert.Equal(t, perCall, total)
-	refused, total = countRefused(replies[1][1])
-	assert.Equal(t, 2*perCall-maxFilesPerTurn, refused)
-	assert.Equal(t, perCall, total)
-
-	// The next turn starts with a fresh budget, so all 60 paths are served.
-	require.Len(t, replies[2], 1)
-	refused, total = countRefused(replies[2][0])
-	assert.Zero(t, refused)
-	assert.Equal(t, perCall, total)
-}
-
-// TestReviewDiffWithModel_ToolTurnLimit ensures the tool-calling loop is
-// bounded: a model that requests a file on every turn must not loop (and
-// bill) forever; the review proceeds to the structured phase at the cap.
-func TestReviewDiffWithModel_ToolTurnLimit(t *testing.T) {
-	t.Parallel()
-	sendCount := 0
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					sendCount++
-					// Always request another file, forever.
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
-								Name: "get_file_content",
-								Args: map[string]any{"filepaths": []any{"main.go"}},
-							}}},
-						}}},
-					}, nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
-				}}},
-			}, nil
-		},
-	}
-
-	tmpDir := testutil.CreateTempGitRepo(t)
-	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "main.go"), []byte("package main"), 0o600))
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"main.go"}, tmpDir)
-	require.NoError(t, err)
-	assert.True(t, result.LGTM)
-	// Initial prompt plus at most maxToolTurns function-response turns.
-	assert.Equal(t, 1+maxToolTurns, sendCount)
+	runFileRetrievalTests(t, reviewer, repoDir, tests)
 }
 
 // TestReviewDiff_NoFallbackWhenUnset ensures an empty fallback model (as on a
@@ -2907,7 +3098,7 @@ func TestReviewDiff_NoFallbackWhenUnset(t *testing.T) {
 		client:        client,
 		modelName:     "primary-model",
 		fallbackModel: "",
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        testutil.NewTestLogger(),
 	}
 
@@ -2916,85 +3107,57 @@ func TestReviewDiff_NoFallbackWhenUnset(t *testing.T) {
 	assert.Equal(t, 1, callCount, "must not retry with an empty fallback model")
 }
 
-// TestReviewDiffWithModel_ThoughtPartNotCapturedAsAnalysis ensures Phase 1
-// does not mistake a thought-summary part (Thought=true, which also carries
-// text) for the model's analysis: the model's reasoning must not displace the
-// real analysis text in the Phase 2 review prompt.
-func TestReviewDiffWithModel_ThoughtPartNotCapturedAsAnalysis(t *testing.T) {
+func TestReviewDiffWithModel_ThoughtPartSkipped(t *testing.T) {
 	t.Parallel()
-	var reviewPrompt string
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					// The thought summary arrives after the analysis text;
-					// without the Thought guard it would overwrite it.
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{
-								{Text: "Real analysis of the change"},
-								{Text: "internal reasoning summary", Thought: true},
-							},
-						}}},
-					}, nil
-				},
-			}, nil
+
+	tests := []struct {
+		name  string
+		parts []*genai.Part
+	}{
+		{
+			name: "leading thought",
+			parts: []*genai.Part{
+				{Text: "thinking about the verdict", Thought: true},
+				{Text: `{"lgtm": true, "comments": "OK"}`},
+			},
 		},
-		GenerateContentFunc: func(
-			_ context.Context, _ string, contents []*genai.Content, _ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			reviewPrompt = contents[0].Parts[0].Text
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "OK"}`}},
-				}}},
-			}, nil
+		{
+			name: "trailing thought",
+			parts: []*genai.Part{
+				{Text: `{"lgtm": true, "comments": "OK"}`},
+				{Text: "internal reasoning summary", Thought: true},
+			},
+		},
+		{
+			name: "verdict split across parts",
+			parts: []*genai.Part{
+				{Text: "thinking", Thought: true},
+				{Text: `{"lgtm": true, `},
+				{Text: `"comments": "OK"}`},
+			},
 		},
 	}
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, _ := scriptedClient(t, contentResponse(tt.parts...))
+
+			result, err := newTestReviewer(client).ReviewDiff(
+				t.Context(), "diff content", []string{"file.go"}, "/repo")
+			require.NoError(t, err)
+			assert.True(t, result.LGTM)
+			assert.Equal(t, "OK", result.Comments)
+		})
 	}
 
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.NoError(t, err)
-	assert.True(t, result.LGTM)
-	assert.Contains(t, reviewPrompt, "Real analysis of the change")
-	assert.NotContains(t, reviewPrompt, "internal reasoning summary")
-}
+	t.Run("only thought text is empty", func(t *testing.T) {
+		t.Parallel()
+		client, _ := scriptedClient(t, contentResponse(&genai.Part{Text: "just thinking", Thought: true}))
 
-// TestReviewDiffWithModel_ThoughtPartSkippedInReviewPhase ensures Phase 2
-// skips a leading thought-summary part instead of trying to parse the
-// model's reasoning as the structured JSON verdict.
-func TestReviewDiffWithModel_ThoughtPartSkippedInReviewPhase(t *testing.T) {
-	t.Parallel()
-	client := newStubClientWithGenerateContent(func(
-		_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
-	) (*genai.GenerateContentResponse, error) {
-		return &genai.GenerateContentResponse{
-			Candidates: []*genai.Candidate{{Content: &genai.Content{
-				Parts: []*genai.Part{
-					{Text: "thinking about the verdict", Thought: true},
-					{Text: `{"lgtm": true, "comments": "OK"}`},
-				},
-			}}},
-		}, nil
+		_, err := newTestReviewer(client).ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+		require.ErrorIs(t, err, ErrEmptyResponse)
 	})
-
-	r := &Reviewer{
-		client:        client,
-		modelName:     "test-model",
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
-
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-	require.NoError(t, err)
-	assert.True(t, result.LGTM)
-	assert.Equal(t, "OK", result.Comments)
 }
 
 // TestNew_ThinkingLevel verifies the config's thinking_level reaches the
@@ -3021,69 +3184,6 @@ func TestNew_ThinkingLevel(t *testing.T) {
 			reviewer, err := New(cfg, testutil.NewTestLogger())
 			require.NoError(t, err)
 			assert.Equal(t, tt.want, reviewer.thinkingLevel)
-		})
-	}
-}
-
-// TestReviewDiff_ThinkingConfig verifies the thinking level is attached to
-// both the Phase 1 tool-calling chat and the Phase 2 structured-output
-// request, and that an unset level omits ThinkingConfig entirely so the
-// model's own default applies.
-func TestReviewDiff_ThinkingConfig(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		level genai.ThinkingLevel
-		want  *genai.ThinkingConfig
-	}{
-		{
-			name:  "configured level is sent to both phases",
-			level: genai.ThinkingLevelHigh,
-			want:  &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh},
-		},
-		{
-			name:  "unset level omits the config",
-			level: "",
-			want:  nil,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var chatConfig, generateConfig *genai.GenerateContentConfig
-			client := &StubGeminiClient{
-				CreateChatFunc: func(_ context.Context, _ string, cfg *genai.GenerateContentConfig) (GeminiChat, error) {
-					chatConfig = cfg
-					return &StubGeminiChat{}, nil
-				},
-				GenerateContentFunc: func(
-					_ context.Context, _ string, _ []*genai.Content, cfg *genai.GenerateContentConfig,
-				) (*genai.GenerateContentResponse, error) {
-					generateConfig = cfg
-					return &genai.GenerateContentResponse{
-						Candidates: []*genai.Candidate{{Content: &genai.Content{
-							Parts: []*genai.Part{{Text: stubReviewJSON}},
-						}}},
-					}, nil
-				},
-			}
-
-			r := &Reviewer{
-				client:        client,
-				modelName:     "test-model",
-				thinkingLevel: tt.level,
-				promptManager: prompts.New("", ""),
-				logger:        testutil.NewTestLogger(),
-			}
-
-			_, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
-			require.NoError(t, err)
-			require.NotNil(t, chatConfig)
-			require.NotNil(t, generateConfig)
-			assert.Equal(t, tt.want, chatConfig.ThinkingConfig)
-			assert.Equal(t, tt.want, generateConfig.ThinkingConfig)
 		})
 	}
 }
@@ -3157,55 +3257,46 @@ func TestPricingFor(t *testing.T) {
 
 // TestReviewDiff_FallbackCarriesThinkingConfig verifies the documented
 // contract that a quota-triggered fallback attempt sends the same thinking
-// level as the primary attempt, on both request phases.
+// level as the primary attempt, on every request.
 func TestReviewDiff_FallbackCarriesThinkingConfig(t *testing.T) {
 	t.Parallel()
 
 	want := &genai.ThinkingConfig{ThinkingLevel: genai.ThinkingLevelHigh}
-	chatConfigs := map[string]*genai.GenerateContentConfig{}
-	generateConfigs := map[string]*genai.GenerateContentConfig{}
-	client := &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, model string, cfg *genai.GenerateContentConfig) (GeminiChat, error) {
-			chatConfigs[model] = cfg
-			return &StubGeminiChat{}, nil
-		},
-		GenerateContentFunc: func(
-			_ context.Context, model string, _ []*genai.Content, cfg *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			generateConfigs[model] = cfg
-			if model == "primary-model" {
-				return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
-					Code:    http.StatusTooManyRequests,
-					Message: "Quota exceeded",
-					Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}},
-				})
+	client, requests := recordingClient(func(n int, req recordedRequest) (*genai.GenerateContentResponse, error) {
+		if req.model == "primary-model" {
+			if n == 0 {
+				return callResponse(fileCall("c1", "a.go")), nil
 			}
-			return &genai.GenerateContentResponse{
-				Candidates: []*genai.Candidate{{Content: &genai.Content{
-					Parts: []*genai.Part{{Text: stubReviewJSON}},
-				}}},
-			}, nil
-		},
-	}
 
-	r := &Reviewer{
-		client:        client,
-		modelName:     "primary-model",
-		fallbackModel: "fallback-model",
-		thinkingLevel: genai.ThinkingLevelHigh,
-		promptManager: prompts.New("", ""),
-		logger:        testutil.NewTestLogger(),
-	}
+			return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "Quota exceeded",
+				Details: []map[string]any{{"@type": quotaFailureType}},
+			})
+		}
 
-	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, "/repo")
+		if len(req.contents) == 1 {
+			return callResponse(fileCall("c2", "a.go")), nil
+		}
+
+		return verdictResponse(), nil
+	})
+
+	r := newTestReviewer(client)
+	r.modelName = "primary-model"
+	r.fallbackModel = "fallback-model"
+	r.thinkingLevel = genai.ThinkingLevelHigh
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"file.go"}, t.TempDir())
 	require.NoError(t, err)
 	assert.Equal(t, "fallback-model", result.Model)
-	for _, model := range []string{"primary-model", "fallback-model"} {
-		require.Contains(t, chatConfigs, model)
-		require.Contains(t, generateConfigs, model)
-		assert.Equal(t, want, chatConfigs[model].ThinkingConfig, "phase 1 config for %s", model)
-		assert.Equal(t, want, generateConfigs[model].ThinkingConfig, "phase 2 config for %s", model)
+
+	seen := map[string]int{}
+	for _, req := range *requests {
+		seen[req.model]++
+		assertRequestConfig(t, req.config, want)
 	}
+	assert.Equal(t, map[string]int{"primary-model": 2, "fallback-model": 2}, seen)
 }
 
 // TestApplyAggregateSpend_PricesAsOfInstant verifies the aggregation wrapper
@@ -3223,51 +3314,4 @@ func TestApplyAggregateSpend_PricesAsOfInstant(t *testing.T) {
 	standard := &Result{}
 	applyAggregateSpend(standard, spends, flashIntroductoryPricingEnd)
 	assert.InDelta(t, 1.50, standard.CostUSD, 1e-9)
-}
-
-func TestHandleFileRetrieval_GitDirectory(t *testing.T) {
-	t.Parallel()
-	repoDir := testutil.CreateTempGitRepo(t)
-
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "normal.txt"), []byte("normal content"), 0o600))
-	require.NoError(t, os.Symlink(filepath.Join(".git", "config"), filepath.Join(repoDir, "config-link")))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".github"), 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".github", "ci.yml"), []byte("ci content"), 0o600))
-	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, "vendor", "dep", ".git"), 0o750))
-	require.NoError(t, os.WriteFile(
-		filepath.Join(repoDir, "vendor", "dep", ".git", "config"), []byte("nested config"), 0o600))
-
-	reviewer := &Reviewer{logger: testutil.NewTestLogger()}
-	tests := []fileRetrievalTest{
-		{name: "repository config", filepath: ".git/config", expectedError: errGitDirMsg},
-		{name: "repository HEAD", filepath: ".git/HEAD", expectedError: errGitDirMsg},
-		{name: "the directory itself", filepath: ".git", expectedError: errGitDirMsg},
-		{name: "redundant components", filepath: "./.git/config", expectedError: errGitDirMsg},
-		{name: "different case", filepath: ".GIT/config", expectedError: errGitDirMsg},
-		{name: "nested repository", filepath: "vendor/dep/.git/config", expectedError: errGitDirMsg},
-		{name: "symlink into .git", filepath: "config-link", expectedError: errGitDirMsg},
-		{name: "ordinary file", filepath: "normal.txt", shouldSucceed: true, expectContent: "normal content"},
-		{
-			name:          "directory with a similar name",
-			filepath:      ".github/ci.yml",
-			shouldSucceed: true,
-			expectContent: "ci content",
-		},
-	}
-
-	runFileRetrievalTests(t, reviewer, repoDir, tests)
-}
-
-func TestHandleFileRetrieval_ParentComponent(t *testing.T) {
-	t.Parallel()
-	repoDir := testutil.CreateTempGitRepo(t)
-	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, "docs"), 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "docs", "v1..v2.md"), []byte("notes"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "top.txt"), []byte("top"), 0o600))
-
-	reviewer := &Reviewer{logger: testutil.NewTestLogger()}
-	runFileRetrievalTests(t, reviewer, repoDir, []fileRetrievalTest{
-		{name: "dots inside a name", filepath: "docs/v1..v2.md", shouldSucceed: true, expectContent: "notes"},
-		{name: "parent component", filepath: "docs/../top.txt", expectedError: "path traversal not allowed"},
-	})
 }

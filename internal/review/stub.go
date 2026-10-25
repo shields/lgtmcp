@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -24,21 +24,8 @@ const stubReviewJSON = `{"lgtm": true, "comments": "Test review - changes look g
 
 // StubGeminiClient is a stub implementation of GeminiClient for testing.
 type StubGeminiClient struct {
-	CreateChatFunc func(ctx context.Context, modelName string,
-		config *genai.GenerateContentConfig) (GeminiChat, error)
 	GenerateContentFunc func(ctx context.Context, modelName string,
 		contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
-}
-
-// CreateChat implements GeminiClient.
-func (s *StubGeminiClient) CreateChat(
-	ctx context.Context, modelName string, config *genai.GenerateContentConfig,
-) (GeminiChat, error) {
-	if s.CreateChatFunc != nil {
-		return s.CreateChatFunc(ctx, modelName, config)
-	}
-
-	return &StubGeminiChat{}, nil
 }
 
 // GenerateContent implements GeminiClient.
@@ -50,46 +37,11 @@ func (s *StubGeminiClient) GenerateContent(
 	}
 
 	// Default response for testing.
+	return textResponse(stubReviewJSON), nil
+}
+
+func textResponse(text string) *genai.GenerateContentResponse {
 	return &genai.GenerateContentResponse{
-		Candidates: []*genai.Candidate{
-			{
-				Content: &genai.Content{
-					Parts: []*genai.Part{
-						{
-							Text: stubReviewJSON,
-						},
-					},
-				},
-			},
-		},
-	}, nil
-}
-
-// StubGeminiChat is a stub implementation of GeminiChat for testing.
-type StubGeminiChat struct {
-	SendMessageFunc func(ctx context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error)
-}
-
-// SendMessage implements GeminiChat.
-func (s *StubGeminiChat) SendMessage(
-	ctx context.Context, parts ...genai.Part,
-) (*genai.GenerateContentResponse, error) {
-	if s.SendMessageFunc != nil {
-		return s.SendMessageFunc(ctx, parts...)
+		Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: []*genai.Part{{Text: text}}}}},
 	}
-
-	// Default response for testing.
-	return &genai.GenerateContentResponse{
-		Candidates: []*genai.Candidate{
-			{
-				Content: &genai.Content{
-					Parts: []*genai.Part{
-						{
-							Text: stubReviewJSON,
-						},
-					},
-				},
-			},
-		},
-	}, nil
 }

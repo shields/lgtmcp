@@ -48,6 +48,9 @@ var (
 	ErrNoAuthMethod = errors.New("no authentication method configured")
 	// ErrQuotaExhausted indicates the Gemini API quota has been exceeded.
 	ErrQuotaExhausted = errors.New("gemini API quota exhausted")
+	// ErrToolCallAfterLimit indicates the model requested files after file
+	// retrieval was disabled for its final, verdict-only request.
+	ErrToolCallAfterLimit = errors.New("model requested files after the retrieval limit")
 )
 
 // quotaFailureType is the gRPC error detail type for quota exhaustion.
@@ -115,16 +118,8 @@ type FileFetchCallback func(path string)
 
 // GeminiClient abstracts the Gemini API operations for testing.
 type GeminiClient interface {
-	CreateChat(ctx context.Context, modelName string, genConfig *genai.GenerateContentConfig) (GeminiChat, error)
 	GenerateContent(ctx context.Context, modelName string, contents []*genai.Content,
 		genConfig *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
-}
-
-// GeminiChat abstracts the chat session operations. SendMessage is variadic,
-// matching genai.Chat.SendMessage, so that a single turn can carry one
-// function response part per function call the model made in parallel.
-type GeminiChat interface {
-	SendMessage(ctx context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error)
 }
 
 // Options contains optional parameters for a review.
@@ -175,7 +170,9 @@ const (
 	errorKey          = "error"
 	errDeletedFileMsg = "file was deleted or renamed away in this change; the diff records the removal, " +
 		"and a renamed file's content lives at its new path"
-	errGitDirMsg = "access denied: path is inside a .git directory"
+	errGitDirMsg         = "access denied: path is inside a .git directory"
+	errRetrievalLimitMsg = "not retrieved: the file retrieval limit for this review has been reached; " +
+		"give your verdict now using the context you already have"
 
 	// maxFilesPerTurn bounds how many paths the calls of one model turn are
 	// served.
@@ -185,11 +182,49 @@ const (
 		"request it in a later turn"
 	errFileTooLargeFmt = "file too large: exceeds %d bytes"
 
-	// maxToolTurns bounds the Phase 1 tool-calling loop. Each turn can fetch
-	// up to maxFilesPerTurn files, so this is generous for a code review while
-	// still stopping a runaway model from burning tokens forever.
+	// maxToolTurns bounds the tool-calling loop. Each turn can fetch up to
+	// maxFilesPerTurn files, so this is generous for a code review while
+	// stopping a model that keeps asking for one more file.
 	maxToolTurns = 32
 )
+
+var reviewResponseSchema = &genai.Schema{
+	Type: genai.TypeObject,
+	Properties: map[string]*genai.Schema{
+		"lgtm": {
+			Type:        genai.TypeBoolean,
+			Description: "Whether the code is approved for production",
+		},
+		"comments": {
+			Type:        genai.TypeString,
+			Description: "Review comments or issues found",
+		},
+	},
+	Required: []string{"lgtm", "comments"},
+}
+
+// fileRetrievalTool is the get_file_content declaration. It takes a list of
+// paths so the model can gather all the context it needs in one round trip.
+var fileRetrievalTool = &genai.Tool{
+	FunctionDeclarations: []*genai.FunctionDeclaration{
+		{
+			Name: "get_file_content",
+			Description: "Retrieve the contents of one or more files from the repository. " +
+				"List every file you need in a single call.",
+			Parameters: &genai.Schema{
+				Type: genai.TypeObject,
+				Properties: map[string]*genai.Schema{
+					"filepaths": {
+						Type:        genai.TypeArray,
+						Items:       &genai.Schema{Type: genai.TypeString},
+						Description: "Paths of the files to retrieve, relative to the repository root",
+					},
+				},
+				Required: []string{"filepaths"},
+			},
+		},
+	},
+}
 
 // retrievalBudget is what the get_file_content calls of one model turn may
 // still retrieve.
@@ -269,6 +304,7 @@ type tokenUsage struct {
 	CachedTokens     int32
 	ThoughtsTokens   int32
 	ToolUseTokens    int32
+	Requests         int
 }
 
 // addFromResponse accumulates token counts from a Gemini response.
@@ -383,16 +419,13 @@ func New(cfg *config.Config, logger logging.Logger) (*Reviewer, error) {
 	}
 
 	return &Reviewer{
-		client:        &RealGeminiClient{client: client},
+		client:        client.Models,
 		modelName:     cfg.Gemini.Model,
 		fallbackModel: cfg.Gemini.FallbackModel,
 		thinkingLevel: thinkingLevelFromConfig(cfg.Gemini.ThinkingLevel),
 		retryConfig:   cfg.Gemini.Retry,
-		promptManager: prompts.New(
-			cfg.Prompts.ReviewPromptPath,
-			cfg.Prompts.ContextGatheringPromptPath,
-		),
-		logger: logger,
+		promptManager: prompts.New(cfg.Prompts.ReviewPromptPath),
+		logger:        logger,
 	}, nil
 }
 
@@ -748,7 +781,7 @@ func (r *Reviewer) thinkingConfig() *genai.ThinkingConfig {
 
 // reviewDiffWithModel performs a code review using the specified model.
 //
-//nolint:maintidx // Complex multi-phase review process; refactoring would hurt readability.
+//nolint:maintidx // Multi-turn review loop; refactoring would hurt readability.
 func (r *Reviewer) reviewDiffWithModel(
 	ctx context.Context, diff string, changedFiles []string, repoPath string, modelName string,
 	opts *Options, recordSpend func(model string, usage tokenUsage),
@@ -776,6 +809,7 @@ func (r *Reviewer) reviewDiffWithModel(
 				"prompt_tokens", usage.PromptTokens,
 				"candidates_tokens", usage.CandidatesTokens,
 				"total_tokens", usage.total(),
+				"requests", usage.Requests,
 			}
 			if usage.CachedTokens > 0 {
 				logArgs = append(logArgs, "cached_tokens", usage.CachedTokens)
@@ -820,206 +854,164 @@ func (r *Reviewer) reviewDiffWithModel(
 		deletedSet[filepath.Clean(p)] = true
 	}
 
-	// Phase 1: Let Gemini analyze the code with tool support for file retrieval.
-	contextPrompt, err := r.promptManager.BuildContextGatheringPrompt(
-		diff, changedFiles, opts.DeletedFiles, opts.Instructions,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build context gathering prompt: %w", err)
-	}
-
-	// Configure the model with tools for context gathering.
-	toolConfig := &genai.GenerateContentConfig{
-		ThinkingConfig: r.thinkingConfig(),
-	}
-
-	// Define the file retrieval tool.
-	fileRetrievalTool := &genai.Tool{
-		FunctionDeclarations: []*genai.FunctionDeclaration{
-			{
-				Name: "get_file_content",
-				Description: "Retrieve the contents of one or more files from the repository. " +
-					"List every file you need in a single call.",
-				Parameters: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"filepaths": {
-							Type:        genai.TypeArray,
-							Items:       &genai.Schema{Type: genai.TypeString},
-							Description: "Paths of the files to retrieve, relative to the repository root",
-						},
-					},
-					Required: []string{"filepaths"},
-				},
-			},
-		},
-	}
-
-	toolConfig.Tools = []*genai.Tool{fileRetrievalTool}
-
-	// Start the chat session for context gathering.
-	chat, err := r.client.CreateChat(ctx, modelName, toolConfig)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create chat session: %w", err)
-	}
-
-	// Send the initial prompt with retry logic.
-	promptPart := genai.NewPartFromText(contextPrompt)
-	var response *genai.GenerateContentResponse
-	var analysisText string
-
-	err = r.retryableOperation(ctx, func() error {
-		var sendErr error
-		response, sendErr = chat.SendMessage(ctx, *promptPart)
-
-		return sendErr
-	}, "initial_prompt")
-	if err != nil {
-		return nil, fmt.Errorf("failed to send message to Gemini: %w", err)
-	}
-	usage.addFromResponse(response)
-
-	// Handle function calls. The loop is bounded: nothing upstream applies a
-	// deadline, so without a cap a model that keeps requesting files would
-	// fetch (and bill) forever. On hitting the cap we proceed to the
-	// structured review phase with the context gathered so far.
-	for turn := 0; response != nil && len(response.Candidates) > 0; turn++ {
-		if turn >= maxToolTurns {
-			r.logger.Warn("Tool-calling turn limit reached; proceeding to review",
-				"max_turns", maxToolTurns)
-			break
-		}
-
-		candidate := response.Candidates[0]
-
-		// A candidate can arrive with no Content (e.g. blocked by safety
-		// filters or stopped on MAX_TOKENS), in which case there is nothing
-		// to act on; fall through to the structured review phase.
-		if candidate.Content == nil {
-			break
-		}
-
-		// The model may make several function calls in one turn (parallel
-		// function calling). The API requires exactly one response part per
-		// call, so collect a response for each before replying.
-		var funcResponses []genai.Part
-		budget := newRetrievalBudget()
-		for _, part := range candidate.Content.Parts {
-			switch {
-			case part.FunctionCall != nil:
-				funcResponses = append(funcResponses,
-					*r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet, opts.FileFetchCallback, budget))
-			case part.Text != "" && !part.Thought:
-				// Capture any analysis text from the model. Thought-summary
-				// parts also carry text but are reasoning, not analysis, so
-				// they fall through to the default case.
-				analysisText = part.Text
-			default:
-				// Other part kinds (inline data, thought summaries) need no action.
-			}
-		}
-
-		// If no tool calls, we have the analysis response.
-		if len(funcResponses) == 0 {
-			break
-		}
-
-		// Send the function responses back with retry logic.
-		r.logger.Debug("Sending function responses", "count", len(funcResponses))
-
-		err = r.retryableOperation(ctx, func() error {
-			var sendErr error
-			response, sendErr = chat.SendMessage(ctx, funcResponses...)
-
-			return sendErr
-		}, "function_response")
-		if err != nil {
-			return nil, fmt.Errorf("failed to send function response: %w", err)
-		}
-		usage.addFromResponse(response)
-	}
-
-	// Phase 2: Get structured review result without tools.
 	reviewPrompt, err := r.promptManager.BuildReviewPrompt(
-		diff, changedFiles, opts.DeletedFiles, analysisText, opts.Instructions,
+		diff, changedFiles, opts.DeletedFiles, opts.Instructions,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build review prompt: %w", err)
 	}
 
-	// Configure for structured JSON output without tools.
-	jsonConfig := &genai.GenerateContentConfig{
+	// Every request carries the same tools and response schema, so the
+	// conversation prefix stays eligible for implicit caching from one turn to
+	// the next. Gemini 3 models apply the schema to the response that ends the
+	// tool calls.
+	genConfig := &genai.GenerateContentConfig{
 		ThinkingConfig:   r.thinkingConfig(),
+		Tools:            []*genai.Tool{fileRetrievalTool},
 		ResponseMIMEType: "application/json",
-		ResponseSchema: &genai.Schema{
-			Type: genai.TypeObject,
-			Properties: map[string]*genai.Schema{
-				"lgtm": {
-					Type:        genai.TypeBoolean,
-					Description: "Whether the code is approved for production",
-				},
-				"comments": {
-					Type:        genai.TypeString,
-					Description: "Review comments or issues found",
-				},
-			},
-			Required: []string{"lgtm", "comments"},
-		},
+		ResponseSchema:   reviewResponseSchema,
 	}
 
-	// Use GenerateContent API directly for structured JSON output.
-	// The Chat API doesn't support ResponseMIMEType/ResponseSchema.
-	reviewContent := []*genai.Content{
-		{
-			Parts: []*genai.Part{genai.NewPartFromText(reviewPrompt)},
-			Role:  "user",
-		},
+	contents := genai.Text(reviewPrompt)
+	send := func(cfg *genai.GenerateContentConfig, operationName string) (*genai.Content, error) {
+		var response *genai.GenerateContentResponse
+		opErr := r.retryableOperation(ctx, func() error {
+			var sendErr error
+			response, sendErr = r.client.GenerateContent(ctx, modelName, contents, cfg)
+
+			return sendErr
+		}, operationName)
+		if opErr != nil {
+			return nil, fmt.Errorf("gemini request %s failed: %w", operationName, opErr)
+		}
+		usage.addFromResponse(response)
+		usage.Requests++
+
+		return responseContent(response)
 	}
 
-	var reviewResponse *genai.GenerateContentResponse
-	err = r.retryableOperation(ctx, func() error {
-		var sendErr error
-		reviewResponse, sendErr = r.client.GenerateContent(ctx, modelName, reviewContent, jsonConfig)
-
-		return sendErr
-	}, "review_prompt")
+	content, err := send(genConfig, "review_prompt")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get review response: %w", err)
-	}
-	usage.addFromResponse(reviewResponse)
-
-	// Parse the structured response.
-	if reviewResponse == nil || len(reviewResponse.Candidates) == 0 {
-		return nil, ErrNoResponse
+		return nil, err
 	}
 
-	candidate := reviewResponse.Candidates[0]
-	if candidate.Content == nil {
-		return nil, ErrEmptyResponse
-	}
-	for _, part := range candidate.Content.Parts {
-		// Skip thought-summary parts: they carry text but are reasoning, not
-		// the structured JSON verdict, and would fail to parse below.
-		if part.Text != "" && !part.Thought {
-			// Log the raw response for debugging.
-			r.logger.Debug("Raw review response from Gemini", "text", part.Text)
+	for turn := 0; ; turn++ {
+		calls := functionCalls(content)
+		if len(calls) == 0 {
+			return parseVerdict(content, modelName, r.logger)
+		}
 
-			// Parse the JSON response.
-			var result Result
-			if err := json.Unmarshal([]byte(part.Text), &result); err != nil {
-				return nil, fmt.Errorf("failed to parse review response: %w", err)
+		// The model's turn goes back verbatim: Gemini 3 rejects a history
+		// whose function-call parts lost their thought signatures.
+		if content.Role == "" {
+			content.Role = genai.RoleModel
+		}
+		contents = append(contents, content)
+
+		if turn >= maxToolTurns {
+			r.logger.Warn("File retrieval limit reached; requesting verdict",
+				"turns", turn,
+				"max_turns", maxToolTurns)
+
+			// The API requires one response per call, so the pending calls
+			// are answered with a refusal before tools are switched off.
+			refusals := make([]*genai.Part, 0, len(calls))
+			for _, call := range calls {
+				refusals = append(refusals, errorResponse(call, errRetrievalLimitMsg))
+			}
+			contents = append(contents, genai.NewContentFromParts(refusals, genai.RoleUser))
+
+			finalConfig := *genConfig
+			finalConfig.ToolConfig = &genai.ToolConfig{
+				FunctionCallingConfig: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeNone},
+			}
+			content, err = send(&finalConfig, "final_verdict")
+			if err != nil {
+				return nil, err
+			}
+			if len(functionCalls(content)) > 0 {
+				return nil, ErrToolCallAfterLimit
 			}
 
-			// Duration, token usage, and cost are left to ReviewDiff, the
-			// only caller, which prices every attempt (primary plus any
-			// fallback) at one instant via applyAggregateSpend.
-			result.Model = modelName
+			return parseVerdict(content, modelName, r.logger)
+		}
 
-			return &result, nil
+		// The model may make several function calls in one turn (parallel
+		// function calling). The API requires exactly one response part per
+		// call, so collect a response for each before replying.
+		budget := newRetrievalBudget()
+		responses := make([]*genai.Part, 0, len(calls))
+		for _, call := range calls {
+			responses = append(responses,
+				r.handleFileRetrieval(ctx, call, repoPath, deletedSet, opts.FileFetchCallback, budget))
+		}
+		r.logger.Debug("Sending function responses", "count", len(responses))
+		contents = append(contents, genai.NewContentFromParts(responses, genai.RoleUser))
+
+		content, err = send(genConfig, "function_response")
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+// responseContent returns the content of the response's first candidate. When
+// the response is empty, the error names why: the prompt block reason, or the
+// finish reason of a candidate that came back without parts (e.g. blocked by
+// safety filters or stopped on MAX_TOKENS).
+func responseContent(response *genai.GenerateContentResponse) (*genai.Content, error) {
+	if response == nil || len(response.Candidates) == 0 {
+		if response != nil && response.PromptFeedback != nil && response.PromptFeedback.BlockReason != "" {
+			return nil, fmt.Errorf("%w (prompt blocked: %s)", ErrNoResponse, response.PromptFeedback.BlockReason)
+		}
+
+		return nil, ErrNoResponse
+	}
+	candidate := response.Candidates[0]
+	if candidate.Content == nil || len(candidate.Content.Parts) == 0 {
+		return nil, fmt.Errorf("%w (finish reason %q)", ErrEmptyResponse, candidate.FinishReason)
+	}
+
+	return candidate.Content, nil
+}
+
+func functionCalls(content *genai.Content) []*genai.FunctionCall {
+	var calls []*genai.FunctionCall
+	for _, part := range content.Parts {
+		if part.FunctionCall != nil {
+			calls = append(calls, part.FunctionCall)
 		}
 	}
 
-	return nil, ErrEmptyResponse
+	return calls
+}
+
+// parseVerdict decodes the JSON verdict from content's text parts. Thought
+// parts carry text too but are reasoning, not the verdict, so they are
+// skipped.
+func parseVerdict(content *genai.Content, modelName string, logger logging.Logger) (*Result, error) {
+	var text strings.Builder
+	for _, part := range content.Parts {
+		if part.Text != "" && !part.Thought {
+			_, _ = text.WriteString(part.Text)
+		}
+	}
+	if text.Len() == 0 {
+		return nil, ErrEmptyResponse
+	}
+	logger.Debug("Raw review response from Gemini", "text", text.String())
+
+	var result Result
+	if err := json.Unmarshal([]byte(text.String()), &result); err != nil {
+		return nil, fmt.Errorf("failed to parse review response: %w", err)
+	}
+
+	// ReviewDiff fills in duration, token usage, and cost: it prices every
+	// attempt (primary plus any fallback) at one instant via
+	// applyAggregateSpend.
+	result.Model = modelName
+
+	return &result, nil
 }
 
 // newFunctionResponse builds the Part answering funcCall. Unlike

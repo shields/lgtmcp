@@ -1,5 +1,5 @@
 <!--
-Copyright © 2025 Michael Shields
+Copyright © 2025-2026 Michael Shields
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,7 +28,12 @@ CRITICAL: The "lgtm" field controls whether this code gets automatically pushed 
 - Set "lgtm": false if there are ANY concerns that need addressing
 - If lgtm is true, the code will be immediately deployed with no further review
 
-{{.AnalysisSection}}
+Gathering context:
+
+- Use the get_file_content tool to read repository files when you need more than the diff shows, such as callers of changed functions, definitions of types and interfaces the change relies on, and the full contents of changed files.
+- Request every file you need in a single call by listing all their paths in "filepaths". Each round trip resends the whole conversation, so fetching files one at a time is slow and expensive. Make a further call only when the files you received point to more files you need.
+- Do not fetch files you do not need, and do not fetch a file again once you have it.
+- Once you have enough context, stop calling the tool and give your verdict.
 
 Review criteria:
 
@@ -52,13 +57,13 @@ This code has already been compiled, all tests pass, and lint is clean. Do not f
 Focus your review on higher-level issues: design, correctness, security, and maintainability.
 
 {{- if .ExistingFilesList}}
-Files changed in this diff:
+Files changed in this diff (call get_file_content to retrieve current content if you need more than the diff shows):
 
 - {{.ExistingFilesList}}
   {{- end}}
   {{- if .DeletedFilesList}}
 
-Files deleted by this change. The diff below shows their full removed content:
+Files deleted by this change. The diff below shows their full removed content; do not call get_file_content for these paths because they no longer exist:
 
 - {{.DeletedFilesList}}
   {{- end}}
@@ -77,4 +82,4 @@ RESPONSE RULES:
 
 CRITICAL: You must review the entire diff thoroughly and report EVERY issue found. Do not stop after finding one issue - continue reviewing and list all problems.
 
-You MUST respond with ONLY valid JSON, nothing else.
+Your final response (after any get_file_content calls) MUST be ONLY valid JSON, nothing else.

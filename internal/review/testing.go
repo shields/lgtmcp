@@ -32,46 +32,11 @@ func NewForTesting() *Reviewer {
 		panic(err)
 	}
 	return &Reviewer{
-		client:        newDefaultStubClient(),
+		client:        &StubGeminiClient{},
 		modelName:     config.DefaultModel,
 		thinkingLevel: thinkingLevelFromConfig(config.DefaultThinkingLevel),
-		promptManager: prompts.New("", ""),
+		promptManager: prompts.New(""),
 		logger:        logger,
-	}
-}
-
-// newDefaultStubClient creates a stub client with sensible defaults.
-func newDefaultStubClient() GeminiClient {
-	return newStubClient("Analysis complete. Code looks good.", stubReviewJSON)
-}
-
-// newStubClient builds a StubGeminiClient that returns the given phase-1 analysis
-// text and phase-2 review JSON.
-func newStubClient(analysisText, reviewJSON string) *StubGeminiClient {
-	textResp := func(text string) *genai.GenerateContentResponse {
-		return &genai.GenerateContentResponse{
-			Candidates: []*genai.Candidate{
-				{
-					Content: &genai.Content{
-						Parts: []*genai.Part{{Text: text}},
-					},
-				},
-			},
-		}
-	}
-	return &StubGeminiClient{
-		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
-			return &StubGeminiChat{
-				SendMessageFunc: func(_ context.Context, _ ...genai.Part) (*genai.GenerateContentResponse, error) {
-					return textResp(analysisText), nil
-				},
-			}, nil
-		},
-		GenerateContentFunc: func(_ context.Context, _ string, _ []*genai.Content,
-			_ *genai.GenerateContentConfig,
-		) (*genai.GenerateContentResponse, error) {
-			return textResp(reviewJSON), nil
-		},
 	}
 }
 
@@ -85,17 +50,19 @@ func WithStubResponse(lgtm bool, comments string) *Reviewer {
 		panic(err)
 	}
 
-	logger, err := logging.New(logging.Config{Output: "none"})
-	if err != nil {
-		// This should never happen with "none" output.
-		panic(err)
-	}
-	return &Reviewer{
-		client:        newStubClient("Analysis complete for testing.", string(responseJSON)),
-		modelName:     config.DefaultModel,
-		thinkingLevel: thinkingLevelFromConfig(config.DefaultThinkingLevel),
-		retryConfig:   nil, // No retry for testing by default.
-		promptManager: prompts.New("", ""),
-		logger:        logger,
-	}
+	return NewForTestingWithClient(&StubGeminiClient{
+		GenerateContentFunc: func(context.Context, string, []*genai.Content, *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			return textResponse(string(responseJSON)), nil
+		},
+	})
+}
+
+// NewForTestingWithClient creates a Reviewer like NewForTesting that sends its
+// requests to client.
+func NewForTestingWithClient(client GeminiClient) *Reviewer {
+	r := NewForTesting()
+	r.client = client
+
+	return r
 }

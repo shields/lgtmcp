@@ -375,6 +375,23 @@ func TestLoad_ThinkingLevel(t *testing.T) {
 	})
 }
 
+func TestLoad_ContextGatheringPromptPath(t *testing.T) {
+	t.Run("rejected when set", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME",
+			writeGeminiConfig(t, "prompts:\n  context_gathering_prompt_path: \"context_prompt.md\"\n"))
+		_, err := Load()
+		require.ErrorIs(t, err, ErrContextGatheringPromptUnsupported)
+	})
+
+	t.Run("review prompt path alone is accepted", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME",
+			writeGeminiConfig(t, "prompts:\n  review_prompt_path: \"review_prompt.md\"\n"))
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, "review_prompt.md", cfg.Prompts.ReviewPromptPath)
+	})
+}
+
 // TestLoad_MaxRetriesZero verifies an explicit max_retries of 0 is honored
 // (retries disabled) rather than silently bumped to the default of 5.
 func TestLoad_MaxRetriesZero(t *testing.T) {

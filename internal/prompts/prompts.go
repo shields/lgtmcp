@@ -29,23 +29,17 @@ import (
 	"msrl.dev/lgtmcp/internal/config"
 )
 
-// Embedded default prompts.
-var (
-	//go:embed review.md
-	defaultReviewPrompt string
-
-	//go:embed context_gathering.md
-	defaultContextGatheringPrompt string
-)
+// Embedded default prompt.
+//
+//go:embed review.md
+var defaultReviewPrompt string
 
 // PromptType represents the type of prompt.
 type PromptType string
 
 const (
-	// ReviewPrompt is the prompt for the review phase.
+	// ReviewPrompt is the prompt that drives the review conversation.
 	ReviewPrompt PromptType = "review"
-	// ContextGatheringPrompt is the prompt for the context gathering phase.
-	ContextGatheringPrompt PromptType = "context_gathering"
 )
 
 // ErrUnknownPromptType is returned when an unknown prompt type is requested.
@@ -53,8 +47,7 @@ var ErrUnknownPromptType = errors.New("unknown prompt type")
 
 // Manager handles loading and templating of prompts.
 type Manager struct {
-	reviewPromptPath           string
-	contextGatheringPromptPath string
+	reviewPromptPath string
 	// configDir is the lgtmcp config directory used to validate custom
 	// prompt paths. When empty, [config.Dir] is used at validation
 	// time. Tests may override it via [Manager.SetConfigDir].
@@ -62,10 +55,9 @@ type Manager struct {
 }
 
 // New creates a new prompt manager.
-func New(reviewPromptPath, contextGatheringPromptPath string) *Manager {
+func New(reviewPromptPath string) *Manager {
 	return &Manager{
-		reviewPromptPath:           reviewPromptPath,
-		contextGatheringPromptPath: contextGatheringPromptPath,
+		reviewPromptPath: reviewPromptPath,
 	}
 }
 
@@ -85,9 +77,6 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 	case ReviewPrompt:
 		path = m.reviewPromptPath
 		defaultPrompt = defaultReviewPrompt
-	case ContextGatheringPrompt:
-		path = m.contextGatheringPromptPath
-		defaultPrompt = defaultContextGatheringPrompt
 	default:
 		return "", fmt.Errorf("%w: %s", ErrUnknownPromptType, promptType)
 	}
@@ -127,6 +116,8 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 
 // ReviewPromptData contains the data for the review prompt template.
 type ReviewPromptData struct {
+	// AnalysisSection is always empty. The field exists so custom templates
+	// that reference {{.AnalysisSection}} execute without error.
 	AnalysisSection     string
 	InstructionsSection string
 	// FilesList holds every changed path (including deletions); retained for
@@ -143,7 +134,7 @@ type ReviewPromptData struct {
 // deletions and excluded from the existing-files section.
 //
 //nolint:lll // Long function signature
-func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []string, analysisText, instructions string) (string, error) {
+func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []string, instructions string) (string, error) {
 	promptTemplate, err := m.LoadPrompt(ReviewPrompt)
 	if err != nil {
 		return "", fmt.Errorf("failed to load review prompt: %w", err)
@@ -151,14 +142,7 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []st
 
 	existing, deleted := splitFiles(changedFiles, deletedFiles)
 
-	// Include the analysis from the first phase if available.
-	analysisSection := ""
-	if analysisText != "" {
-		analysisSection = fmt.Sprintf("Based on your previous analysis:\n%s\n", analysisText)
-	}
-
 	data := ReviewPromptData{
-		AnalysisSection:     analysisSection,
 		InstructionsSection: instructions,
 		FilesList:           joinNames(changedFiles),
 		ExistingFilesList:   joinNames(existing),
@@ -175,51 +159,6 @@ func (m *Manager) BuildReviewPrompt(diff string, changedFiles, deletedFiles []st
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("failed to execute review prompt template: %w", err)
-	}
-
-	return buf.String(), nil
-}
-
-// ContextGatheringPromptData contains the data for the context gathering prompt template.
-type ContextGatheringPromptData struct {
-	InstructionsSection string
-	// FilesList holds every changed path (including deletions); retained for
-	// custom templates that reference {{.FilesList}}.
-	FilesList         string
-	ExistingFilesList string
-	DeletedFilesList  string
-	Diff              string
-}
-
-// BuildContextGatheringPrompt builds the context gathering prompt from template with the given data.
-// deletedFiles must be a subset of changedFiles; paths in it are listed as
-// deletions and excluded from the existing-files section.
-//
-//nolint:lll // Long function signature
-func (m *Manager) BuildContextGatheringPrompt(diff string, changedFiles, deletedFiles []string, instructions string) (string, error) {
-	promptTemplate, err := m.LoadPrompt(ContextGatheringPrompt)
-	if err != nil {
-		return "", fmt.Errorf("failed to load context gathering prompt: %w", err)
-	}
-
-	existing, deleted := splitFiles(changedFiles, deletedFiles)
-
-	data := ContextGatheringPromptData{
-		InstructionsSection: instructions,
-		FilesList:           joinNames(changedFiles),
-		ExistingFilesList:   joinNames(existing),
-		DeletedFilesList:    joinNames(deleted),
-		Diff:                diff,
-	}
-
-	tmpl, err := template.New("context").Parse(promptTemplate)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse context gathering prompt template: %w", err)
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute context gathering prompt template: %w", err)
 	}
 
 	return buf.String(), nil
