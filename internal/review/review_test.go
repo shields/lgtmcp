@@ -3064,3 +3064,36 @@ func TestApplyAggregateSpend_PricesAsOfInstant(t *testing.T) {
 	applyAggregateSpend(standard, spends, flashIntroductoryPricingEnd)
 	assert.InDelta(t, 1.50, standard.CostUSD, 1e-9)
 }
+
+func TestHandleFileRetrieval_GitDirectory(t *testing.T) {
+	t.Parallel()
+	repoDir := testutil.CreateTempGitRepo(t)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, "normal.txt"), []byte("normal content"), 0o600))
+	require.NoError(t, os.Symlink(filepath.Join(".git", "config"), filepath.Join(repoDir, "config-link")))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, ".github"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, ".github", "ci.yml"), []byte("ci content"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(repoDir, "vendor", "dep", ".git"), 0o750))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repoDir, "vendor", "dep", ".git", "config"), []byte("nested config"), 0o600))
+
+	reviewer := &Reviewer{logger: testutil.NewTestLogger()}
+	tests := []fileRetrievalTest{
+		{name: "repository config", filepath: ".git/config", expectedError: errGitDirMsg},
+		{name: "repository HEAD", filepath: ".git/HEAD", expectedError: errGitDirMsg},
+		{name: "the directory itself", filepath: ".git", expectedError: errGitDirMsg},
+		{name: "redundant components", filepath: "./.git/config", expectedError: errGitDirMsg},
+		{name: "different case", filepath: ".GIT/config", expectedError: errGitDirMsg},
+		{name: "nested repository", filepath: "vendor/dep/.git/config", expectedError: errGitDirMsg},
+		{name: "symlink into .git", filepath: "config-link", expectedError: errGitDirMsg},
+		{name: "ordinary file", filepath: "normal.txt", shouldSucceed: true, expectContent: "normal content"},
+		{
+			name:          "directory with a similar name",
+			filepath:      ".github/ci.yml",
+			shouldSucceed: true,
+			expectContent: "ci content",
+		},
+	}
+
+	runFileRetrievalTests(t, reviewer, repoDir, tests)
+}

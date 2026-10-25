@@ -169,6 +169,7 @@ const (
 	errorKey          = "error"
 	errDeletedFileMsg = "file was deleted or renamed away in this change; the diff records the removal, " +
 		"and a renamed file's content lives at its new path"
+	errGitDirMsg = "access denied: path is inside a .git directory"
 
 	// maxToolTurns bounds the Phase 1 tool-calling loop. Each turn can fetch
 	// several files (parallel function calls), so this is generous for a code
@@ -1026,6 +1027,20 @@ func errorResponse(funcCall *genai.FunctionCall, format string, args ...any) *ge
 	return newFunctionResponse(funcCall, map[string]any{errorKey: fmt.Sprintf(format, args...)})
 }
 
+// inGitDir reports whether any component of the repository-relative path rel
+// is a .git directory. Ignore rules never cover .git, whose config can hold
+// remote URLs with embedded credentials. Components compare case-insensitively
+// because the default macOS and Windows filesystems resolve ".GIT" to ".git".
+func inGitDir(rel string) bool {
+	for part := range strings.SplitSeq(filepath.ToSlash(filepath.Clean(rel)), "/") {
+		if strings.EqualFold(part, ".git") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // handleFileRetrieval handles file retrieval tool calls from Gemini. The
 // deleted set contains paths the caller has identified as deletions in the
 // diff under review; requests for those paths return a clear deleted-file
@@ -1048,6 +1063,10 @@ func (*Reviewer) handleFileRetrieval(
 	// Validate and resolve the file path.
 	if strings.Contains(requestedPath, "..") {
 		return errorResponse(funcCall, "invalid filepath: path traversal not allowed")
+	}
+
+	if inGitDir(requestedPath) {
+		return errorResponse(funcCall, errGitDirMsg)
 	}
 
 	// Clean and join the path.
@@ -1102,6 +1121,9 @@ func (*Reviewer) handleFileRetrieval(
 		if relErr != nil || relResolved == ".." ||
 			strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
 			return errorResponse(funcCall, "access denied: path is outside repository")
+		}
+		if inGitDir(relResolved) {
+			return errorResponse(funcCall, errGitDirMsg)
 		}
 		if relResolved != filepath.Clean(requestedPath) {
 			targetIgnored, targetErr := git.IsIgnored(ctx, repoPath, relResolved)
