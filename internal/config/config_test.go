@@ -375,6 +375,28 @@ func TestLoad_ThinkingLevel(t *testing.T) {
 	})
 }
 
+func TestLoad_MaxDiffBytes(t *testing.T) {
+	t.Run("defaults when unset", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, ""))
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, DefaultMaxDiffBytes, cfg.Review.MaxDiffBytes)
+	})
+
+	t.Run("explicit value is honored", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, "review:\n  max_diff_bytes: 1048576\n"))
+		cfg, err := Load()
+		require.NoError(t, err)
+		assert.Equal(t, 1048576, cfg.Review.MaxDiffBytes)
+	})
+
+	t.Run("negative value is rejected", func(t *testing.T) {
+		t.Setenv("XDG_CONFIG_HOME", writeGeminiConfig(t, "review:\n  max_diff_bytes: -1\n"))
+		_, err := Load()
+		require.ErrorIs(t, err, ErrInvalidMaxDiffBytes)
+	})
+}
+
 func TestLoad_ContextGatheringPromptPath(t *testing.T) {
 	t.Run("rejected when set", func(t *testing.T) {
 		t.Setenv("XDG_CONFIG_HOME",

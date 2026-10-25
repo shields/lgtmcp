@@ -1161,6 +1161,85 @@ func TestHandleReviewOnly_PromptListsChangedDirectories(t *testing.T) {
 	assert.Contains(t, prompt, "pkg/\n- pkg/changed.go\n- pkg/sibling.go\n")
 }
 
+func TestPrepareReview_DiffOverLimit(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"review_only", "review_and_commit"} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+
+			calls := 0
+			client := &review.StubGeminiClient{
+				GenerateContentFunc: func(
+					context.Context, string, []*genai.Content, *genai.GenerateContentConfig,
+				) (*genai.GenerateContentResponse, error) {
+					calls++
+
+					return nil, assert.AnError
+				},
+			}
+			scanner, err := security.New("")
+			require.NoError(t, err)
+			cfg := config.NewTestConfig()
+			cfg.Review.MaxDiffBytes = 2048
+			s := newForTesting(cfg, testutil.NewTestLogger(), review.NewForTestingWithClient(client), scanner)
+
+			tmpDir := testutil.CreateTempGitRepo(t)
+			testutil.CreateFile(t, tmpDir, "big.txt", "start\n")
+			testutil.RunGitCmd(t, tmpDir, "add", ".")
+			testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+			testutil.CreateFile(t, tmpDir, "big.txt", strings.Repeat("line of changed text\n", 200))
+
+			request := mcp.CallToolRequest{}
+			request.Params.Arguments = map[string]any{"directory": tmpDir, "commit_message": "big"}
+			handle := s.HandleReviewOnly
+			if tool == "review_and_commit" {
+				handle = s.HandleReviewAndCommit
+			}
+
+			result, err := handle(t.Context(), request)
+			require.NoError(t, err)
+			require.False(t, result.IsError)
+			textContent, ok := result.Content[0].(mcp.TextContent)
+			require.True(t, ok)
+			assert.Regexp(t,
+				`^Review Result: NOT REVIEWED\n\n`+
+					`The diff is [0-9.]+ KiB, over the 2 KiB limit set by review\.max_diff_bytes\.$`,
+				textContent.Text)
+			assert.Zero(t, calls)
+			assert.Equal(t, "initial", strings.TrimSpace(testutil.RunGitCmd(t, tmpDir, "log", "-1", "--format=%s")))
+		})
+	}
+}
+
+func TestSizeCeilFloor(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		n       int
+		roundUp bool
+		want    string
+	}{
+		{0, true, "0 bytes"},
+		{1023, false, "1023 bytes"},
+		{1024, false, "1 KiB"},
+		{1536, true, "1.5 KiB"},
+		{409600, false, "400 KiB"},
+		{409601, true, "400.1 KiB"},
+		{409601, false, "400 KiB"},
+		{1024*1024 - 1, false, "1023.9 KiB"},
+		{1024*1024 - 1, true, "1 MiB"},
+		{1258291, true, "1.2 MiB"},
+		{6 * 1024 * 1024, false, "6 MiB"},
+	} {
+		format := sizeFloor
+		if tc.roundUp {
+			format = sizeCeil
+		}
+		assert.Equal(t, tc.want, format(tc.n), "n=%d roundUp=%t", tc.n, tc.roundUp)
+	}
+}
+
 func TestHandleReviewAndCommit_Approved(t *testing.T) {
 	t.Parallel()
 	s, tmpDir := createTestServer(t)

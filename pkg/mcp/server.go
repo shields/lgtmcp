@@ -457,6 +457,24 @@ func (s *Server) prepareReview(
 		return nil, nil, fmt.Errorf("failed to get diff: %w", err)
 	}
 
+	// No fallback default here: New dereferences the config, so it is never
+	// nil, and Load fills in the limit. A second default would hide a Config
+	// built without Load, which instead fails loudly by refusing every diff.
+	if limit := s.config.Review.MaxDiffBytes; len(diff) > limit {
+		s.logger.Info("Diff over review limit",
+			"repo", filepath.Base(directory),
+			"diff_size", len(diff),
+			"max_diff_bytes", limit)
+
+		// An oversized diff is not reviewed, which is an outcome rather than a
+		// tool failure, so like a secret finding it is an in-band result with
+		// IsError unset.
+		return nil, mcp.NewToolResultText(fmt.Sprintf(
+			"Review Result: NOT REVIEWED\n\n"+
+				"The diff is %s, over the %s limit set by review.max_diff_bytes.",
+			sizeCeil(len(diff)), sizeFloor(limit))), nil
+	}
+
 	// Report progress: security scan.
 	reporter.Report(ctx, 2, totalSteps, "Running security scan...")
 
@@ -542,6 +560,32 @@ func (s *Server) prepareReview(
 		instructions: instructionsBuf.String(),
 		listing:      git.FormatDirectoryListings(listings),
 	}, nil, nil
+}
+
+// sizeCeil and sizeFloor render n bytes in KiB or MiB to one decimal place,
+// rounding up and down respectively. A diff rounded up and its limit rounded
+// down can never print as equal, which nearest rounding would allow.
+func sizeCeil(n int) string {
+	return formatSize(n, func(unit int) int { return (n*10 + unit - 1) / unit })
+}
+
+func sizeFloor(n int) string {
+	return formatSize(n, func(unit int) int { return n * 10 / unit })
+}
+
+func formatSize(n int, tenths func(unit int) int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d bytes", n)
+	}
+	value, suffix := tenths(1<<10), "KiB"
+	if value >= 10240 {
+		value, suffix = tenths(1<<20), "MiB"
+	}
+	if value%10 == 0 {
+		return fmt.Sprintf("%d %s", value/10, suffix)
+	}
+
+	return fmt.Sprintf("%d.%d %s", value/10, value%10, suffix)
 }
 
 // performReview executes the review with Gemini.

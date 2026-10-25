@@ -278,3 +278,11 @@ make coverage
 **"No changes to review"**
 
 - Make sure you have staged or unstaged changes in your repository
+
+**"Review Result: NOT REVIEWED"**
+
+- The diff is larger than `review.max_diff_bytes` (400 KiB by default), so
+  nothing was sent to Gemini and `review_and_commit` committed nothing
+- Diffs this large are usually generated, vendored, or mass-edited code, where
+  a line-by-line LLM review costs a lot and catches little; raise the limit if
+  you do want them reviewed

@@ -89,6 +89,17 @@ git:
   # Set to 0 for minimal context (only changed lines)
   diff_context_lines: 20
 
+# Review limits
+review:
+  # Largest diff, in bytes, that is sent for review. A larger diff is refused
+  # with "NOT REVIEWED" without calling Gemini (and review_and_commit commits
+  # nothing). Diffs this large are usually generated, vendored, or mass-edited
+  # code, where a line-by-line LLM review costs a lot and catches little, and
+  # the diff alone would use up most of a review's token budget.
+  # Default: 409600 (400 KiB). Leaving the key unset or setting it to 0 selects
+  # the default; a negative value is rejected.
+  max_diff_bytes: 409600
+
 # Security configuration
 gitleaks:
   # Gitleaks configuration file used for every repository (optional), like the

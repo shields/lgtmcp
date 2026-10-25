@@ -44,6 +44,9 @@ var ErrPathOutsideBase = errors.New("absolute path is outside the allowed direct
 // accepted values.
 var ErrInvalidThinkingLevel = errors.New("invalid gemini.thinking_level")
 
+// ErrInvalidMaxDiffBytes indicates review.max_diff_bytes is negative.
+var ErrInvalidMaxDiffBytes = errors.New("review.max_diff_bytes must not be negative")
+
 // ErrContextGatheringPromptUnsupported indicates the config sets
 // prompts.context_gathering_prompt_path, which the single-conversation review
 // cannot honor.
@@ -84,6 +87,18 @@ type GitConfig struct {
 	// DiffContextLines is the number of context lines to include in git diff output.
 	// Use pointer to distinguish between unset (nil = default 20) and explicitly set to 0.
 	DiffContextLines *int `json:"diff_context_lines,omitempty"`
+}
+
+// DefaultMaxDiffBytes is the largest diff reviewed when review.max_diff_bytes
+// is unset.
+const DefaultMaxDiffBytes = 400 * 1024
+
+// ReviewConfig represents review limits.
+type ReviewConfig struct {
+	// MaxDiffBytes is the largest diff, in bytes, that is sent for review;
+	// a larger one is refused without calling Gemini. Load replaces zero
+	// with DefaultMaxDiffBytes.
+	MaxDiffBytes int `json:"max_diff_bytes,omitempty"`
 }
 
 // GitleaksConfig represents Gitleaks configuration.
@@ -175,6 +190,7 @@ type Config struct {
 	Gitleaks GitleaksConfig `json:"gitleaks,omitzero"`
 	Logging  LoggingConfig  `json:"logging"`
 	Prompts  PromptsConfig  `json:"prompts,omitzero"`
+	Review   ReviewConfig   `json:"review,omitzero"`
 }
 
 // Load loads the configuration from the YAML file.
@@ -224,6 +240,12 @@ func Load() (*Config, error) {
 	}
 	if cfg.Logging.Level == "" {
 		cfg.Logging.Level = "info"
+	}
+	if cfg.Review.MaxDiffBytes < 0 {
+		return nil, fmt.Errorf("%w: %d", ErrInvalidMaxDiffBytes, cfg.Review.MaxDiffBytes)
+	}
+	if cfg.Review.MaxDiffBytes == 0 {
+		cfg.Review.MaxDiffBytes = DefaultMaxDiffBytes
 	}
 
 	// Set retry defaults if not specified.
@@ -387,6 +409,9 @@ func NewTestConfig() *Config {
 		},
 		Logging: LoggingConfig{
 			Level: "info",
+		},
+		Review: ReviewConfig{
+			MaxDiffBytes: DefaultMaxDiffBytes,
 		},
 	}
 }
