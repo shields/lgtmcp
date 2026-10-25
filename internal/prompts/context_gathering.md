@@ -1,5 +1,5 @@
 <!--
-Copyright © 2025 Michael Shields
+Copyright © 2025-2026 Michael Shields
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -37,7 +37,12 @@ Files deleted by this change. The diff below shows their full removed content; d
 Git diff to analyze:
 {{.Diff}}
 
-Use the get_file_content tool to examine any files you need more context about. Once you have gathered sufficient context, provide a brief analysis of what you've found that's relevant for the code review.
+Use the get_file_content tool to examine any files you need more context about:
+
+- Request every file you need in a single call by listing all their paths in "filepaths". Each round trip resends the whole conversation, so fetching files one at a time is slow and expensive. Make a further call only when the files you received point to more files you need.
+- Do not fetch files you do not need, and do not fetch a file again once you have it.
+
+Once you have gathered sufficient context, provide a brief analysis of what you've found that's relevant for the code review.
 
 Focus on understanding:
 

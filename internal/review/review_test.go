@@ -300,22 +300,13 @@ func TestHandleFileRetrieval_GitEnvLeak(t *testing.T) {
 	reviewer, err := New(cfg, testutil.NewTestLogger())
 	require.NoError(t, err)
 
-	ignored := reviewer.handleFileRetrieval(t.Context(), &genai.FunctionCall{
-		Name: "get_file_content",
-		Args: map[string]any{"filepath": "secret.txt"},
-	}, repoDir, nil)
-	require.NotNil(t, ignored.FunctionResponse)
-	errMsg, ok := ignored.FunctionResponse.Response["error"].(string)
-	require.True(t, ok, "gitignored file must be denied despite leaked git env, got %+v",
-		ignored.FunctionResponse.Response)
+	ignored := retrieveSingle(t, reviewer, repoDir, "secret.txt", nil)
+	errMsg, ok := ignored["error"].(string)
+	require.True(t, ok, "gitignored file must be denied despite leaked git env, got %+v", ignored)
 	assert.Contains(t, errMsg, "access denied: file is gitignored")
 
-	allowed := reviewer.handleFileRetrieval(t.Context(), &genai.FunctionCall{
-		Name: "get_file_content",
-		Args: map[string]any{"filepath": "normal.txt"},
-	}, repoDir, nil)
-	require.NotNil(t, allowed.FunctionResponse)
-	assert.Equal(t, "normal content", allowed.FunctionResponse.Response["content"])
+	allowed := retrieveSingle(t, reviewer, repoDir, "normal.txt", nil)
+	assert.Equal(t, "normal content", allowed["content"])
 }
 
 // TestHandleFileRetrieval_EchoesCallID verifies every function response,
@@ -332,18 +323,19 @@ func TestHandleFileRetrieval_EchoesCallID(t *testing.T) {
 		args    map[string]any
 		wantKey string
 	}{
-		{name: "successful read", args: map[string]any{"filepath": "ok.txt"}, wantKey: "content"},
-		{name: "error response", args: map[string]any{"filepath": 42}, wantKey: errorKey},
+		{name: "successful read", args: map[string]any{"filepaths": []any{"ok.txt"}}, wantKey: "files"},
+		{name: "error response", args: map[string]any{"filepaths": "ok.txt"}, wantKey: errorKey},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			part := (&Reviewer{}).handleFileRetrieval(t.Context(), &genai.FunctionCall{
+			r := &Reviewer{logger: testutil.NewTestLogger()}
+			part := r.handleFileRetrieval(t.Context(), &genai.FunctionCall{
 				ID:   "call-123",
 				Name: "get_file_content",
 				Args: tt.args,
-			}, repoDir, nil)
+			}, repoDir, nil, nil, newRetrievalBudget())
 			require.NotNil(t, part.FunctionResponse)
 			assert.Equal(t, "call-123", part.FunctionResponse.ID)
 			assert.Equal(t, "get_file_content", part.FunctionResponse.Name)
@@ -360,24 +352,61 @@ type fileRetrievalTest struct {
 	expectedError string
 }
 
+func retrieveFiles(
+	t *testing.T, reviewer *Reviewer, repoDir string, paths []string, deleted map[string]bool,
+	onFetch FileFetchCallback,
+) []map[string]any {
+	t.Helper()
+
+	part := reviewer.handleFileRetrieval(t.Context(), fileCall("", paths...), repoDir, deleted, onFetch,
+		newRetrievalBudget())
+	require.NotNil(t, part.FunctionResponse)
+	require.NotContains(t, part.FunctionResponse.Response, errorKey)
+
+	return responseFiles(t, part.FunctionResponse)
+}
+
+func retrieveSingle(
+	t *testing.T, reviewer *Reviewer, repoDir, path string, deleted map[string]bool,
+) map[string]any {
+	t.Helper()
+
+	files := retrieveFiles(t, reviewer, repoDir, []string{path}, deleted, nil)
+	require.Len(t, files, 1)
+	assert.Equal(t, path, files[0]["filepath"])
+
+	return files[0]
+}
+
+func fileCall(id string, paths ...string) *genai.FunctionCall {
+	args := make([]any, len(paths))
+	for i, p := range paths {
+		args[i] = p
+	}
+
+	return &genai.FunctionCall{ID: id, Name: "get_file_content", Args: map[string]any{"filepaths": args}}
+}
+
+func responseFiles(t *testing.T, resp *genai.FunctionResponse) []map[string]any {
+	t.Helper()
+
+	list, ok := resp.Response["files"].([]any)
+	require.True(t, ok, "response must hold a files list, got %+v", resp.Response)
+	files := make([]map[string]any, len(list))
+	for i, entry := range list {
+		files[i], ok = entry.(map[string]any)
+		require.True(t, ok, "files entry %d must be an object, got %+v", i, entry)
+	}
+
+	return files
+}
+
 func runFileRetrievalTests(t *testing.T, reviewer *Reviewer, repoDir string, tests []fileRetrievalTest) {
 	t.Helper()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			funcCall := &genai.FunctionCall{
-				Name: "get_file_content",
-				Args: map[string]any{
-					"filepath": tt.filepath,
-				},
-			}
-
-			result := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir, nil)
-
-			var response map[string]any
-			if result.FunctionResponse != nil {
-				response = result.FunctionResponse.Response
-			}
+			response := retrieveSingle(t, reviewer, repoDir, tt.filepath, nil)
 
 			if tt.shouldSucceed {
 				content, hasContent := response["content"].(string)
@@ -414,19 +443,7 @@ func TestHandleFileRetrieval_GitCommandFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	// Test that when git check-ignore fails (not a git repo), access is denied
-	funcCall := &genai.FunctionCall{
-		Name: "get_file_content",
-		Args: map[string]any{
-			"filepath": "test.txt",
-		},
-	}
-
-	result := reviewer.handleFileRetrieval(t.Context(), funcCall, nonGitDir, nil)
-
-	var response map[string]any
-	if result.FunctionResponse != nil {
-		response = result.FunctionResponse.Response
-	}
+	response := retrieveSingle(t, reviewer, nonGitDir, "test.txt", nil)
 
 	// Should have an error due to git command failure
 	errMsg, hasError := response["error"].(string)
@@ -504,22 +521,8 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			// Create function call.
-			funcCall := &genai.FunctionCall{
-				Name: "retrieve_file",
-				Args: map[string]any{
-					"filepath": tt.filepath,
-				},
-			}
-
 			t.Logf("Testing with filepath: %s, repoDir: %s", tt.filepath, repoDir)
-			result := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir, nil)
-
-			// Extract the response from the FunctionResponse.
-			var response map[string]any
-			if result.FunctionResponse != nil {
-				response = result.FunctionResponse.Response
-			}
+			response := retrieveSingle(t, reviewer, repoDir, tt.filepath, nil)
 
 			if tt.shouldSucceed {
 				content, hasContent := response["content"].(string)
@@ -533,15 +536,9 @@ func TestHandleFileRetrieval_PathTraversal(t *testing.T) {
 				assert.True(t, hasContent, "Expected content in response")
 				assert.Equal(t, tt.expectContent, content)
 			} else {
-				// Should either have an error or not be able to read the file.
-				if errMsg, hasError := response["error"].(string); hasError {
-					// Good - we got an error.
-					t.Logf("Got expected error: %s", errMsg)
-				} else if content, hasContent := response["content"].(string); hasContent {
-					// Bad - we shouldn't be able to read sensitive files.
-					assert.NotContains(t, content, "sensitive content",
-						"SECURITY VULNERABILITY: Path traversal allowed access to %s", tt.filepath)
-				}
+				assert.Contains(t, response, "error", "%s must be denied", tt.filepath)
+				assert.NotContains(t, response, "content",
+					"SECURITY VULNERABILITY: Path traversal allowed access to %s", tt.filepath)
 			}
 		})
 	}
@@ -623,80 +620,185 @@ func TestHandleFileRetrieval(t *testing.T) {
 	r := &Reviewer{logger: testutil.NewTestLogger()}
 	tmpDir := testutil.CreateTempGitRepo(t)
 
-	// Create a test file.
-	testFile := filepath.Join(tmpDir, "test.txt")
 	testContent := "test file content"
-	require.NoError(t, os.WriteFile(testFile, []byte(testContent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "test.txt"), []byte(testContent), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "other.txt"), []byte("other content"), 0o600))
 
 	t.Run("successful file retrieval", func(t *testing.T) {
 		t.Parallel()
-		funcCall := &genai.FunctionCall{
+		part := r.handleFileRetrieval(t.Context(), &genai.FunctionCall{
 			Name: "get_file_content",
-			Args: map[string]any{
-				"filepath": "test.txt",
-			},
-		}
+			Args: map[string]any{"filepaths": []any{"test.txt"}},
+		}, tmpDir, nil, nil, newRetrievalBudget())
+		require.NotNil(t, part.FunctionResponse)
+		assert.Equal(t, "get_file_content", part.FunctionResponse.Name)
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, nil)
-		assert.NotNil(t, response)
-
-		// Check the response contains the file content.
-		if response.FunctionResponse != nil {
-			assert.Equal(t, "get_file_content", response.FunctionResponse.Name)
-			assert.Equal(t, testContent, response.FunctionResponse.Response["content"])
-		}
+		files := retrieveSingle(t, r, tmpDir, "test.txt", nil)
+		assert.Equal(t, testContent, files["content"])
+		assert.NotContains(t, files, errorKey)
 	})
 
-	t.Run("missing filepath parameter", func(t *testing.T) {
+	t.Run("multiple paths return entries in request order", func(t *testing.T) {
 		t.Parallel()
-		funcCall := &genai.FunctionCall{
-			Name: "get_file_content",
-			Args: map[string]any{},
+		files := retrieveFiles(t, r, tmpDir,
+			[]string{"other.txt", "nonexistent.txt", "test.txt", "../outside.txt"}, nil, nil)
+		require.Len(t, files, 4)
+
+		assert.Equal(t, "other.txt", files[0]["filepath"])
+		assert.Equal(t, "other content", files[0]["content"])
+		assert.NotContains(t, files[0], errorKey)
+
+		assert.Equal(t, "nonexistent.txt", files[1]["filepath"])
+		assert.Contains(t, files[1]["error"], "failed to read file")
+		assert.NotContains(t, files[1], "content")
+
+		assert.Equal(t, "test.txt", files[2]["filepath"])
+		assert.Equal(t, testContent, files[2]["content"])
+
+		assert.Equal(t, "../outside.txt", files[3]["filepath"])
+		assert.Contains(t, files[3]["error"], "path traversal not allowed")
+	})
+
+	t.Run("duplicate paths are each answered", func(t *testing.T) {
+		t.Parallel()
+		files := retrieveFiles(t, r, tmpDir, []string{"test.txt", "test.txt"}, nil, nil)
+		require.Len(t, files, 2)
+		assert.Equal(t, testContent, files[0]["content"])
+		assert.Equal(t, testContent, files[1]["content"])
+	})
+
+	t.Run("paths beyond the per-turn limit are refused", func(t *testing.T) {
+		t.Parallel()
+		// A traversal path costs no git process but still counts against the
+		// budget.
+		paths := make([]string, maxFilesPerTurn+2)
+		for i := range paths {
+			paths[i] = "../outside.txt"
 		}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, nil)
-		assert.NotNil(t, response)
-
-		// Check for error response.
-		if response.FunctionResponse != nil {
-			assert.Contains(t, response.FunctionResponse.Response["error"], "filepath parameter must be a string")
+		var fetched int
+		files := retrieveFiles(t, r, tmpDir, paths, nil, func(string) { fetched++ })
+		require.Len(t, files, len(paths))
+		assert.Equal(t, maxFilesPerTurn, fetched, "refused paths are not fetched")
+		assert.Contains(t, files[maxFilesPerTurn-1]["error"], "path traversal not allowed")
+		for _, entry := range files[maxFilesPerTurn:] {
+			assert.Equal(t, "../outside.txt", entry["filepath"])
+			assert.Equal(t, errTooManyFilesMsg, entry["error"])
 		}
 	})
+
+	t.Run("content beyond the per-turn budget is refused", func(t *testing.T) {
+		t.Parallel()
+		dir := testutil.CreateTempGitRepo(t)
+		big := make([]byte, maxRetrievedBytesPerTurn/2+1)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "big1.bin"), big, 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "big2.bin"), big, 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "small.txt"), []byte("small"), 0o600))
+
+		files := retrieveFiles(t, r, dir, []string{"big1.bin", "big2.bin", "small.txt"}, nil, nil)
+		require.Len(t, files, 3)
+		assert.Len(t, files[0]["content"], len(big))
+		assert.Equal(t, errTurnBudgetMsg, files[1]["error"])
+		assert.NotContains(t, files[1], "content")
+		assert.Equal(t, "small", files[2]["content"], "a refused file does not consume the budget")
+	})
+
+	t.Run("a file over the size limit is too large even with part of the budget used", func(t *testing.T) {
+		t.Parallel()
+		dir := testutil.CreateTempGitRepo(t)
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "small.txt"), []byte("small"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "huge.bin"), make([]byte, maxRetrievedFileSize+1), 0o600))
+
+		files := retrieveFiles(t, r, dir, []string{"small.txt", "huge.bin"}, nil, nil)
+		require.Len(t, files, 2)
+		assert.Equal(t, "small", files[0]["content"])
+		assert.Contains(t, files[1]["error"], "file too large")
+	})
+
+	t.Run("non-string entry is an error entry", func(t *testing.T) {
+		t.Parallel()
+		part := r.handleFileRetrieval(t.Context(), &genai.FunctionCall{
+			Name: "get_file_content",
+			Args: map[string]any{"filepaths": []any{42, "test.txt"}},
+		}, tmpDir, nil, nil, newRetrievalBudget())
+		require.NotNil(t, part.FunctionResponse)
+		files, ok := part.FunctionResponse.Response["files"].([]any)
+		require.True(t, ok)
+		require.Len(t, files, 2)
+
+		bad, ok := files[0].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, "42", bad["filepath"])
+		assert.Equal(t, "filepath must be a string", bad["error"])
+
+		good, ok := files[1].(map[string]any)
+		require.True(t, ok)
+		assert.Equal(t, testContent, good["content"])
+	})
+
+	invalidArgs := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "missing filepaths parameter", args: map[string]any{}},
+		{name: "nil args", args: nil},
+		{name: "empty array", args: map[string]any{"filepaths": []any{}}},
+		{name: "string instead of array", args: map[string]any{"filepaths": "test.txt"}},
+		{name: "legacy filepath parameter", args: map[string]any{"filepath": "test.txt"}},
+		{name: "number instead of array", args: map[string]any{"filepaths": 42}},
+	}
+	for _, tt := range invalidArgs {
+		t.Run(tt.name+" is a whole-call error", func(t *testing.T) {
+			t.Parallel()
+			part := r.handleFileRetrieval(t.Context(), &genai.FunctionCall{
+				Name: "get_file_content",
+				Args: tt.args,
+			}, tmpDir, nil, nil, newRetrievalBudget())
+			require.NotNil(t, part.FunctionResponse)
+			assert.Contains(t, part.FunctionResponse.Response[errorKey], "filepaths parameter must be a non-empty array")
+			assert.NotContains(t, part.FunctionResponse.Response, "files")
+		})
+	}
 
 	t.Run("path traversal attempt", func(t *testing.T) {
 		t.Parallel()
-		funcCall := &genai.FunctionCall{
-			Name: "get_file_content",
-			Args: map[string]any{
-				"filepath": "../../../etc/passwd",
-			},
-		}
+		files := retrieveSingle(t, r, tmpDir, "../../../etc/passwd", nil)
+		assert.Contains(t, files["error"], "path traversal not allowed")
+	})
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, nil)
-		assert.NotNil(t, response)
+	t.Run("a directory is not a regular file", func(t *testing.T) {
+		t.Parallel()
+		dir := testutil.CreateTempGitRepo(t)
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "docs"), 0o750))
 
-		// Check for error response.
-		if response.FunctionResponse != nil {
-			assert.Contains(t, response.FunctionResponse.Response["error"], "path traversal not allowed")
-		}
+		entry := retrieveSingle(t, r, dir, "docs", nil)
+		assert.Equal(t, "access denied: not a regular file", entry["error"])
+		assert.NotContains(t, entry, "content")
 	})
 
 	t.Run("file not found", func(t *testing.T) {
 		t.Parallel()
-		funcCall := &genai.FunctionCall{
+		files := retrieveSingle(t, r, tmpDir, "nonexistent.txt", nil)
+		assert.Contains(t, files["error"], "failed to read file")
+	})
+
+	t.Run("callback is invoked once per requested path", func(t *testing.T) {
+		t.Parallel()
+		var fetched []string
+		retrieveFiles(t, r, tmpDir,
+			[]string{"test.txt", "nonexistent.txt", "other.txt"}, nil,
+			func(path string) { fetched = append(fetched, path) })
+		assert.Equal(t, []string{"test.txt", "nonexistent.txt", "other.txt"}, fetched)
+	})
+
+	t.Run("callback is skipped for empty and non-string paths", func(t *testing.T) {
+		t.Parallel()
+		var fetched []string
+		r.handleFileRetrieval(t.Context(), &genai.FunctionCall{
 			Name: "get_file_content",
-			Args: map[string]any{
-				"filepath": "nonexistent.txt",
-			},
-		}
-
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, nil)
-		assert.NotNil(t, response)
-
-		// Check for error response.
-		if response.FunctionResponse != nil {
-			assert.Contains(t, response.FunctionResponse.Response["error"], "failed to read file")
-		}
+			Args: map[string]any{"filepaths": []any{"", 7, "test.txt"}},
+		}, tmpDir, nil, func(path string) { fetched = append(fetched, path) }, newRetrievalBudget())
+		assert.Equal(t, []string{"test.txt"}, fetched)
 	})
 
 	t.Run("deleted file returns explicit deleted-file message", func(t *testing.T) {
@@ -705,57 +807,47 @@ func TestHandleFileRetrieval(t *testing.T) {
 		// tool must short-circuit and tell the model the file was removed,
 		// rather than letting it fall through to a generic ENOENT that
 		// could be mistaken for a transient read failure.
-		funcCall := &genai.FunctionCall{
-			Name: "get_file_content",
-			Args: map[string]any{"filepath": "gone.txt"},
-		}
 		deleted := map[string]bool{"gone.txt": true}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, deleted)
-		require.NotNil(t, response)
-		require.NotNil(t, response.FunctionResponse)
-
-		errMsg, ok := response.FunctionResponse.Response["error"].(string)
-		require.True(t, ok, "expected error in response, got %+v", response.FunctionResponse.Response)
+		entry := retrieveSingle(t, r, tmpDir, "gone.txt", deleted)
+		errMsg, ok := entry["error"].(string)
+		require.True(t, ok, "expected error in entry, got %+v", entry)
 		assert.Equal(t, errDeletedFileMsg, errMsg)
 		assert.NotContains(t, errMsg, "failed to read file")
 		assert.NotContains(t, errMsg, "no such file or directory")
 
 		// And it must not leak content.
-		_, leaked := response.FunctionResponse.Response["content"]
-		assert.False(t, leaked, "deleted-file response must not include content")
+		assert.NotContains(t, entry, "content", "deleted-file entry must not include content")
 	})
 
 	t.Run("deleted-file short-circuit also applies for paths with redundant components", func(t *testing.T) {
 		t.Parallel()
 		// The deleted set is keyed by filepath.Clean'd paths; a request
 		// for "./gone.txt" should still hit the short-circuit.
-		funcCall := &genai.FunctionCall{
-			Name: "get_file_content",
-			Args: map[string]any{"filepath": "./gone.txt"},
-		}
 		deleted := map[string]bool{"gone.txt": true}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, deleted)
-		require.NotNil(t, response.FunctionResponse)
-		errMsg, ok := response.FunctionResponse.Response["error"].(string)
-		require.True(t, ok)
-		assert.Equal(t, errDeletedFileMsg, errMsg)
+		entry := retrieveSingle(t, r, tmpDir, "./gone.txt", deleted)
+		assert.Equal(t, errDeletedFileMsg, entry["error"])
+	})
+
+	t.Run("deleted and present files in one call", func(t *testing.T) {
+		t.Parallel()
+		deleted := map[string]bool{"gone.txt": true}
+
+		files := retrieveFiles(t, r, tmpDir, []string{"gone.txt", "test.txt"}, deleted, nil)
+		require.Len(t, files, 2)
+		assert.Equal(t, errDeletedFileMsg, files[0]["error"])
+		assert.Equal(t, testContent, files[1]["content"])
 	})
 
 	t.Run("existing file is unaffected by populated deleted set", func(t *testing.T) {
 		t.Parallel()
 		// Sanity check that a non-empty deleted set does not poison the
 		// happy path: a request for a still-present file returns content.
-		funcCall := &genai.FunctionCall{
-			Name: "get_file_content",
-			Args: map[string]any{"filepath": "test.txt"},
-		}
 		deleted := map[string]bool{"some-other-path.txt": true}
 
-		response := r.handleFileRetrieval(t.Context(), funcCall, tmpDir, deleted)
-		require.NotNil(t, response.FunctionResponse)
-		assert.Equal(t, testContent, response.FunctionResponse.Response["content"])
+		entry := retrieveSingle(t, r, tmpDir, "test.txt", deleted)
+		assert.Equal(t, testContent, entry["content"])
 	})
 }
 
@@ -2205,7 +2297,7 @@ func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 								Parts: []*genai.Part{{
 									FunctionCall: &genai.FunctionCall{
 										Name: "get_file_content",
-										Args: map[string]any{"filepath": "main.go"},
+										Args: map[string]any{"filepaths": []any{"main.go"}},
 									},
 								}},
 							}}},
@@ -2392,18 +2484,6 @@ func TestCalculateBackoff_CappedAtMax(t *testing.T) {
 	assert.LessOrEqual(t, backoff, 6*time.Second) // 5s max + jitter.
 }
 
-func TestHandleFileRetrieval_NonStringFilepath(t *testing.T) {
-	t.Parallel()
-	r := &Reviewer{logger: testutil.NewTestLogger()}
-	funcCall := &genai.FunctionCall{
-		Name: "get_file_content",
-		Args: map[string]any{"filepath": 123},
-	}
-	resp := r.handleFileRetrieval(t.Context(), funcCall, "/repo", nil)
-	assert.NotNil(t, resp)
-	assert.NotNil(t, resp.FunctionResponse)
-}
-
 func TestReviewDiffWithModel_TokenUsage(t *testing.T) {
 	t.Parallel()
 	client := &StubGeminiClient{
@@ -2528,16 +2608,10 @@ func TestHandleFileRetrieval_ParentSymlinkEscape(t *testing.T) {
 	reviewer, err := New(cfg, testutil.NewTestLogger())
 	require.NoError(t, err)
 
-	funcCall := &genai.FunctionCall{
-		Name: "get_file_content",
-		Args: map[string]any{"filepath": "escape/secret.txt"},
-	}
-	resp := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir, nil)
-	require.NotNil(t, resp.FunctionResponse)
-	errMsg, ok := resp.FunctionResponse.Response["error"].(string)
-	require.True(t, ok, "expected error response, got %+v", resp.FunctionResponse.Response)
-	_, leaked := resp.FunctionResponse.Response["content"]
-	assert.False(t, leaked, "must not return content for parent-symlink escape")
+	entry := retrieveSingle(t, reviewer, repoDir, "escape/secret.txt", nil)
+	errMsg, ok := entry["error"].(string)
+	require.True(t, ok, "expected error entry, got %+v", entry)
+	assert.NotContains(t, entry, "content", "must not return content for parent-symlink escape")
 	assert.NotContains(t, errMsg, "secret content")
 }
 
@@ -2556,17 +2630,11 @@ func TestHandleFileRetrieval_FileSizeLimit(t *testing.T) {
 	reviewer, err := New(cfg, testutil.NewTestLogger())
 	require.NoError(t, err)
 
-	funcCall := &genai.FunctionCall{
-		Name: "get_file_content",
-		Args: map[string]any{"filepath": "big.bin"},
-	}
-	resp := reviewer.handleFileRetrieval(t.Context(), funcCall, repoDir, nil)
-	require.NotNil(t, resp.FunctionResponse)
-	errMsg, ok := resp.FunctionResponse.Response["error"].(string)
-	require.True(t, ok, "expected error response, got %+v", resp.FunctionResponse.Response)
+	entry := retrieveSingle(t, reviewer, repoDir, "big.bin", nil)
+	errMsg, ok := entry["error"].(string)
+	require.True(t, ok, "expected error entry, got %+v", entry)
 	assert.Contains(t, errMsg, "file too large")
-	_, leaked := resp.FunctionResponse.Response["content"]
-	assert.False(t, leaked, "must not return content when size limit is exceeded")
+	assert.NotContains(t, entry, "content", "must not return content when size limit is exceeded")
 }
 
 // TestHandleFileRetrieval_SymlinkToIgnoredFile ensures an in-repo symlink
@@ -2626,11 +2694,11 @@ func TestReviewDiffWithModel_ParallelFunctionCalls(t *testing.T) {
 								Parts: []*genai.Part{
 									{FunctionCall: &genai.FunctionCall{
 										Name: "get_file_content",
-										Args: map[string]any{"filepath": "a.go"},
+										Args: map[string]any{"filepaths": []any{"a.go"}},
 									}},
 									{FunctionCall: &genai.FunctionCall{
 										Name: "get_file_content",
-										Args: map[string]any{"filepath": "b.go"},
+										Args: map[string]any{"filepaths": []any{"b.go"}},
 									}},
 								},
 							}}},
@@ -2679,6 +2747,98 @@ func TestReviewDiffWithModel_ParallelFunctionCalls(t *testing.T) {
 	assert.Equal(t, []int{2}, responsePartCounts)
 }
 
+// TestReviewDiffWithModel_RetrievalBudgetPerTurn ensures the file budget is
+// shared by all the parallel calls of one model turn and restored for the
+// next turn.
+func TestReviewDiffWithModel_RetrievalBudgetPerTurn(t *testing.T) {
+	t.Parallel()
+	const perCall = maxFilesPerTurn * 3 / 5
+	paths := make([]string, perCall)
+	for i := range paths {
+		paths[i] = "../outside.txt"
+	}
+	turns := [][]*genai.FunctionCall{
+		{fileCall("first", paths...), fileCall("second", paths...)},
+		{fileCall("third", paths...)},
+	}
+
+	var replies [][]genai.Part
+	client := &StubGeminiClient{
+		CreateChatFunc: func(_ context.Context, _ string, _ *genai.GenerateContentConfig) (GeminiChat, error) {
+			return &StubGeminiChat{
+				SendMessageFunc: func(_ context.Context, parts ...genai.Part) (*genai.GenerateContentResponse, error) {
+					turn := len(replies)
+					replies = append(replies, parts)
+					if turn >= len(turns) {
+						return &genai.GenerateContentResponse{
+							Candidates: []*genai.Candidate{{Content: &genai.Content{
+								Parts: []*genai.Part{{Text: "Analysis done"}},
+							}}},
+						}, nil
+					}
+					callParts := make([]*genai.Part, len(turns[turn]))
+					for i, call := range turns[turn] {
+						callParts[i] = &genai.Part{FunctionCall: call}
+					}
+
+					return &genai.GenerateContentResponse{
+						Candidates: []*genai.Candidate{{Content: &genai.Content{Parts: callParts}}},
+					}, nil
+				},
+			}, nil
+		},
+		GenerateContentFunc: func(
+			_ context.Context, _ string, _ []*genai.Content, _ *genai.GenerateContentConfig,
+		) (*genai.GenerateContentResponse, error) {
+			return &genai.GenerateContentResponse{
+				Candidates: []*genai.Candidate{{Content: &genai.Content{
+					Parts: []*genai.Part{{Text: `{"lgtm": true, "comments": "Good"}`}},
+				}}},
+			}, nil
+		},
+	}
+
+	r := &Reviewer{
+		client:        client,
+		modelName:     "test-model",
+		promptManager: prompts.New("", ""),
+		logger:        testutil.NewTestLogger(),
+	}
+
+	result, err := r.ReviewDiff(t.Context(), "diff content", []string{"a.go"}, testutil.CreateTempGitRepo(t))
+	require.NoError(t, err)
+	assert.True(t, result.LGTM)
+	require.Len(t, replies, 3, "the initial prompt and one reply per tool turn")
+
+	countRefused := func(part genai.Part) (int, int) {
+		require.NotNil(t, part.FunctionResponse)
+		files := responseFiles(t, part.FunctionResponse)
+		var refused int
+		for _, entry := range files {
+			if entry["error"] == errTooManyFilesMsg {
+				refused++
+			}
+		}
+
+		return refused, len(files)
+	}
+
+	// The first turn's two calls draw on one budget: 60 + 40 served, 20 refused.
+	require.Len(t, replies[1], 2)
+	refused, total := countRefused(replies[1][0])
+	assert.Zero(t, refused)
+	assert.Equal(t, perCall, total)
+	refused, total = countRefused(replies[1][1])
+	assert.Equal(t, 2*perCall-maxFilesPerTurn, refused)
+	assert.Equal(t, perCall, total)
+
+	// The next turn starts with a fresh budget, so all 60 paths are served.
+	require.Len(t, replies[2], 1)
+	refused, total = countRefused(replies[2][0])
+	assert.Zero(t, refused)
+	assert.Equal(t, perCall, total)
+}
+
 // TestReviewDiffWithModel_ToolTurnLimit ensures the tool-calling loop is
 // bounded: a model that requests a file on every turn must not loop (and
 // bill) forever; the review proceeds to the structured phase at the cap.
@@ -2695,7 +2855,7 @@ func TestReviewDiffWithModel_ToolTurnLimit(t *testing.T) {
 						Candidates: []*genai.Candidate{{Content: &genai.Content{
 							Parts: []*genai.Part{{FunctionCall: &genai.FunctionCall{
 								Name: "get_file_content",
-								Args: map[string]any{"filepath": "main.go"},
+								Args: map[string]any{"filepaths": []any{"main.go"}},
 							}}},
 						}}},
 					}, nil

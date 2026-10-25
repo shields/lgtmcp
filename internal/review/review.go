@@ -59,6 +59,11 @@ const quotaFailureType = "type.googleapis.com/google.rpc.QuotaFailure"
 // the review process.
 const maxRetrievedFileSize int64 = 16 * 1024 * 1024
 
+// maxRetrievedBytesPerTurn bounds the file content the calls of one model turn
+// return in total, so long path lists and parallel calls cannot multiply the
+// per-file bound.
+const maxRetrievedBytesPerTurn = maxRetrievedFileSize
+
 // isQuotaExhaustedError checks if the error is a quota exhaustion (not rate limit).
 // Quota failures have QuotaFailure in the error details, indicating a daily/monthly
 // limit has been reached. This is distinct from rate limiting, which is temporary.
@@ -172,11 +177,30 @@ const (
 		"and a renamed file's content lives at its new path"
 	errGitDirMsg = "access denied: path is inside a .git directory"
 
+	// maxFilesPerTurn bounds how many paths the calls of one model turn are
+	// served.
+	maxFilesPerTurn    = 100
+	errTooManyFilesMsg = "not retrieved: too many files in one turn; request the remaining files in a later turn"
+	errTurnBudgetMsg   = "not retrieved: the files already returned this turn leave no room for this one; " +
+		"request it in a later turn"
+	errFileTooLargeFmt = "file too large: exceeds %d bytes"
+
 	// maxToolTurns bounds the Phase 1 tool-calling loop. Each turn can fetch
-	// several files (parallel function calls), so this is generous for a code
-	// review while still stopping a runaway model from burning tokens forever.
+	// up to maxFilesPerTurn files, so this is generous for a code review while
+	// still stopping a runaway model from burning tokens forever.
 	maxToolTurns = 32
 )
+
+// retrievalBudget is what the get_file_content calls of one model turn may
+// still retrieve.
+type retrievalBudget struct {
+	files int
+	bytes int64
+}
+
+func newRetrievalBudget() *retrievalBudget {
+	return &retrievalBudget{files: maxFilesPerTurn, bytes: maxRetrievedBytesPerTurn}
+}
 
 // modelPricing contains per-million-token pricing for supported models.
 type modelPricing struct {
@@ -813,17 +837,19 @@ func (r *Reviewer) reviewDiffWithModel(
 	fileRetrievalTool := &genai.Tool{
 		FunctionDeclarations: []*genai.FunctionDeclaration{
 			{
-				Name:        "get_file_content",
-				Description: "Retrieve the content of a file from the repository",
+				Name: "get_file_content",
+				Description: "Retrieve the contents of one or more files from the repository. " +
+					"List every file you need in a single call.",
 				Parameters: &genai.Schema{
 					Type: genai.TypeObject,
 					Properties: map[string]*genai.Schema{
-						"filepath": {
-							Type:        genai.TypeString,
-							Description: "Path to the file relative to repository root",
+						"filepaths": {
+							Type:        genai.TypeArray,
+							Items:       &genai.Schema{Type: genai.TypeString},
+							Description: "Paths of the files to retrieve, relative to the repository root",
 						},
 					},
-					Required: []string{"filepath"},
+					Required: []string{"filepaths"},
 				},
 			},
 		},
@@ -877,21 +903,12 @@ func (r *Reviewer) reviewDiffWithModel(
 		// function calling). The API requires exactly one response part per
 		// call, so collect a response for each before replying.
 		var funcResponses []genai.Part
+		budget := newRetrievalBudget()
 		for _, part := range candidate.Content.Parts {
 			switch {
 			case part.FunctionCall != nil:
-				requestedFile, ok := part.FunctionCall.Args["filepath"].(string)
-				r.logger.Debug("Model requested file",
-					"function", part.FunctionCall.Name,
-					"filepath", requestedFile)
-
-				// Invoke file fetch callback if provided.
-				if opts.FileFetchCallback != nil && ok && requestedFile != "" {
-					opts.FileFetchCallback(requestedFile)
-				}
-
 				funcResponses = append(funcResponses,
-					*r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet))
+					*r.handleFileRetrieval(ctx, part.FunctionCall, repoPath, deletedSet, opts.FileFetchCallback, budget))
 			case part.Text != "" && !part.Thought:
 				// Capture any analysis text from the model. Thought-summary
 				// parts also carry text but are reasoning, not analysis, so
@@ -1020,12 +1037,50 @@ func newFunctionResponse(funcCall *genai.FunctionCall, response map[string]any) 
 	}
 }
 
-// errorResponse builds the Part answering funcCall with an error message,
-// formatted as fmt.Sprintf(format, args...). It collapses the
-// map[string]any{errorKey: ...} boilerplate every failure branch in
-// handleFileRetrieval below would otherwise repeat.
-func errorResponse(funcCall *genai.FunctionCall, format string, args ...any) *genai.Part {
-	return newFunctionResponse(funcCall, map[string]any{errorKey: fmt.Sprintf(format, args...)})
+// errorResponse builds the Part answering funcCall with an error message, for
+// failures that apply to the whole call rather than to one requested file.
+func errorResponse(funcCall *genai.FunctionCall, msg string) *genai.Part {
+	return newFunctionResponse(funcCall, map[string]any{errorKey: msg})
+}
+
+func fileError(requestedPath, format string, args ...any) map[string]any {
+	return map[string]any{"filepath": requestedPath, errorKey: fmt.Sprintf(format, args...)}
+}
+
+// handleFileRetrieval answers a get_file_content call. The response holds a
+// "files" list with one entry per requested path, in request order, each
+// carrying either the file's content or an error, so one unreadable path
+// does not cost the model the others. Paths and content beyond budget are
+// refused; onFetch, when non-nil, is called with each path before it is read.
+func (r *Reviewer) handleFileRetrieval(
+	ctx context.Context, funcCall *genai.FunctionCall, repoPath string, deleted map[string]bool,
+	onFetch FileFetchCallback, budget *retrievalBudget,
+) *genai.Part {
+	rawPaths, ok := funcCall.Args["filepaths"].([]any)
+	if !ok || len(rawPaths) == 0 {
+		return errorResponse(funcCall, "filepaths parameter must be a non-empty array of strings")
+	}
+
+	files := make([]any, 0, len(rawPaths))
+	for _, raw := range rawPaths {
+		requestedPath, ok := raw.(string)
+		r.logger.Debug("Model requested file", "function", funcCall.Name, "filepath", requestedPath)
+		if !ok {
+			files = append(files, fileError(fmt.Sprint(raw), "filepath must be a string"))
+			continue
+		}
+		if budget.files == 0 {
+			files = append(files, fileError(requestedPath, errTooManyFilesMsg))
+			continue
+		}
+		budget.files--
+		if onFetch != nil && requestedPath != "" {
+			onFetch(requestedPath)
+		}
+		files = append(files, retrieveFile(ctx, requestedPath, repoPath, deleted, &budget.bytes))
+	}
+
+	return newFunctionResponse(funcCall, map[string]any{"files": files})
 }
 
 // inGitDir reports whether any component of the repository-relative path rel
@@ -1042,32 +1097,28 @@ func inGitDir(rel string) bool {
 	return false
 }
 
-// handleFileRetrieval handles file retrieval tool calls from Gemini. The
-// deleted set contains paths the caller has identified as deletions in the
-// diff under review; requests for those paths return a clear deleted-file
-// response instead of attempting to open the (now-missing) file.
-func (*Reviewer) handleFileRetrieval(
-	ctx context.Context, funcCall *genai.FunctionCall, repoPath string, deleted map[string]bool,
-) *genai.Part {
-	// Extract the filepath argument.
-	requestedPath, ok := funcCall.Args["filepath"].(string)
-	if !ok {
-		return errorResponse(funcCall, "filepath parameter must be a string")
-	}
-
+// retrieveFile reads one requested file for handleFileRetrieval, returning a
+// map with "filepath" and either "content" or "error". The deleted set
+// contains paths the caller has identified as deletions in the diff under
+// review; requests for those paths return a clear deleted-file error instead
+// of attempting to open the (now-missing) file. A file's size is deducted from
+// budget, the number of content bytes the rest of the turn may still retrieve.
+func retrieveFile(
+	ctx context.Context, requestedPath, repoPath string, deleted map[string]bool, budget *int64,
+) map[string]any {
 	// Short-circuit deletions so the model gets a deletion-specific message
 	// instead of a generic ENOENT it might think is transient.
 	if deleted[filepath.Clean(requestedPath)] {
-		return errorResponse(funcCall, errDeletedFileMsg)
+		return fileError(requestedPath, errDeletedFileMsg)
 	}
 
 	// Validate and resolve the file path.
 	if slices.Contains(strings.Split(filepath.ToSlash(requestedPath), "/"), "..") {
-		return errorResponse(funcCall, "invalid filepath: path traversal not allowed")
+		return fileError(requestedPath, "invalid filepath: path traversal not allowed")
 	}
 
 	if inGitDir(requestedPath) {
-		return errorResponse(funcCall, errGitDirMsg)
+		return fileError(requestedPath, errGitDirMsg)
 	}
 
 	// Clean and join the path.
@@ -1077,28 +1128,28 @@ func (*Reviewer) handleFileRetrieval(
 	// This prevents symlink attacks and other path traversal techniques.
 	absPath, err := filepath.Abs(fullPath)
 	if err != nil {
-		return errorResponse(funcCall, "failed to resolve path: %v", err)
+		return fileError(requestedPath, "failed to resolve path: %v", err)
 	}
 
 	absRepoPath, err := filepath.Abs(repoPath)
 	if err != nil {
-		return errorResponse(funcCall, "failed to resolve repository path: %v", err)
+		return fileError(requestedPath, "failed to resolve repository path: %v", err)
 	}
 
 	// First check if the path (before symlink resolution) is within the repository
 	// This handles the case where the file doesn't exist yet.
 	if !strings.HasPrefix(absPath, absRepoPath+string(filepath.Separator)) && absPath != absRepoPath {
-		return errorResponse(funcCall, "access denied: path is outside repository")
+		return fileError(requestedPath, "access denied: path is outside repository")
 	}
 
 	// SECURITY CHECK: Check if file is gitignored
 	isIgnored, err := git.IsIgnored(ctx, repoPath, requestedPath)
 	if err != nil {
 		// Fail closed on any error for security
-		return errorResponse(funcCall, "access denied: unable to verify gitignore status: %v", err)
+		return fileError(requestedPath, "access denied: unable to verify gitignore status: %v", err)
 	}
 	if isIgnored {
-		return errorResponse(funcCall, "access denied: file is gitignored")
+		return fileError(requestedPath, "access denied: file is gitignored")
 	}
 
 	// git check-ignore matches the requested name only, while the rooted open
@@ -1116,24 +1167,24 @@ func (*Reviewer) handleFileRetrieval(
 		// unresolved root would misreport every file as outside the repo.
 		resolvedRepo, repoErr := filepath.EvalSymlinks(absRepoPath)
 		if repoErr != nil {
-			return errorResponse(funcCall, "failed to resolve repository path: %v", repoErr)
+			return fileError(requestedPath, "failed to resolve repository path: %v", repoErr)
 		}
 		relResolved, relErr := filepath.Rel(resolvedRepo, resolved)
 		if relErr != nil || relResolved == ".." ||
 			strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
-			return errorResponse(funcCall, "access denied: path is outside repository")
+			return fileError(requestedPath, "access denied: path is outside repository")
 		}
 		if inGitDir(relResolved) {
-			return errorResponse(funcCall, errGitDirMsg)
+			return fileError(requestedPath, errGitDirMsg)
 		}
 		if relResolved != filepath.Clean(requestedPath) {
 			targetIgnored, targetErr := git.IsIgnored(ctx, repoPath, relResolved)
 			if targetErr != nil {
 				// Fail closed on any error for security.
-				return errorResponse(funcCall, "access denied: unable to verify gitignore status: %v", targetErr)
+				return fileError(requestedPath, "access denied: unable to verify gitignore status: %v", targetErr)
 			}
 			if targetIgnored {
-				return errorResponse(funcCall, "access denied: file is gitignored")
+				return fileError(requestedPath, "access denied: file is gitignored")
 			}
 		}
 	}
@@ -1150,7 +1201,7 @@ func (*Reviewer) handleFileRetrieval(
 	// repo, which we never want to read).
 	root, err := os.OpenRoot(repoPath)
 	if err != nil {
-		return errorResponse(funcCall, "failed to open repository: %v", err)
+		return fileError(requestedPath, "failed to open repository: %v", err)
 	}
 	defer root.Close() //nolint:errcheck // read-only handle, close error is inconsequential
 
@@ -1158,35 +1209,39 @@ func (*Reviewer) handleFileRetrieval(
 	relPath = strings.TrimPrefix(relPath, string(filepath.Separator))
 	f, err := root.OpenFile(relPath, os.O_RDONLY|openNonblockFlag, 0)
 	if err != nil {
-		return errorResponse(funcCall, "failed to read file: %v", err)
+		return fileError(requestedPath, "failed to read file: %v", err)
 	}
 	defer f.Close() //nolint:errcheck // read-only file, close error is inconsequential
 
 	openedInfo, err := f.Stat()
 	if err != nil {
-		return errorResponse(funcCall, "failed to stat opened file: %v", err)
+		return fileError(requestedPath, "failed to stat opened file: %v", err)
 	}
 	if !openedInfo.Mode().IsRegular() {
-		return errorResponse(funcCall, "access denied: not a regular file")
+		return fileError(requestedPath, "access denied: not a regular file")
+	}
+	if openedInfo.Size() > maxRetrievedFileSize {
+		return fileError(requestedPath, errFileTooLargeFmt, maxRetrievedFileSize)
 	}
 
 	// Bound the read so an attacker (or a runaway request from the model)
 	// cannot OOM the review process by asking for a multi-gigabyte file.
-	// We read maxRetrievedFileSize+1 so we can distinguish "exactly fits"
+	// We read one byte past the limit so we can distinguish "exactly fits"
 	// from "overflows" after ReadAll returns.
-	limited := io.LimitReader(f, maxRetrievedFileSize+1)
+	readLimit := min(maxRetrievedFileSize, *budget)
+	limited := io.LimitReader(f, readLimit+1)
 	content, err := io.ReadAll(limited)
 	if err != nil {
-		return errorResponse(funcCall, "failed to read file: %v", err)
+		return fileError(requestedPath, "failed to read file: %v", err)
 	}
-	if int64(len(content)) > maxRetrievedFileSize {
-		return errorResponse(funcCall, "file too large: exceeds %d bytes", maxRetrievedFileSize)
-	}
+	if int64(len(content)) > readLimit {
+		if readLimit < maxRetrievedFileSize {
+			return fileError(requestedPath, errTurnBudgetMsg)
+		}
 
-	return newFunctionResponse(
-		funcCall,
-		map[string]any{
-			"content": string(content),
-		},
-	)
+		return fileError(requestedPath, errFileTooLargeFmt, maxRetrievedFileSize)
+	}
+	*budget -= int64(len(content))
+
+	return map[string]any{"filepath": requestedPath, "content": string(content)}
 }
