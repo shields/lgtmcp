@@ -1447,6 +1447,66 @@ func TestPrepareReview_NoDeletionsLeavesDeletedFilesEmpty(t *testing.T) {
 	assert.Empty(t, rc.deletedFiles)
 }
 
+func TestPrepareReview_TypechangeToSymlinkIsNotDeleted(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+
+	testutil.CreateFile(t, tmpDir, "target.txt", "target\n")
+	testutil.CreateFile(t, tmpDir, "link", "plain file\n")
+	testutil.CreateFile(t, tmpDir, "gone.txt", "bye\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	require.NoError(t, os.Remove(filepath.Join(tmpDir, "link")))
+	require.NoError(t, os.Symlink("target.txt", filepath.Join(tmpDir, "link")))
+	require.NoError(t, os.Remove(filepath.Join(tmpDir, "gone.txt")))
+
+	rc, earlyReturn, err := s.prepareReview(t.Context(), tmpDir, progress.NewNoOpReporter(), 4)
+	require.NoError(t, err)
+	require.Nil(t, earlyReturn)
+	require.NotNil(t, rc)
+
+	assert.ElementsMatch(t, []string{"link", "gone.txt"}, rc.changedFiles)
+	assert.Equal(t, []string{"gone.txt"}, rc.deletedFiles)
+	assert.Contains(t, rc.listing, "link")
+	assert.Contains(t, rc.listing, "target.txt")
+	assert.NotContains(t, rc.listing, "gone.txt")
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{"directory": tmpDir, "commit_message": "typechange"}
+	result, err := s.HandleReviewAndCommit(t.Context(), request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.IsError)
+
+	assert.Empty(t, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"))
+	tree := testutil.RunGitCmd(t, tmpDir, "ls-tree", "HEAD")
+	assert.Regexp(t, `(?m)^120000 blob \w+\tlink$`, tree)
+	assert.NotContains(t, tree, "gone.txt")
+}
+
+func TestPrepareReview_RemovedFromIndexButOnDiskIsNotDeleted(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+
+	testutil.CreateFile(t, tmpDir, "kept.txt", "stays on disk\n")
+	testutil.CreateFile(t, tmpDir, "other.txt", "other\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	testutil.RunGitCmd(t, tmpDir, "rm", "--cached", "kept.txt")
+	testutil.CreateFile(t, tmpDir, "other.txt", "other, modified\n")
+
+	rc, earlyReturn, err := s.prepareReview(t.Context(), tmpDir, progress.NewNoOpReporter(), 4)
+	require.NoError(t, err)
+	require.Nil(t, earlyReturn)
+	require.NotNil(t, rc)
+
+	assert.ElementsMatch(t, []string{"kept.txt", "other.txt"}, rc.changedFiles)
+	assert.Empty(t, rc.deletedFiles)
+	assert.Contains(t, rc.listing, "kept.txt")
+}
+
 func TestPrepareReview_InstructionFiles(t *testing.T) {
 	t.Parallel()
 	s, tmpDir := createTestServer(t)

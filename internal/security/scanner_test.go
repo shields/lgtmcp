@@ -1159,14 +1159,8 @@ deleted file mode 100644
 		assert.Equal(t, []string{"late.txt"}, cf.Deleted)
 	})
 
-	t.Run("add then delete of same path classifies as deleted via first block", func(t *testing.T) {
+	t.Run("a path with a non-deletion block is not deleted in either order", func(t *testing.T) {
 		t.Parallel()
-		// Synthetic: a path appearing in two blocks. Only the first
-		// occurrence is emitted (existing dedup behavior). If the first
-		// block carries the deleted flag, the path is in Deleted; if not,
-		// it is not in Deleted even though a later block marks it deleted.
-		// This documents the dedup-wins-first behavior so a future
-		// regression here is loud.
 		diffAddThenDelete := `diff --git a/dup.txt b/dup.txt
 new file mode 100644
 index 0000000..1111111
@@ -1181,7 +1175,7 @@ index 1111111..0000000
 +++ /dev/null`
 		cf := ExtractChangedFilesDetailed(diffAddThenDelete)
 		assert.Equal(t, []string{"dup.txt"}, cf.All)
-		assert.Empty(t, cf.Deleted, "first block (add) wins; later delete is dedup-skipped")
+		assert.Empty(t, cf.Deleted)
 
 		diffDeleteThenAdd := `diff --git a/dup.txt b/dup.txt
 deleted file mode 100644
@@ -1197,7 +1191,88 @@ index 0000000..2222222
 +new`
 		cf = ExtractChangedFilesDetailed(diffDeleteThenAdd)
 		assert.Equal(t, []string{"dup.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("repeated deletion blocks stay deleted", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/dup.txt b/dup.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/dup.txt
++++ /dev/null
+diff --git a/dup.txt b/dup.txt
+deleted file mode 100644
+index 1111111..0000000
+--- a/dup.txt
++++ /dev/null`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"dup.txt"}, cf.All)
 		assert.Equal(t, []string{"dup.txt"}, cf.Deleted)
+	})
+
+	t.Run("typechange from file to symlink is not deleted", func(t *testing.T) {
+		t.Parallel()
+		// git diff HEAD output for a regular file replaced by a symlink: a
+		// deletion block followed by a creation block for the same path.
+		diff := `diff --git a/link b/link
+deleted file mode 100644
+index e69de29..0000000
+diff --git a/link b/link
+new file mode 120000
+index 0000000..4cbb553
+--- /dev/null
++++ b/link
+@@ -0,0 +1 @@
++target.txt
+\ No newline at end of file
+diff --git a/gone.txt b/gone.txt
+deleted file mode 100644
+index e69de29..0000000`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"link", "gone.txt"}, cf.All)
+		assert.Equal(t, []string{"gone.txt"}, cf.Deleted)
+	})
+
+	t.Run("an untracked file left on disk after removal from the index is not deleted", func(t *testing.T) {
+		t.Parallel()
+		// git's deletion block for the path missing from the index, then the
+		// new-file block lgtmcp appends for the now-untracked file.
+		diff := `diff --git a/kept.txt b/kept.txt
+deleted file mode 100644
+index ce01362..0000000
+--- a/kept.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-hello
+diff --git a/kept.txt b/kept.txt
+new file mode 100644
+--- /dev/null
++++ b/kept.txt
+@@ -0,0 +1 @@
++hello
+`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"kept.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted)
+	})
+
+	t.Run("rename source recreated as a new file is not deleted", func(t *testing.T) {
+		t.Parallel()
+		diff := `diff --git a/old.txt b/new.txt
+similarity index 100%
+rename from old.txt
+rename to new.txt
+diff --git a/old.txt b/old.txt
+new file mode 100644
+--- /dev/null
++++ b/old.txt
+@@ -0,0 +1 @@
++fresh
+`
+		cf := ExtractChangedFilesDetailed(diff)
+		assert.Equal(t, []string{"old.txt", "new.txt"}, cf.All)
+		assert.Empty(t, cf.Deleted)
 	})
 }
 

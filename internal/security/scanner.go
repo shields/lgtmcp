@@ -155,10 +155,13 @@ func (s *Scanner) ScanDiff(
 type ChangedFiles struct {
 	// All is every changed path in diff order, with duplicates removed.
 	All []string
-	// Deleted is the subset of All for diff blocks that carried a
-	// "deleted file mode" line. Order matches All. When the same path
-	// appears in multiple blocks (a synthetic case that does not occur
-	// in real git output), the first block wins.
+	// Deleted is the subset of All whose every diff block removes the
+	// path: a "deleted file mode" line, or a rename source. Order matches
+	// All. A path with any other block also exists afterwards, so it is
+	// not Deleted; this happens for a typechange (git emits a deletion
+	// block and a "new file mode" block for the same path) and for a
+	// "git rm --cached" file that stays on disk (git's deletion block plus
+	// the new-file block lgtmcp synthesizes for untracked files).
 	Deleted []string
 }
 
@@ -179,8 +182,8 @@ func ExtractChangedFiles(diff string) []string {
 // in the same block, so the deletion flag is reset only at the start of each
 // new "diff --git" block.
 //
-// A rename block contributes both halves: the "rename from" source (recorded
-// in Deleted as well, since the rename removes that path even though no
+// A rename block contributes both halves: the "rename from" source (a
+// removal too, since the rename removes that path even though no
 // "deleted file mode" line appears) and the "rename to" destination. Copy
 // sources are excluded because a copy leaves its source unchanged. For a
 // fully staged rename ("git mv") the source exists in neither the worktree
@@ -197,18 +200,19 @@ func ExtractChangedFiles(diff string) []string {
 // or the returned paths will keep the mnemonic prefix and fail to resolve.
 func ExtractChangedFilesDetailed(diff string) ChangedFiles {
 	var all []string
-	var deleted []string
-	seen := make(map[string]bool)
+	everyBlockDeletes := make(map[string]bool)
 
 	add := func(path string, isDeleted bool) {
-		if path == "" || seen[path] {
+		if path == "" {
 			return
 		}
-		seen[path] = true
-		all = append(all, path)
-		if isDeleted {
-			deleted = append(deleted, path)
+		if prev, seen := everyBlockDeletes[path]; seen {
+			everyBlockDeletes[path] = prev && isDeleted
+
+			return
 		}
+		everyBlockDeletes[path] = isDeleted
+		all = append(all, path)
 	}
 
 	// pending holds the best-effort path from the most recent "diff --git"
@@ -248,6 +252,13 @@ func ExtractChangedFilesDetailed(diff string) ChangedFiles {
 		}
 	}
 	commit()
+
+	var deleted []string
+	for _, path := range all {
+		if everyBlockDeletes[path] {
+			deleted = append(deleted, path)
+		}
+	}
 
 	return ChangedFiles{All: all, Deleted: deleted}
 }
