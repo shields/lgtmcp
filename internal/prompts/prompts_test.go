@@ -148,7 +148,7 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 		assert.NotContains(t, prompt, "Contents of the directories this change touches")
 	})
 
-	t.Run("custom template referencing AnalysisSection still executes", func(t *testing.T) {
+	t.Run("custom template referencing AnalysisSection fails", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
 		customPromptPath := filepath.Join(tmpDir, "custom.md")
@@ -157,9 +157,8 @@ func TestManager_BuildReviewPrompt(t *testing.T) {
 
 		m := New(customPromptPath)
 		m.SetConfigDir(tmpDir)
-		prompt, err := m.BuildReviewPrompt("test diff", []string{"file1.go"}, nil, "", "")
-		require.NoError(t, err)
-		assert.Equal(t, "[] test diff", prompt)
+		_, err = m.BuildReviewPrompt("test diff", []string{"file1.go"}, nil, "", "")
+		require.ErrorContains(t, err, "AnalysisSection")
 	})
 
 	t.Run("build with custom template", func(t *testing.T) {

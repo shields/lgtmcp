@@ -115,10 +115,13 @@ func (m *Manager) LoadPrompt(promptType PromptType) (string, error) {
 }
 
 // ReviewPromptData contains the data for the review prompt template.
+//
+// It deliberately has no AnalysisSection field. A template that references
+// one was written for a review in which a separate context-gathering prompt
+// fetched files, so it lacks any instruction to call get_file_content; it must
+// fail when executed rather than run as a diff-only review that can approve
+// unseen code.
 type ReviewPromptData struct {
-	// AnalysisSection is always empty. The field exists so custom templates
-	// that reference {{.AnalysisSection}} execute without error.
-	AnalysisSection     string
 	InstructionsSection string
 	// FilesList holds every changed path (including deletions); retained for
 	// custom templates that reference {{.FilesList}}.
