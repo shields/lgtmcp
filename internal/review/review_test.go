@@ -982,7 +982,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 408 status code (Request Timeout)",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusRequestTimeout,
 				Message: "Request Timeout",
 			},
@@ -990,7 +990,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 429 status code",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "You exceeded your current quota",
 				Status:  "RESOURCE_EXHAUSTED",
@@ -999,7 +999,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 500 status code",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusInternalServerError,
 				Message: "Internal Server Error",
 			},
@@ -1007,7 +1007,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 501 status code (Not Implemented - NOT retryable)",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusNotImplemented,
 				Message: "Not Implemented",
 			},
@@ -1015,7 +1015,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 502 status code",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusBadGateway,
 				Message: "Bad Gateway",
 			},
@@ -1023,7 +1023,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 503 status code",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusServiceUnavailable,
 				Message: "Service Unavailable",
 			},
@@ -1031,7 +1031,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 504 status code (Gateway Timeout)",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusGatewayTimeout,
 				Message: "Gateway Timeout",
 			},
@@ -1039,7 +1039,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with INTERNAL status",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:   0, // No HTTP code.
 				Status: "INTERNAL",
 			},
@@ -1047,7 +1047,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with UNAVAILABLE status",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:   0,
 				Status: "UNAVAILABLE",
 			},
@@ -1055,7 +1055,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with DEADLINE_EXCEEDED status",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:   0,
 				Status: "DEADLINE_EXCEEDED",
 			},
@@ -1063,7 +1063,7 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 403 (non-retryable)",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusForbidden,
 				Message: "Permission Denied",
 			},
@@ -1071,10 +1071,37 @@ func TestIsRetryableError(t *testing.T) {
 		},
 		{
 			name: "APIError with 401 (non-retryable)",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusUnauthorized,
 				Message: "Unauthorized",
 			},
+			expected: false,
+		},
+		{
+			name: "APIError with retryable words only in Message",
+			err: genai.APIError{
+				Code:    http.StatusBadRequest,
+				Message: "Error 503: INTERNAL, UNAVAILABLE, DEADLINE_EXCEEDED, RESOURCE_EXHAUSTED",
+				Status:  "INVALID_ARGUMENT",
+			},
+			expected: false,
+		},
+		{
+			name: "wrapped APIError with retryable words only in Message",
+			err: fmt.Errorf("gemini request failed: %w", genai.APIError{
+				Code:    http.StatusBadRequest,
+				Message: "Error 503: UNAVAILABLE",
+				Status:  "INVALID_ARGUMENT",
+			}),
+			expected: false,
+		},
+		{
+			name: "joined APIError with retryable words only in Message",
+			err: errors.Join(errTest, genai.APIError{
+				Code:    http.StatusBadRequest,
+				Message: "Error 503: UNAVAILABLE",
+				Status:  "INVALID_ARGUMENT",
+			}),
 			expected: false,
 		},
 		// Fallback string matching tests.
@@ -1169,7 +1196,7 @@ func TestExtractRetryDelay(t *testing.T) {
 		},
 		{
 			name: "APIError with retryDelay in Details",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Rate limit exceeded",
 				Details: []map[string]any{
@@ -1183,7 +1210,7 @@ func TestExtractRetryDelay(t *testing.T) {
 		},
 		{
 			name: "APIError with retryDelay 2s",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code: http.StatusTooManyRequests,
 				Details: []map[string]any{
 					{
@@ -1196,7 +1223,7 @@ func TestExtractRetryDelay(t *testing.T) {
 		},
 		{
 			name: "APIError with retryDelay 1m",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code: http.StatusTooManyRequests,
 				Details: []map[string]any{
 					{
@@ -1209,7 +1236,7 @@ func TestExtractRetryDelay(t *testing.T) {
 		},
 		{
 			name: "APIError without retryDelay",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Rate limit exceeded",
 				Details: []map[string]any{
@@ -1223,7 +1250,7 @@ func TestExtractRetryDelay(t *testing.T) {
 		},
 		{
 			name: "APIError with invalid retryDelay",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code: http.StatusTooManyRequests,
 				Details: []map[string]any{
 					{
@@ -1236,11 +1263,40 @@ func TestExtractRetryDelay(t *testing.T) {
 		},
 		{
 			name: "APIError with no Details",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Rate limit exceeded",
 			},
 			expected: 0,
+		},
+		{
+			name: "APIError with retryDelay only in Message",
+			err: genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "Rate limit exceeded, retryDelay:15s]",
+			},
+			expected: 0,
+		},
+		{
+			name: "wrapped APIError with retryDelay only in Message",
+			err: fmt.Errorf("gemini request failed: %w", genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "Rate limit exceeded, retryDelay:15s]",
+			}),
+			expected: 0,
+		},
+		{
+			name: "wrapped APIError with retryDelay in Details",
+			err: fmt.Errorf("gemini request failed: %w", genai.APIError{
+				Code: http.StatusTooManyRequests,
+				Details: []map[string]any{
+					{
+						"@type":      "type.googleapis.com/google.rpc.RetryInfo",
+						"retryDelay": "2s",
+					},
+				},
+			}),
+			expected: 2 * time.Second,
 		},
 		// Fallback string parsing tests.
 		{
@@ -1775,7 +1831,7 @@ func TestIsQuotaExhaustedError(t *testing.T) {
 		},
 		{
 			name: "APIError with QuotaFailure in Details",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "You exceeded your current quota",
 				Status:  "RESOURCE_EXHAUSTED",
@@ -1792,7 +1848,7 @@ func TestIsQuotaExhaustedError(t *testing.T) {
 		},
 		{
 			name: "APIError with RESOURCE_EXHAUSTED but no QuotaFailure (rate limit)",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Rate limit exceeded",
 				Status:  "RESOURCE_EXHAUSTED",
@@ -1817,11 +1873,63 @@ func TestIsQuotaExhaustedError(t *testing.T) {
 		},
 		{
 			name: "Regular 429 without quota info",
-			err: &genai.APIError{
+			err: genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Too many requests",
 			},
 			expected: false,
+		},
+		{
+			name: "APIError with QuotaFailure type only in Message",
+			err: genai.APIError{
+				Code:    http.StatusBadRequest,
+				Message: "invalid argument: " + quotaFailureType,
+				Status:  "INVALID_ARGUMENT",
+			},
+			expected: false,
+		},
+		{
+			name: "429 whose body the SDK could not decode",
+			err: genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Status:  "429 Too Many Requests",
+				Message: `[{"error": {"code": "429", "details": [{"@type": "` + quotaFailureType + `"}]}}]`,
+			},
+			expected: true,
+		},
+		{
+			name: "429 with details naming the QuotaFailure type only in Message",
+			err: genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Message: "rate limited; not a " + quotaFailureType,
+				Status:  "RESOURCE_EXHAUSTED",
+				Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "1s"}},
+			},
+			expected: false,
+		},
+		{
+			name: "wrapped APIError with QuotaFailure type only in Message",
+			err: fmt.Errorf("gemini request failed: %w", genai.APIError{
+				Code:    http.StatusBadRequest,
+				Message: "invalid argument: " + quotaFailureType,
+			}),
+			expected: false,
+		},
+		{
+			name: "wrapped APIError with QuotaFailure in Details",
+			err: fmt.Errorf("gemini request failed: %w", genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Details: []map[string]any{{"@type": quotaFailureType}},
+			}),
+			expected: true,
+		},
+		{
+			name: "joined APIError with QuotaFailure in Details",
+			err: errors.Join(errTest, genai.APIError{
+				Code:    http.StatusTooManyRequests,
+				Details: []map[string]any{{"@type": quotaFailureType}},
+			}),
+			expected: true,
 		},
 		{
 			name:     "Non-quota error",
@@ -1853,7 +1961,7 @@ func TestRetryableOperationQuotaFailure(t *testing.T) {
 	callCount := 0
 
 	// Create a quota exhaustion error.
-	quotaErr := &genai.APIError{
+	quotaErr := genai.APIError{
 		Code:    http.StatusTooManyRequests,
 		Message: "You exceeded your current quota",
 		Status:  "RESOURCE_EXHAUSTED",
@@ -1882,7 +1990,7 @@ func TestIsRetryableErrorWithQuotaFailure(t *testing.T) {
 	t.Parallel()
 
 	// Quota exhaustion should NOT be retryable (should fallback instead).
-	quotaErr := &genai.APIError{
+	quotaErr := genai.APIError{
 		Code:    http.StatusTooManyRequests,
 		Message: "You exceeded your current quota",
 		Status:  "RESOURCE_EXHAUSTED",
@@ -1940,7 +2048,7 @@ func TestReviewDiff_FallbackOnQuota(t *testing.T) {
 		callCount++
 		if callCount == 1 {
 			// Primary model returns quota error.
-			return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+			return nil, errors.Join(ErrQuotaExhausted, genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Quota exceeded",
 				Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}},
@@ -1978,7 +2086,7 @@ func TestReviewDiff_FallbackAggregatesSpend(t *testing.T) {
 				return withUsage(callResponse(fileCall("c1", "a.go")), 100, 0), nil
 			}
 
-			return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+			return nil, errors.Join(ErrQuotaExhausted, genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Quota exceeded",
 				Details: []map[string]any{{"@type": quotaFailureType}},
@@ -2777,7 +2885,7 @@ func TestReviewDiff_RequestConfig(t *testing.T) {
 func TestReviewDiffWithModel_RequestErrors(t *testing.T) {
 	t.Parallel()
 
-	quotaErr := &genai.APIError{
+	quotaErr := genai.APIError{
 		Code:    http.StatusTooManyRequests,
 		Message: "Quota exceeded",
 		Details: []map[string]any{{"@type": quotaFailureType}},
@@ -2848,7 +2956,7 @@ func TestReviewDiffWithModel_RetriesResendConversation(t *testing.T) {
 		case 0:
 			return callResponse(fileCall("c1", "a.go")), nil
 		case 1:
-			return nil, &genai.APIError{Code: http.StatusServiceUnavailable, Message: "overloaded"}
+			return nil, genai.APIError{Code: http.StatusServiceUnavailable, Message: "overloaded"}
 		default:
 			return verdictResponse(), nil
 		}
@@ -2917,7 +3025,7 @@ func TestRetryableOperation_NilConfig(t *testing.T) {
 func TestRetryableOperation_NilConfigQuotaError(t *testing.T) {
 	t.Parallel()
 	r := &Reviewer{retryConfig: nil, logger: testutil.NewTestLogger()}
-	quotaErr := &genai.APIError{
+	quotaErr := genai.APIError{
 		Code:    http.StatusTooManyRequests,
 		Message: "quota exceeded",
 		Details: []map[string]any{{"@type": "type.googleapis.com/google.rpc.QuotaFailure"}},
@@ -2948,7 +3056,7 @@ func TestRetryableOperation_ContextCancelled(t *testing.T) {
 		if attempts == 1 {
 			cancel() // Cancel context after first attempt.
 		}
-		return &genai.APIError{Code: http.StatusTooManyRequests, Message: "rate limited"}
+		return genai.APIError{Code: http.StatusTooManyRequests, Message: "rate limited"}
 	}, "test")
 	require.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
@@ -3336,7 +3444,7 @@ func TestReviewDiff_FallbackCarriesThinkingConfig(t *testing.T) {
 				return callResponse(fileCall("c1", "a.go")), nil
 			}
 
-			return nil, errors.Join(ErrQuotaExhausted, &genai.APIError{
+			return nil, errors.Join(ErrQuotaExhausted, genai.APIError{
 				Code:    http.StatusTooManyRequests,
 				Message: "Quota exceeded",
 				Details: []map[string]any{{"@type": quotaFailureType}},

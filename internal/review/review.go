@@ -75,21 +75,30 @@ func isQuotaExhaustedError(err error) bool {
 		return false
 	}
 
-	// Check APIError.Details for QuotaFailure type.
-	var apiErr *genai.APIError
-	if errors.As(err, &apiErr) && apiErr.Details != nil {
+	// An API error is classified by its structured details: its message is
+	// server-controlled text that can mention anything. The exception is a 429
+	// without details, which is what the SDK produces when it cannot decode
+	// the error body; the raw body is then the message and is all there is.
+	if apiErr, ok := asAPIError(err); ok {
 		for _, detail := range apiErr.Details {
-			if typeVal, ok := detail["@type"].(string); ok {
-				if typeVal == quotaFailureType {
-					return true
-				}
+			if typeVal, ok := detail["@type"].(string); ok && typeVal == quotaFailureType {
+				return true
 			}
 		}
+
+		return len(apiErr.Details) == 0 && apiErr.Code == http.StatusTooManyRequests &&
+			strings.Contains(apiErr.Message, quotaFailureType)
 	}
 
-	// Fallback: check error string for the QuotaFailure type.
-	// This handles cases where the error is wrapped or stringified.
+	// Errors that lost their type (stringified or re-wrapped) still carry the
+	// detail type in their text.
 	return strings.Contains(err.Error(), quotaFailureType)
+}
+
+// asAPIError matches genai.APIError by value, the shape the SDK returns; a
+// pointer in the chain is not matched.
+func asAPIError(err error) (genai.APIError, bool) {
+	return errors.AsType[genai.APIError](err)
 }
 
 // TokenUsage contains token usage statistics from a review.
@@ -471,8 +480,7 @@ func isRetryableError(err error) bool {
 		return false
 	}
 
-	// Check if it's a genai.APIError.
-	if apiErr, ok := errors.AsType[*genai.APIError](err); ok {
+	if apiErr, ok := asAPIError(err); ok {
 		// Check HTTP status code for retryable errors.
 		switch apiErr.Code {
 		case http.StatusRequestTimeout, // 408
@@ -530,14 +538,9 @@ func extractRetryDelay(err error) time.Duration {
 		return 0
 	}
 
-	// Check if it's a genai.APIError with Details.
-	var apiErr *genai.APIError
-	if errors.As(err, &apiErr) && apiErr.Details != nil {
-		// Look for RetryInfo in the Details field.
+	if apiErr, ok := asAPIError(err); ok {
 		for _, detail := range apiErr.Details {
-			// Check if this detail has a @type field indicating RetryInfo.
 			if typeVal, ok := detail["@type"].(string); ok && strings.Contains(typeVal, "RetryInfo") {
-				// Look for retryDelay field.
 				if retryDelayVal, ok := detail["retryDelay"].(string); ok {
 					if duration, parseErr := time.ParseDuration(retryDelayVal); parseErr == nil {
 						return duration
@@ -545,9 +548,11 @@ func extractRetryDelay(err error) time.Duration {
 				}
 			}
 		}
+
+		return 0
 	}
 
-	// Fallback to string parsing for non-APIError errors or when Details is not structured.
+	// Fallback to string parsing for non-APIError errors.
 	errStr := err.Error()
 
 	// Look for retryDelay in the error details (e.g., "retryDelay:15s").
