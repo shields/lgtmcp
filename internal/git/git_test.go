@@ -1,4 +1,4 @@
-// Copyright © 2025 Michael Shields
+// Copyright © 2025-2026 Michael Shields
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -828,7 +828,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"scanned1.txt", "scanned2.txt"})
+		err = g.StageFiles(t.Context(), []string{"scanned1.txt", "scanned2.txt"}, nil)
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
@@ -847,7 +847,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), nil)
+		err = g.StageFiles(t.Context(), nil, nil)
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
@@ -872,7 +872,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"to-modify.txt", "to-delete.txt"})
+		err = g.StageFiles(t.Context(), []string{"to-modify.txt", "to-delete.txt"}, nil)
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
@@ -888,7 +888,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"valid.txt", ""})
+		err = g.StageFiles(t.Context(), []string{"valid.txt", ""}, nil)
 		require.ErrorIs(t, err, ErrInvalidPath)
 	})
 
@@ -905,7 +905,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"*"})
+		err = g.StageFiles(t.Context(), []string{"*"}, nil)
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
@@ -917,6 +917,27 @@ func TestStageFiles(t *testing.T) {
 		assert.NotContains(t, status, "A  star.txt")
 	})
 
+	t.Run("literal pathspec applies to a tracked file named with a wildcard", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "*", "literal star file")
+		testutil.CreateFile(t, tmpDir, "secret.txt", "secret")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.CreateFile(t, tmpDir, "*", "changed star file")
+		testutil.CreateFile(t, tmpDir, "secret.txt", "changed secret")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"*"}, nil)
+		require.NoError(t, err)
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "M  *\n")
+		assert.Contains(t, status, " M secret.txt")
+	})
+
 	t.Run("stages files whose names begin with dash", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := testutil.CreateTempGitRepo(t)
@@ -926,7 +947,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"-dashed.txt"})
+		err = g.StageFiles(t.Context(), []string{"-dashed.txt"}, nil)
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
@@ -949,7 +970,7 @@ func TestStageFiles(t *testing.T) {
 		// The diff-derived list includes the rename source, which exists in
 		// neither the worktree nor the index; staging must skip it instead
 		// of failing on a pathspec that matches nothing.
-		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"})
+		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"}, []string{"old.txt"})
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
@@ -974,11 +995,24 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"})
+		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"}, nil)
 		require.NoError(t, err)
 
 		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
 		assert.Contains(t, status, "R  old.txt -> new.txt")
+	})
+
+	t.Run("stages an untracked dangling symlink", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		require.NoError(t, os.Symlink("does-not-exist", filepath.Join(tmpDir, "dangling")))
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, g.StageFiles(t.Context(), []string{"dangling"}, nil))
+
+		assert.Contains(t, testutil.RunGitCmd(t, tmpDir, "ls-files", "--stage", "dangling"), "120000")
 	})
 
 	t.Run("rejects path escaping the repository", func(t *testing.T) {
@@ -987,7 +1021,7 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"../outside.txt"})
+		err = g.StageFiles(t.Context(), []string{"../outside.txt"}, nil)
 		require.ErrorIs(t, err, ErrPathOutsideRepo)
 	})
 
@@ -1004,7 +1038,288 @@ func TestStageFiles(t *testing.T) {
 		g, err := New(tmpDir, nil)
 		require.NoError(t, err)
 
-		err = g.StageFiles(t.Context(), []string{"ghost.txt"})
+		err = g.StageFiles(t.Context(), []string{"ghost.txt"}, nil)
+		require.ErrorIs(t, err, ErrFileNotFound)
+	})
+}
+
+func TestStageFiles_Removals(t *testing.T) {
+	t.Parallel()
+
+	commitAll := func(t *testing.T, dir string) {
+		t.Helper()
+		testutil.RunGitCmd(t, dir, "add", ".")
+		testutil.RunGitCmd(t, dir, "commit", "-m", "initial")
+	}
+
+	t.Run("untracked file left on disk is refused as ambiguous", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "f.txt", "kept on disk")
+		testutil.CreateFile(t, tmpDir, "other.txt", "original")
+		commitAll(t, tmpDir)
+
+		testutil.RunGitCmd(t, tmpDir, "rm", "--cached", "f.txt")
+		testutil.CreateFile(t, tmpDir, "other.txt", "changed")
+		before := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		// The diff holds a deletion block and a synthesized new-file block
+		// for f.txt, so it is listed but not marked deleted.
+		require.ErrorIs(t, g.CheckStaging(t.Context(), []string{"f.txt", "other.txt"}, nil), ErrAmbiguousRemoval)
+		err = g.StageFiles(t.Context(), []string{"f.txt", "other.txt"}, nil)
+		require.ErrorIs(t, err, ErrAmbiguousRemoval)
+		assert.Contains(t, err.Error(), "git add -- f.txt")
+		assert.Equal(t, before, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"), "the index is untouched")
+	})
+
+	t.Run("file recreated after git rm is refused as ambiguous", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "f.txt", "original")
+		commitAll(t, tmpDir)
+
+		testutil.RunGitCmd(t, tmpDir, "rm", "-q", "f.txt")
+		testutil.CreateFile(t, tmpDir, "f.txt", "recreated")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.ErrorIs(t, g.StageFiles(t.Context(), []string{"f.txt"}, nil), ErrAmbiguousRemoval)
+	})
+
+	t.Run("file recreated after git mv is refused as ambiguous", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "foo.go", "package foo")
+		commitAll(t, tmpDir)
+
+		testutil.RunGitCmd(t, tmpDir, "mv", "foo.go", "bar.go")
+		testutil.CreateFile(t, tmpDir, "foo.go", "package foo // new")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.ErrorIs(t, g.StageFiles(t.Context(), []string{"foo.go", "bar.go"}, nil), ErrAmbiguousRemoval)
+	})
+
+	t.Run("untracked and ignored file is removed from the index", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "f.txt", "kept on disk")
+		commitAll(t, tmpDir)
+
+		testutil.RunGitCmd(t, tmpDir, "rm", "--cached", "f.txt")
+		testutil.CreateFile(t, tmpDir, ".gitignore", "f.txt\n")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, g.StageFiles(t.Context(), []string{"f.txt"}, []string{"f.txt"}))
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "D  f.txt")
+		assert.Contains(t, status, "?? .gitignore")
+		assert.FileExists(t, filepath.Join(tmpDir, "f.txt"))
+	})
+
+	t.Run("tracked directory replaced by a regular file", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "dir/a.txt", "a")
+		testutil.CreateFile(t, tmpDir, "dir/b.txt", "b")
+		commitAll(t, tmpDir)
+
+		require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, "dir")))
+		testutil.CreateFile(t, tmpDir, "dir", "now a file")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(
+			t.Context(), []string{"dir/a.txt", "dir/b.txt", "dir"}, []string{"dir/a.txt", "dir/b.txt"},
+		)
+		require.NoError(t, err)
+
+		assert.Equal(t, "dir", testutil.RunGitCmd(t, tmpDir, "ls-files"))
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "D  dir/a.txt")
+		assert.Contains(t, status, "D  dir/b.txt")
+		assert.Contains(t, status, "A  dir")
+	})
+
+	t.Run("tracked directory replaced by a symlink", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "old/a.txt", "a")
+		commitAll(t, tmpDir)
+
+		require.NoError(t, os.Rename(filepath.Join(tmpDir, "old"), filepath.Join(tmpDir, "new")))
+		require.NoError(t, os.Symlink("new", filepath.Join(tmpDir, "old")))
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"old/a.txt", "old", "new/a.txt"}, []string{"old/a.txt"})
+		require.NoError(t, err)
+
+		assert.Equal(t, "new/a.txt\nold", testutil.RunGitCmd(t, tmpDir, "ls-files"))
+		assert.Contains(t, testutil.RunGitCmd(t, tmpDir, "ls-files", "--stage", "old"), "120000")
+	})
+
+	t.Run("removal never touches paths outside the list", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "gone.txt", "gone")
+		testutil.CreateFile(t, tmpDir, "bystander.txt", "bystander")
+		commitAll(t, tmpDir)
+
+		require.NoError(t, os.Remove(filepath.Join(tmpDir, "gone.txt")))
+		require.NoError(t, os.Remove(filepath.Join(tmpDir, "bystander.txt")))
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, g.StageFiles(t.Context(), []string{"gone.txt"}, []string{"gone.txt"}))
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "D  gone.txt")
+		assert.Contains(t, status, "D bystander.txt")
+	})
+
+	t.Run("deleted path unknown to the index and HEAD is an error", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "real.txt", "content")
+		commitAll(t, tmpDir)
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"ghost.txt"}, []string{"ghost.txt"})
+		require.ErrorIs(t, err, ErrFileNotFound)
+	})
+
+	t.Run("deleted path unknown to the index and HEAD is an error even when it exists", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "real.txt", "content")
+		commitAll(t, tmpDir)
+		testutil.CreateFile(t, tmpDir, "created-later.txt", "content")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"created-later.txt"}, []string{"created-later.txt"})
+		require.ErrorIs(t, err, ErrFileNotFound)
+		assert.Empty(t, testutil.RunGitCmd(t, tmpDir, "diff", "--cached", "--name-only"))
+	})
+
+	t.Run("rename source still in the index is removed", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "old.txt", "content")
+		commitAll(t, tmpDir)
+
+		require.NoError(t, os.Rename(
+			filepath.Join(tmpDir, "old.txt"), filepath.Join(tmpDir, "new.txt"),
+		))
+		testutil.RunGitCmd(t, tmpDir, "add", "new.txt")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"old.txt", "new.txt"}, []string{"old.txt"})
+		require.NoError(t, err)
+
+		assert.Contains(t, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"), "R  old.txt -> new.txt")
+	})
+
+	t.Run("removed gitlink is found despite diff.ignoreSubmodules", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "other.txt", "content")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(
+			t, tmpDir, "update-index", "--add", "--cacheinfo",
+			"160000,0123456789abcdef0123456789abcdef01234567,sub",
+		)
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		testutil.RunGitCmd(t, tmpDir, "rm", "--cached", "-q", "sub")
+		testutil.RunGitCmd(t, tmpDir, "config", "diff.ignoreSubmodules", "all")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, g.StageFiles(t.Context(), []string{"sub"}, []string{"sub"}))
+		assert.Equal(t, "D  sub", testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"))
+	})
+
+	t.Run("removes several paths, one of which needs quoting", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		removed := []string{"first.txt", "second.txt", "line\nbreak.txt"}
+		for _, name := range removed {
+			testutil.CreateFile(t, tmpDir, name, name)
+		}
+		testutil.CreateFile(t, tmpDir, "bystander.txt", "bystander")
+		commitAll(t, tmpDir)
+		for _, name := range removed {
+			require.NoError(t, os.Remove(filepath.Join(tmpDir, name)))
+		}
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, g.StageFiles(t.Context(), removed, removed))
+
+		assert.Equal(t, "bystander.txt", testutil.RunGitCmd(t, tmpDir, "ls-files"))
+	})
+
+	t.Run("tracked file beneath an ignored directory is staged", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "vendor/lib.go", "v1")
+		testutil.CreateFile(t, tmpDir, "other.txt", "original")
+		commitAll(t, tmpDir)
+
+		testutil.CreateFile(t, tmpDir, ".gitignore", "vendor/\n")
+		testutil.CreateFile(t, tmpDir, "vendor/lib.go", "v2")
+		testutil.CreateFile(t, tmpDir, "new.txt", "new")
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		require.NoError(t, g.StageFiles(t.Context(), []string{"vendor/lib.go", "new.txt"}, nil))
+
+		status := testutil.RunGitCmd(t, tmpDir, "status", "--porcelain")
+		assert.Contains(t, status, "M  vendor/lib.go")
+		assert.Contains(t, status, "A  new.txt")
+	})
+
+	t.Run("path under a regular file is unknown", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "file", "content")
+		commitAll(t, tmpDir)
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"file/child.txt"}, nil)
+		require.ErrorIs(t, err, ErrFileNotFound)
+	})
+
+	t.Run("unborn HEAD still fails closed on unknown paths", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := testutil.CreateTempGitRepo(t)
+
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		err = g.StageFiles(t.Context(), []string{"ghost.txt"}, nil)
 		require.ErrorIs(t, err, ErrFileNotFound)
 	})
 }
@@ -1280,9 +1595,81 @@ func TestStageFiles_Error(t *testing.T) {
 	// Remove .git to make git commands fail.
 	require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, ".git")))
 
-	err = g.StageFiles(t.Context(), []string{"file.txt"})
+	err = g.StageFiles(t.Context(), []string{"file.txt"}, nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "failed to stage files")
+	assert.Contains(t, err.Error(), "failed to list index")
+}
+
+func TestStageFiles_GitFailure(t *testing.T) {
+	t.Parallel()
+
+	setup := func(t *testing.T) (*Git, string) {
+		t.Helper()
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "tracked.txt", "original")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+		g, err := New(tmpDir, nil)
+		require.NoError(t, err)
+
+		return g, tmpDir
+	}
+
+	// A held index lock fails every command that writes the index while the
+	// read-only listings that plan the staging still succeed.
+	holdIndexLock := func(t *testing.T, dir string) {
+		t.Helper()
+		testutil.CreateFile(t, dir, ".git/index.lock", "")
+	}
+
+	t.Run("listing removals staged in the index", func(t *testing.T) {
+		t.Parallel()
+		g, tmpDir := setup(t)
+		testutil.CreateFile(t, tmpDir, "tracked.txt", "changed")
+		// Without HEAD's tree "git diff --cached" fails, while "git ls-files"
+		// reads only the index and still succeeds.
+		tree := testutil.RunGitCmd(t, tmpDir, "rev-parse", "HEAD^{tree}")
+		object := filepath.Join(tmpDir, ".git", "objects", tree[:2], tree[2:])
+		require.NoError(t, os.Chmod(object, 0o600))
+		require.NoError(t, os.Remove(object))
+
+		err := g.StageFiles(t.Context(), []string{"tracked.txt"}, nil)
+		require.ErrorIs(t, err, ErrCommandFailed)
+		assert.Contains(t, err.Error(), "failed to list removals staged in the index")
+	})
+
+	t.Run("removal", func(t *testing.T) {
+		t.Parallel()
+		g, tmpDir := setup(t)
+		require.NoError(t, os.Remove(filepath.Join(tmpDir, "tracked.txt")))
+		holdIndexLock(t, tmpDir)
+
+		err := g.StageFiles(t.Context(), []string{"tracked.txt"}, []string{"tracked.txt"})
+		require.ErrorIs(t, err, ErrCommandFailed)
+		assert.Contains(t, err.Error(), "failed to stage removals")
+	})
+
+	t.Run("update", func(t *testing.T) {
+		t.Parallel()
+		g, tmpDir := setup(t)
+		testutil.CreateFile(t, tmpDir, "tracked.txt", "changed")
+		holdIndexLock(t, tmpDir)
+
+		err := g.StageFiles(t.Context(), []string{"tracked.txt"}, nil)
+		require.ErrorIs(t, err, ErrCommandFailed)
+		assert.Contains(t, err.Error(), "failed to stage files")
+	})
+
+	t.Run("add", func(t *testing.T) {
+		t.Parallel()
+		g, tmpDir := setup(t)
+		testutil.CreateFile(t, tmpDir, "new.txt", "new")
+		holdIndexLock(t, tmpDir)
+
+		err := g.StageFiles(t.Context(), []string{"new.txt"}, nil)
+		require.ErrorIs(t, err, ErrCommandFailed)
+		assert.Contains(t, err.Error(), "failed to stage files")
+	})
 }
 
 func TestCommit_HookRunsUnderTheCommitTimeout(t *testing.T) {
@@ -1515,4 +1902,15 @@ func TestIsIgnored_GitConfigGlobalLeak(t *testing.T) {
 	ignored, err := IsIgnored(t.Context(), repoDir, "globally-evil.txt")
 	require.NoError(t, err)
 	assert.False(t, ignored, "leaked GIT_CONFIG_GLOBAL must not influence the result")
+}
+
+func TestCheckStaging_MatchesStageFilesValidation(t *testing.T) {
+	t.Parallel()
+	tmpDir := testutil.CreateTempGitRepo(t)
+	g, err := New(tmpDir, nil)
+	require.NoError(t, err)
+
+	require.ErrorIs(t, g.CheckStaging(t.Context(), []string{""}, nil), ErrInvalidPath)
+	require.ErrorIs(t, g.StageFiles(t.Context(), []string{""}, nil), ErrInvalidPath)
+	require.NoError(t, g.CheckStaging(t.Context(), nil, nil))
 }

@@ -21,11 +21,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"msrl.dev/lgtmcp/internal/config"
@@ -54,6 +56,9 @@ var (
 	ErrEmptyCommitMsg = errors.New("commit message cannot be empty")
 	// ErrFileNotFound indicates the requested file was not found.
 	ErrFileNotFound = errors.New("file not found")
+	// ErrAmbiguousRemoval indicates a path that is in HEAD and removed from the
+	// index but present on disk, which may be an untrack or a recreation.
+	ErrAmbiguousRemoval = errors.New("path is removed from the index but present on disk")
 	// ErrCommandTimeout indicates a git command timed out.
 	ErrCommandTimeout = errors.New("git command timed out")
 	// ErrPathOutsideRepo indicates the path is outside the repository.
@@ -332,50 +337,68 @@ func gitFileMode(mode os.FileMode) string {
 	}
 }
 
-// StageFiles stages only the specified files (additions, modifications, and
-// deletions). Limiting staging to a known list avoids picking up files that
-// appeared in the working directory after the security scan but before commit.
+// StageFiles stages only the specified files. Limiting staging to a known list
+// avoids picking up files that appeared in the working directory after the
+// security scan but before commit. deleted is the subset of files whose every
+// diff block removes the path (security.ChangedFiles.Deleted).
 //
-// Paths that exist in neither the working tree nor the index but are present
-// in HEAD are skipped: such a path is an already-staged deletion (e.g. the
-// source of a fully staged "git mv") with nothing left to stage, and
-// "git add" would otherwise fail fatally on a pathspec that matches nothing.
-// A path unknown to the working tree, the index, and HEAD is an error.
-func (g *Git) StageFiles(ctx context.Context, files []string) error {
-	if len(files) == 0 {
-		return nil
-	}
-
-	if slices.Contains(files, "") {
-		return fmt.Errorf("%w: empty path", ErrInvalidPath)
-	}
-
-	files, err := g.stageablePaths(ctx, files)
+// A deleted path that is in the index is removed from it with "git
+// update-index --force-remove", never "git add", which fails for a path beneath
+// a directory the working tree replaced with a symlink and would stage a file
+// that reappeared at the path. A path in HEAD but absent from the index has
+// its removal staged already and is skipped, unless it is back on disk and not
+// deleted in the diff: an untrack ("git rm --cached") and a recreation after
+// "git rm" or "git mv" leave that same state but need opposite commits, so it
+// is ErrAmbiguousRemoval. A tracked path goes through "git add -u", which, unlike
+// "git add -A", does not fail for a path beneath an ignored directory. Every
+// remaining path is new and goes through "git add -A".
+//
+// A path unknown to the working tree, the index, and HEAD is an error, as is a
+// deleted path in neither the index nor HEAD.
+func (g *Git) StageFiles(ctx context.Context, files, deleted []string) error {
+	plan, err := g.planStaging(ctx, files, deleted)
 	if err != nil {
 		return err
-	}
-	if len(files) == 0 {
-		return nil
 	}
 
 	// Pass paths via stdin (NUL-separated) so we never hit ARG_MAX, and set
 	// GIT_LITERAL_PATHSPECS=1 so wildcard-named files like "*" are treated as
 	// literal paths instead of globs that could match unscanned content.
-	var stdin bytes.Buffer
-	for _, f := range files {
-		_, _ = stdin.WriteString(f)
-		_ = stdin.WriteByte(0)
-	}
-
-	_, err = g.runGitCommandStdin(
-		ctx, gitCommandTimeout, &stdin, []string{"GIT_LITERAL_PATHSPECS=1"},
-		"add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul",
-	)
-	if err != nil {
-		return fmt.Errorf("failed to stage files: %w", err)
+	literalPathspecs := []string{"GIT_LITERAL_PATHSPECS=1"}
+	for _, step := range []struct {
+		paths []string
+		env   []string
+		what  string
+		args  []string
+	}{
+		{plan.remove, nil, "removals", []string{"update-index", "--force-remove", "-z", "--stdin"}},
+		{plan.update, literalPathspecs, "files", []string{"add", "-u", "--pathspec-from-file=-", "--pathspec-file-nul"}},
+		{plan.add, literalPathspecs, "files", []string{"add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"}},
+	} {
+		// An empty pathspec file makes "git add" stage the whole tree.
+		if len(step.paths) == 0 {
+			continue
+		}
+		_, err = g.runGitCommandStdin(ctx, gitCommandTimeout, nulTerminated(step.paths), step.env, step.args...)
+		if err != nil {
+			return fmt.Errorf("failed to stage %s: %w", step.what, err)
+		}
 	}
 
 	return nil
+}
+
+// CheckStaging reports the error StageFiles would return for files and
+// deleted, without changing the index, so a commit that cannot be staged is
+// refused before the review is paid for.
+func (g *Git) CheckStaging(ctx context.Context, files, deleted []string) error {
+	_, err := g.planStaging(ctx, files, deleted)
+
+	return err
+}
+
+func nulTerminated(paths []string) io.Reader {
+	return strings.NewReader(strings.Join(paths, "\x00") + "\x00")
 }
 
 // Commit creates a commit with the given message.
@@ -448,50 +471,86 @@ func (g *Git) repoPathFor(relativePath string) (string, error) {
 	return fullPath, nil
 }
 
-// stageablePaths returns the subset of files with something left to stage:
-// paths present in the working tree (additions, modifications) or in the
-// index (deletions not yet staged). A path present only in HEAD is an
-// already-staged deletion (e.g. the source of a fully staged "git mv") with
-// nothing left to stage, and is dropped. A path in none of the three is
-// unknown to git — a parsing bug or a file that vanished mid-review — and is
-// an error, keeping staging fail-closed. The index and HEAD listings are
-// fetched lazily, only once some path is missing from the working tree.
-func (g *Git) stageablePaths(ctx context.Context, files []string) ([]string, error) {
-	var keep []string
-	var indexed, inHead map[string]bool
+type stagingPlan struct {
+	remove []string
+	update []string
+	add    []string
+}
+
+// planStaging assigns each of files to the command that stages it. A path
+// unknown to the working tree, the index, and HEAD is a parsing bug or a file
+// that vanished mid-review, and is an error, keeping staging fail-closed.
+func (g *Git) planStaging(ctx context.Context, files, deleted []string) (stagingPlan, error) {
+	var plan stagingPlan
+	if len(files) == 0 {
+		return plan, nil
+	}
+	if slices.Contains(files, "") {
+		return plan, fmt.Errorf("%w: empty path", ErrInvalidPath)
+	}
+
+	indexed, err := g.listedPaths(ctx, "ls-files", "--cached", "-z")
+	if err != nil {
+		return plan, fmt.Errorf("failed to list index: %w", err)
+	}
+
+	// Without --no-renames a removed path that git pairs with a new name is
+	// not reported as removed, and without --ignore-submodules=none
+	// diff.ignoreSubmodules can hide a removed gitlink.
+	removed, err := g.listedPaths(
+		ctx, "diff", "--cached", "--no-renames", "--ignore-submodules=none",
+		"--diff-filter=D", "--name-only", "-z",
+	)
+	if err != nil {
+		return plan, fmt.Errorf("failed to list removals staged in the index: %w", err)
+	}
+
+	isDeleted := make(map[string]bool, len(deleted))
+	for _, d := range deleted {
+		isDeleted[d] = true
+	}
+
 	for _, f := range files {
-		fullPath, err := g.repoPathFor(f)
-		if err != nil {
-			return nil, err
+		fullPath, pathErr := g.repoPathFor(f)
+		if pathErr != nil {
+			return plan, pathErr
 		}
-		if _, lstatErr := os.Lstat(fullPath); lstatErr == nil {
-			keep = append(keep, f)
+
+		switch {
+		case indexed[f] && isDeleted[f]:
+			plan.remove = append(plan.remove, f)
+		case indexed[f]:
+			plan.update = append(plan.update, f)
+		case removed[f]:
+			// The index records a removal, but the path is back on disk without
+			// a deletion in the diff: it was untracked with "git rm --cached",
+			// or removed and then recreated. Those leave the same state and
+			// need opposite commits, so the user must say which.
+			if !isDeleted[f] {
+				if _, lstatErr := os.Lstat(fullPath); lstatErr == nil {
+					return plan, fmt.Errorf("%w: %s: run `git add -- %s` to commit it, "+
+						"or add it to .gitignore to untrack it", ErrAmbiguousRemoval, f, f)
+				}
+			}
 
 			continue
-		} else if !os.IsNotExist(lstatErr) {
-			return nil, fmt.Errorf("failed to stat %s: %w", f, lstatErr)
-		}
-		if indexed == nil {
-			if indexed, err = g.listedPaths(ctx, "ls-files", "--cached", "-z"); err != nil {
-				return nil, fmt.Errorf("failed to list index: %w", err)
-			}
-		}
-		if indexed[f] {
-			keep = append(keep, f)
+		case isDeleted[f]:
+			return plan, fmt.Errorf("%w: %s: deleted path not in index or HEAD", ErrFileNotFound, f)
+		default:
+			// Lstat leaves a final symlink alone, and a path beneath a regular
+			// file fails with ENOTDIR rather than ENOENT.
+			if _, lstatErr := os.Lstat(fullPath); lstatErr != nil {
+				if errors.Is(lstatErr, fs.ErrNotExist) || errors.Is(lstatErr, syscall.ENOTDIR) {
+					return plan, fmt.Errorf("%w: %s: not in working tree, index, or HEAD", ErrFileNotFound, f)
+				}
 
-			continue
-		}
-		if inHead == nil {
-			if inHead, err = g.listedPaths(ctx, "ls-tree", "-r", "-z", "--name-only", "HEAD"); err != nil {
-				return nil, fmt.Errorf("failed to list HEAD: %w", err)
+				return plan, fmt.Errorf("failed to stat %s: %w", f, lstatErr)
 			}
-		}
-		if !inHead[f] {
-			return nil, fmt.Errorf("%w: %s: not in working tree, index, or HEAD", ErrFileNotFound, f)
+			plan.add = append(plan.add, f)
 		}
 	}
 
-	return keep, nil
+	return plan, nil
 }
 
 // listedPaths runs a git command that emits NUL-separated paths and returns

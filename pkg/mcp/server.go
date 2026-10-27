@@ -238,6 +238,8 @@ func (s *Server) registerReviewAndCommit() { //nolint:funcorder // Helper method
 		Description: "Review code changes using Gemini and commit if approved (LGTM). " +
 			"Reviews and commits all workspace changes (staged, unstaged, and untracked), not " +
 			"just staged files; stash anything you want to exclude first for a partial commit. " +
+			"A file removed from the index (git rm, git rm --cached, git mv) that is back on disk and not " +
+			"ignored is refused before review: git add it to commit it, or ignore it to untrack it. " +
 			"Returns review comments if not approved or success message with commit hash if approved and committed.",
 		InputSchema: mcp.ToolInputSchema{
 			Type: "object",
@@ -836,6 +838,12 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	checkErr := reviewCtx.gitClient.CheckStaging(ctx, reviewCtx.changedFiles, reviewCtx.deletedFiles)
+	if checkErr != nil {
+		s.logger.Error("Changes cannot be staged", "request_id", requestID, "error", checkErr)
+		return mcp.NewToolResultErrorf("cannot commit these changes: %v", checkErr), nil
+	}
+
 	// Perform the review.
 	s.logger.Info("Starting review analysis",
 		"request_id", requestID)
@@ -882,7 +890,8 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 	// separately. This change still removes the most exploitable vector
 	// (creating an entirely new unscanned file during the review window).
 	stageStart := time.Now()
-	if stageErr := reviewCtx.gitClient.StageFiles(ctx, reviewCtx.changedFiles); stageErr != nil {
+	stageErr := reviewCtx.gitClient.StageFiles(ctx, reviewCtx.changedFiles, reviewCtx.deletedFiles)
+	if stageErr != nil {
 		elapsed := time.Since(start)
 		s.logger.Error("Failed to stage changes",
 			"request_id", requestID,

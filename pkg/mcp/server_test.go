@@ -1356,6 +1356,142 @@ func TestHandleReviewAndCommit_Approved(t *testing.T) {
 	assert.Contains(t, textContent.Text, "committed successfully")
 }
 
+func TestHandleReviewAndCommit_StagesRemovals(t *testing.T) {
+	t.Parallel()
+
+	reviewAndCommit := func(t *testing.T, s *Server, dir string) {
+		t.Helper()
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]any{
+			"directory":      dir,
+			"commit_message": "stage removals",
+		}
+		result, err := s.HandleReviewAndCommit(t.Context(), request)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.False(t, result.IsError, "unexpected tool error: %+v", result.Content)
+		textContent, ok := result.Content[0].(mcp.TextContent)
+		require.True(t, ok)
+		assert.Contains(t, textContent.Text, "committed successfully")
+	}
+
+	t.Run("untracked file left on disk is refused before review", func(t *testing.T) {
+		t.Parallel()
+		calls := 0
+		client := &review.StubGeminiClient{
+			GenerateContentFunc: func(
+				context.Context, string, []*genai.Content, *genai.GenerateContentConfig,
+			) (*genai.GenerateContentResponse, error) {
+				calls++
+
+				return nil, assert.AnError
+			},
+		}
+		scanner, err := security.New("")
+		require.NoError(t, err)
+		s := newForTesting(config.NewTestConfig(), testutil.NewTestLogger(), review.NewForTestingWithClient(client), scanner)
+
+		tmpDir := testutil.CreateTempGitRepo(t)
+		testutil.CreateFile(t, tmpDir, "f.txt", "kept on disk\n")
+		testutil.CreateFile(t, tmpDir, "other.txt", "original\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.RunGitCmd(t, tmpDir, "rm", "--cached", "f.txt")
+		testutil.CreateFile(t, tmpDir, "other.txt", "changed\n")
+
+		request := mcp.CallToolRequest{}
+		request.Params.Arguments = map[string]any{"directory": tmpDir, "commit_message": "stage removals"}
+		result, err := s.HandleReviewAndCommit(t.Context(), request)
+		require.NoError(t, err)
+		require.True(t, result.IsError)
+		textContent, ok := result.Content[0].(mcp.TextContent)
+		require.True(t, ok)
+		assert.Contains(t, textContent.Text, "cannot commit these changes")
+		assert.Contains(t, textContent.Text, "git add -- f.txt")
+		assert.Zero(t, calls, "the review is not paid for")
+		assert.Equal(t, "initial", strings.TrimSpace(testutil.RunGitCmd(t, tmpDir, "log", "-1", "--format=%s")))
+	})
+
+	t.Run("untracked and ignored file commits the removal", func(t *testing.T) {
+		t.Parallel()
+		s, tmpDir := createTestServer(t)
+		testutil.CreateFile(t, tmpDir, "f.txt", "kept on disk\n")
+		testutil.CreateFile(t, tmpDir, "other.txt", "original\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		testutil.RunGitCmd(t, tmpDir, "rm", "--cached", "f.txt")
+		testutil.CreateFile(t, tmpDir, ".git/info/exclude", "f.txt\n")
+
+		reviewAndCommit(t, s, tmpDir)
+
+		assert.Equal(t, "other.txt", testutil.RunGitCmd(t, tmpDir, "ls-tree", "-r", "--name-only", "HEAD"))
+		assert.Empty(t, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"))
+		assert.FileExists(t, filepath.Join(tmpDir, "f.txt"))
+	})
+
+	t.Run("tracked directory replaced by a regular file", func(t *testing.T) {
+		t.Parallel()
+		s, tmpDir := createTestServer(t)
+		testutil.CreateFile(t, tmpDir, "dir/a.txt", "a\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		require.NoError(t, os.RemoveAll(filepath.Join(tmpDir, "dir")))
+		testutil.CreateFile(t, tmpDir, "dir", "now a file\n")
+
+		reviewAndCommit(t, s, tmpDir)
+
+		assert.Equal(t, "dir", testutil.RunGitCmd(t, tmpDir, "ls-tree", "-r", "--name-only", "HEAD"))
+		assert.Empty(t, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"))
+	})
+
+	t.Run("tracked directory replaced by a symlink", func(t *testing.T) {
+		t.Parallel()
+		s, tmpDir := createTestServer(t)
+		testutil.CreateFile(t, tmpDir, "old/a.txt", "a\n")
+		testutil.RunGitCmd(t, tmpDir, "add", ".")
+		testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+		require.NoError(t, os.Rename(filepath.Join(tmpDir, "old"), filepath.Join(tmpDir, "new")))
+		require.NoError(t, os.Symlink("new", filepath.Join(tmpDir, "old")))
+
+		reviewAndCommit(t, s, tmpDir)
+
+		assert.Equal(t, "new/a.txt\nold", testutil.RunGitCmd(t, tmpDir, "ls-tree", "-r", "--name-only", "HEAD"))
+		assert.Empty(t, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"))
+	})
+}
+
+func TestHandleReviewAndCommit_StagesTrackedFileBeneathIgnoredDirectory(t *testing.T) {
+	t.Parallel()
+	s, tmpDir := createTestServer(t)
+	testutil.CreateFile(t, tmpDir, "vendor/lib.go", "v1\n")
+	testutil.CreateFile(t, tmpDir, "other.txt", "original\n")
+	testutil.RunGitCmd(t, tmpDir, "add", ".")
+	testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+
+	testutil.CreateFile(t, tmpDir, ".gitignore", "vendor/\n")
+	testutil.CreateFile(t, tmpDir, "vendor/lib.go", "v2\n")
+
+	request := mcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{
+		"directory":      tmpDir,
+		"commit_message": "edit an ignored directory",
+	}
+	result, err := s.HandleReviewAndCommit(t.Context(), request)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.IsError, "unexpected tool error: %+v", result.Content)
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	require.True(t, ok)
+	assert.Contains(t, textContent.Text, "committed successfully")
+
+	assert.Equal(t, "v2", testutil.RunGitCmd(t, tmpDir, "show", "HEAD:vendor/lib.go"))
+	assert.Empty(t, testutil.RunGitCmd(t, tmpDir, "status", "--porcelain"))
+}
+
 func TestHandleReviewAndCommit_Rejected(t *testing.T) {
 	t.Parallel()
 	cfg := config.NewTestConfig()

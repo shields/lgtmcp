@@ -86,7 +86,8 @@ func main() {
 		// Test staging and committing via the diff-derived file list, the
 		// path production uses (HandleReviewAndCommit stages only the scanned
 		// files, never the whole working tree).
-		err = gitClient.StageFiles(ctx, security.ExtractChangedFiles(diff))
+		cf := security.ExtractChangedFilesDetailed(diff)
+		err = gitClient.StageFiles(ctx, cf.All, cf.Deleted)
 		require.NoError(t, err)
 
 		_, err = gitClient.Commit(ctx, "Update greeting message")
@@ -337,7 +338,7 @@ func main() {
 		// the scanned files so files created after the security scan are excluded).
 		cf := security.ExtractChangedFilesDetailed(diff)
 		assert.Equal(t, []string{"main.go"}, cf.All)
-		err = gitClient.StageFiles(ctx, cf.All)
+		err = gitClient.StageFiles(ctx, cf.All, cf.Deleted)
 		require.NoError(t, err)
 
 		_, err = gitClient.Commit(ctx, "Improve greeting message")
