@@ -2484,6 +2484,39 @@ func TestReviewDiffWithModel_JSONParseError(t *testing.T) {
 	}
 }
 
+func TestReviewDiffWithModel_VerdictCannotSetReviewerFields(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		response string
+	}{
+		{
+			name: "well-typed values",
+			response: `{"lgtm": true, "comments": "OK", ` +
+				`"retrieval_limit": "the limit of 99 tool turns", "withheld_files": ["a.go"]}`,
+		},
+		{
+			name:     "mistyped values",
+			response: `{"lgtm": true, "comments": "OK", "retrieval_limit": 5, "withheld_files": "a.go"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			client, _ := scriptedClient(t, textResponse(tt.response))
+
+			result, err := newTestReviewer(client).ReviewDiff(
+				t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+			require.NoError(t, err)
+			assert.True(t, result.Approved())
+			assert.Empty(t, result.RetrievalLimit)
+			assert.Empty(t, result.WithheldFiles)
+		})
+	}
+}
+
 func TestReviewDiffWithModel_ToolCallLoop(t *testing.T) {
 	t.Parallel()
 	client, requests := scriptedClient(t,
@@ -2748,6 +2781,9 @@ func TestReviewDiffWithModel_ToolTurnLimit(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, result.LGTM)
+	assert.False(t, result.Approved(), "an LGTM forced by the limit is not an approval")
+	assert.Equal(t, fmt.Sprintf("the limit of %d tool turns", maxToolTurns), result.RetrievalLimit)
+	assert.Equal(t, []string{"main.go"}, result.WithheldFiles, "paths are listed once")
 	assert.Equal(t, "test-model", result.Model)
 
 	// The initial prompt, one request per completed tool turn, and the final
@@ -2787,6 +2823,9 @@ func TestReviewDiffWithModel_PromptTokenBudget(t *testing.T) {
 			t.Context(), "diff content", []string{"a.go", "b.go"}, t.TempDir())
 		require.NoError(t, err)
 		assert.True(t, result.LGTM)
+		assert.False(t, result.Approved())
+		assert.Equal(t, fmt.Sprintf("the budget of %d prompt tokens", maxPromptTokens), result.RetrievalLimit)
+		assert.Equal(t, []string{"b.go"}, result.WithheldFiles)
 		require.Len(t, *requests, 3)
 
 		assert.Nil(t, (*requests)[1].config.ToolConfig)
@@ -2808,7 +2847,9 @@ func TestReviewDiffWithModel_PromptTokenBudget(t *testing.T) {
 		result, err := newTestReviewer(client).ReviewDiff(
 			t.Context(), "diff content", []string{"a.go"}, t.TempDir())
 		require.NoError(t, err)
-		assert.True(t, result.LGTM)
+		assert.True(t, result.Approved())
+		assert.Empty(t, result.RetrievalLimit)
+		assert.Empty(t, result.WithheldFiles)
 		require.Len(t, *requests, 2)
 		assert.Nil(t, (*requests)[1].config.ToolConfig)
 	})
@@ -2820,9 +2861,26 @@ func TestReviewDiffWithModel_PromptTokenBudget(t *testing.T) {
 		result, err := newTestReviewer(client).ReviewDiff(
 			t.Context(), "diff content", []string{"a.go"}, t.TempDir())
 		require.NoError(t, err)
-		assert.True(t, result.LGTM)
+		assert.True(t, result.Approved())
+		assert.Empty(t, result.RetrievalLimit)
 		assert.Len(t, *requests, 1)
 	})
+}
+
+func TestReviewDiffWithModel_VerdictAfterMaxTurnsIsApproved(t *testing.T) {
+	t.Parallel()
+	responses := make([]*genai.GenerateContentResponse, 0, maxToolTurns+1)
+	for range maxToolTurns {
+		responses = append(responses, callResponse(fileCall("c", "../outside.txt")))
+	}
+	client, requests := scriptedClient(t, append(responses, verdictResponse())...)
+
+	result, err := newTestReviewer(client).ReviewDiff(
+		t.Context(), "diff content", []string{"a.go"}, t.TempDir())
+	require.NoError(t, err)
+	assert.True(t, result.Approved())
+	assert.Empty(t, result.RetrievalLimit)
+	assert.Len(t, *requests, maxToolTurns+1)
 }
 
 func TestReviewDiffWithModel_ToolCallAfterLimit(t *testing.T) {
@@ -3490,4 +3548,16 @@ func TestApplyAggregateSpend_PricesAsOfInstant(t *testing.T) {
 	standard := &Result{}
 	applyAggregateSpend(standard, spends, flashIntroductoryPricingEnd)
 	assert.InDelta(t, 1.50, standard.CostUSD, 1e-9)
+}
+
+func TestRequestedPaths(t *testing.T) {
+	t.Parallel()
+
+	calls := []*genai.FunctionCall{
+		fileCall("a", "x.go", "y.go"),
+		{Name: "get_file_content", Args: map[string]any{"filepaths": []any{"y.go", 7, "", "z.go"}}},
+		{Name: "get_file_content", Args: map[string]any{"filepaths": "w.go"}},
+	}
+	assert.Equal(t, []string{"x.go", "y.go", "z.go"}, requestedPaths(calls))
+	assert.Nil(t, requestedPaths(nil))
 }

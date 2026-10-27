@@ -120,6 +120,19 @@ type Result struct {
 	CostUSD         float64     `json:"cost_usd,omitzero"`
 	CacheSavingsUSD float64     `json:"cache_savings_usd,omitzero"`
 	Model           string      `json:"model,omitempty"`
+	// RetrievalLimit, when set, describes the bound that ended file retrieval
+	// while the model was still asking for files, and WithheldFiles lists the
+	// paths it asked for then. The reviewer sets both; the model's reply never
+	// decodes into them.
+	RetrievalLimit string   `json:"-"`
+	WithheldFiles  []string `json:"-"`
+}
+
+// Approved reports whether the review approves the change. An LGTM alone does
+// not: one forced after a retrieval limit refused the model's pending file
+// requests is not an approval.
+func (r *Result) Approved() bool {
+	return r.LGTM && r.RetrievalLimit == ""
 }
 
 // FileFetchCallback is called when a file is fetched during review.
@@ -958,7 +971,14 @@ func (r *Reviewer) reviewDiffWithModel(
 				return nil, ErrToolCallAfterLimit
 			}
 
-			return parseVerdict(content, modelName, r.logger)
+			result, parseErr := parseVerdict(content, modelName, r.logger)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			result.RetrievalLimit = limit
+			result.WithheldFiles = requestedPaths(calls)
+
+			return result, nil
 		}
 
 		// The model may make several function calls in one turn (parallel
@@ -983,12 +1003,31 @@ func (r *Reviewer) reviewDiffWithModel(
 func retrievalLimit(turns int, promptTokens int32) string {
 	switch {
 	case turns >= maxToolTurns:
-		return "turns"
+		return fmt.Sprintf("the limit of %d tool turns", maxToolTurns)
 	case promptTokens >= maxPromptTokens:
-		return "prompt_tokens"
+		return fmt.Sprintf("the budget of %d prompt tokens", maxPromptTokens)
 	default:
 		return ""
 	}
+}
+
+func requestedPaths(calls []*genai.FunctionCall) []string {
+	var paths []string
+	seen := make(map[string]bool)
+	for _, call := range calls {
+		raw, ok := call.Args["filepaths"].([]any)
+		if !ok {
+			continue
+		}
+		for _, entry := range raw {
+			if p, ok := entry.(string); ok && p != "" && !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+
+	return paths
 }
 
 // responseContent returns the content of the response's first candidate. When

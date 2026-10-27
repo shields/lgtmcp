@@ -286,3 +286,10 @@ make coverage
 - Diffs this large are usually generated, vendored, or mass-edited code, where
   a line-by-line LLM review costs a lot and catches little; raise the limit if
   you do want them reviewed
+
+**"Review Result: INCOMPLETE"**
+
+- The reviewer found no issues, but file retrieval reached its limit (20 tool
+  turns or 1.5M prompt tokens per review) while it was still asking for
+  files, so the result lists the files its refused request asked for and
+  `review_and_commit` committed nothing

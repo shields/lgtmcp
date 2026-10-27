@@ -896,6 +896,40 @@ func TestFormatReviewResponse(t *testing.T) {
 		assert.NotContains(t, response, "---")
 	})
 
+	t.Run("approval after a retrieval limit is incomplete", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			LGTM:           true,
+			Comments:       "No issues found. Ready for production.",
+			RetrievalLimit: "the limit of 20 tool turns",
+			WithheldFiles:  []string{"a.go", "b\nc.go"},
+		}
+
+		const incomplete = "Review Result: INCOMPLETE\n\n" +
+			"File retrieval stopped at the limit of 20 tool turns while the reviewer was still asking for files. " +
+			"It found no issues in what it saw."
+		const comments = "\n\nThe reviewer's comments with its verdict:\nNo issues found. Ready for production."
+		assert.Equal(t, incomplete+" Its last request, which was refused, asked for:\n- a.go\n- \"b\\nc.go\""+comments,
+			formatReviewResponse(result, ""))
+
+		result.WithheldFiles = nil
+		assert.Equal(t, incomplete+comments, formatReviewResponse(result, ""))
+
+		result.Comments = ""
+		assert.Equal(t, incomplete, formatReviewResponse(result, ""))
+	})
+
+	t.Run("rejection after a retrieval limit is not approved", func(t *testing.T) {
+		t.Parallel()
+		result := &review.Result{
+			Comments:       "1. [a.go:3] bug",
+			RetrievalLimit: "the limit of 20 tool turns",
+			WithheldFiles:  []string{"b.go"},
+		}
+
+		assert.Equal(t, "Review Result: NOT APPROVED\n\n1. [a.go:3] bug", formatReviewResponse(result, ""))
+	})
+
 	t.Run("with duration only", func(t *testing.T) {
 		t.Parallel()
 		result := &review.Result{
@@ -1237,6 +1271,63 @@ func TestSizeCeilFloor(t *testing.T) {
 			format = sizeCeil
 		}
 		assert.Equal(t, tc.want, format(tc.n), "n=%d roundUp=%t", tc.n, tc.roundUp)
+	}
+}
+
+func TestHandleTools_RetrievalLimitIsIncomplete(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{ToolReviewOnly, ToolReviewAndCommit} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+
+			// The stub reports no token usage, so only the turn limit ends the
+			// review.
+			client := &review.StubGeminiClient{
+				GenerateContentFunc: func(
+					_ context.Context, _ string, _ []*genai.Content, cfg *genai.GenerateContentConfig,
+				) (*genai.GenerateContentResponse, error) {
+					part := &genai.Part{FunctionCall: &genai.FunctionCall{
+						Name: "get_file_content",
+						Args: map[string]any{"filepaths": []any{"missing.go"}},
+					}}
+					if cfg.ToolConfig != nil {
+						part = &genai.Part{Text: `{"lgtm": true, "comments": "No issues found."}`}
+					}
+
+					return &genai.GenerateContentResponse{Candidates: []*genai.Candidate{{Content: &genai.Content{
+						Role:  genai.RoleModel,
+						Parts: []*genai.Part{part},
+					}}}}, nil
+				},
+			}
+			scanner, err := security.New("")
+			require.NoError(t, err)
+			s := newForTesting(config.NewTestConfig(), testutil.NewTestLogger(), review.NewForTestingWithClient(client), scanner)
+
+			tmpDir := testutil.CreateTempGitRepo(t)
+			testutil.CreateFile(t, tmpDir, "file.go", "package main\n")
+			testutil.RunGitCmd(t, tmpDir, "add", ".")
+			testutil.RunGitCmd(t, tmpDir, "commit", "-m", "initial")
+			testutil.CreateFile(t, tmpDir, "file.go", "package main\n\nfunc main() {}\n")
+
+			request := mcp.CallToolRequest{}
+			request.Params.Arguments = map[string]any{"directory": tmpDir, "commit_message": "change"}
+			handle := s.HandleReviewOnly
+			if tool == ToolReviewAndCommit {
+				handle = s.HandleReviewAndCommit
+			}
+
+			result, err := handle(t.Context(), request)
+			require.NoError(t, err)
+			require.False(t, result.IsError)
+			textContent, ok := result.Content[0].(mcp.TextContent)
+			require.True(t, ok)
+			assert.True(t, strings.HasPrefix(textContent.Text, "Review Result: INCOMPLETE\n\n"), textContent.Text)
+			assert.Contains(t, textContent.Text, "asked for:\n- missing.go")
+			assert.NotContains(t, textContent.Text, "committed")
+			assert.Equal(t, "initial", strings.TrimSpace(testutil.RunGitCmd(t, tmpDir, "log", "-1", "--format=%s")))
+		})
 	}
 }
 

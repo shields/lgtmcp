@@ -305,17 +305,23 @@ func (s *Server) createProgressReporter(request mcp.CallToolRequest) progress.Re
 // formatReviewResponse formats the review result with usage statistics.
 // If commitHash is provided, it adds a commit success message before the stats footer.
 func formatReviewResponse(result *review.Result, commitHash string) string {
-	var status string
-	if result.LGTM {
-		status = "Review Result: APPROVED (LGTM)"
-	} else {
-		status = "Review Result: NOT APPROVED"
+	var status, body string
+	switch {
+	case result.Approved():
+		status, body = "Review Result: APPROVED (LGTM)", result.Comments
+	case result.LGTM:
+		// A retrieval limit forced this verdict, so it is not an approval. It is
+		// still an outcome rather than a tool failure, so like a NOT APPROVED
+		// review it is an in-band result with IsError unset.
+		status, body = "Review Result: INCOMPLETE", formatIncomplete(result)
+	default:
+		status, body = "Review Result: NOT APPROVED", result.Comments
 	}
 
 	var sb strings.Builder
 	_, _ = sb.WriteString(status)
 	_, _ = sb.WriteString("\n\n")
-	_, _ = sb.WriteString(result.Comments)
+	_, _ = sb.WriteString(body)
 
 	// Add commit success message if provided.
 	if commitHash != "" {
@@ -327,6 +333,29 @@ func formatReviewResponse(result *review.Result, commitHash string) string {
 	if footer := formatUsageFooter(result); footer != "" {
 		_, _ = sb.WriteString("\n\n---\n")
 		_, _ = sb.WriteString(footer)
+	}
+
+	return sb.String()
+}
+
+// formatIncomplete quotes any path with a non-printing character; paths come
+// from model output, and each must stay on one line.
+func formatIncomplete(result *review.Result) string {
+	var sb strings.Builder
+	_, _ = fmt.Fprintf(&sb, "File retrieval stopped at %s while the reviewer was still asking for files. "+
+		"It found no issues in what it saw.", result.RetrievalLimit)
+	if len(result.WithheldFiles) > 0 {
+		_, _ = sb.WriteString(" Its last request, which was refused, asked for:")
+		for _, path := range result.WithheldFiles {
+			if strings.ContainsFunc(path, func(r rune) bool { return !strconv.IsPrint(r) }) {
+				path = strconv.Quote(path)
+			}
+			_, _ = sb.WriteString("\n- " + path)
+		}
+	}
+	if result.Comments != "" {
+		_, _ = sb.WriteString("\n\nThe reviewer's comments with its verdict:\n")
+		_, _ = sb.WriteString(result.Comments)
 	}
 
 	return sb.String()
@@ -624,7 +653,9 @@ func (s *Server) performReview(
 		reporter.Report(ctx, 4, totalSteps, "Review complete")
 		s.logger.Info("Gemini review completed",
 			"duration_ms", duration.Milliseconds(),
-			"approved", reviewResult.LGTM)
+			"approved", reviewResult.Approved(),
+			"lgtm", reviewResult.LGTM,
+			"retrieval_limit", reviewResult.RetrievalLimit)
 	}
 
 	return reviewResult, err
@@ -720,7 +751,7 @@ func (s *Server) HandleReviewOnly(ctx context.Context, request mcp.CallToolReque
 	elapsed := time.Since(start)
 	s.logger.Info("Review completed",
 		"request_id", requestID,
-		"approved", reviewResult.LGTM,
+		"approved", reviewResult.Approved(),
 		"total_duration_ms", elapsed.Milliseconds())
 
 	// Format the response with usage statistics.
@@ -819,11 +850,12 @@ func (s *Server) HandleReviewAndCommit(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultErrorf("review failed: %v", err), nil
 	}
 
-	// If not approved, return review comments with usage stats.
-	if !reviewResult.LGTM {
+	// If not approved, return the review result with usage stats.
+	if !reviewResult.Approved() {
 		elapsed := time.Since(start)
-		s.logger.Info("Review rejected changes",
+		s.logger.Info("Review did not approve changes",
 			"request_id", requestID,
+			"retrieval_limit", reviewResult.RetrievalLimit,
 			"total_duration_ms", elapsed.Milliseconds())
 
 		responseText := formatReviewResponse(reviewResult, "")
